@@ -10,7 +10,12 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
 
-        var dbPath = Path.Combine(AppContext.BaseDirectory, "erp_system.db");
+        var appDataFolder = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ERPSystem.WinForms");
+        Directory.CreateDirectory(appDataFolder);
+
+        var dbPath = Path.Combine(appDataFolder, "erp_system.db");
 
         var quoteRepository = new QuoteRepository(dbPath);
         await quoteRepository.InitializeDatabaseAsync();
