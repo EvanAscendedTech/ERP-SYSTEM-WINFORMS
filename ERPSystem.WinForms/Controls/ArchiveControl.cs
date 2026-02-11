@@ -1,41 +1,46 @@
-using ERPSystem.WinForms.Services;
-
 namespace ERPSystem.WinForms.Controls;
 
 public class ArchiveControl : UserControl
 {
-    private readonly ArchiveService _archiveService;
-    private readonly ListBox _archiveList = new() { Dock = DockStyle.Fill };
-    private readonly TextBox _entryInput = new() { Width = 360 };
-
-    public ArchiveControl(ArchiveService archiveService)
+    public ArchiveControl()
     {
-        _archiveService = archiveService;
         Dock = DockStyle.Fill;
 
-        var toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 42, Padding = new Padding(8) };
-        var archive = new Button { Text = "Archive Item", AutoSize = true };
-        archive.Click += (_, _) =>
+        var root = new TableLayoutPanel
         {
-            _archiveService.Archive(_entryInput.Text);
-            _entryInput.Clear();
-            RefreshList();
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var header = new Label
+        {
+            Text = "Completed / Lost Quotes and Jobs",
+            AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold)
         };
 
-        toolbar.Controls.Add(new Label { Text = "Entry:", AutoSize = true, Margin = new Padding(0, 8, 6, 0) });
-        toolbar.Controls.Add(_entryInput);
-        toolbar.Controls.Add(archive);
-
-        Controls.Add(_archiveList);
-        Controls.Add(toolbar);
-    }
-
-    private void RefreshList()
-    {
-        _archiveList.Items.Clear();
-        foreach (var entry in _archiveService.ArchivedItems)
+        var archiveList = new ListView
         {
-            _archiveList.Items.Add(entry);
-        }
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true
+        };
+        archiveList.Columns.Add("Type", 140);
+        archiveList.Columns.Add("Identifier", 180);
+        archiveList.Columns.Add("Status", 180);
+        archiveList.Columns.Add("Closed On", 160);
+
+        archiveList.Items.Add(new ListViewItem(["Quote", "Q-10021", "Lost", DateTime.Today.AddDays(-5).ToShortDateString()]));
+        archiveList.Items.Add(new ListViewItem(["Quote", "Q-10017", "Won", DateTime.Today.AddDays(-13).ToShortDateString()]));
+        archiveList.Items.Add(new ListViewItem(["Job", "JOB-1440", "Completed", DateTime.Today.AddDays(-2).ToShortDateString()]));
+
+        root.Controls.Add(header, 0, 0);
+        root.Controls.Add(archiveList, 0, 1);
+        Controls.Add(root);
     }
 }

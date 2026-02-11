@@ -1,53 +1,48 @@
-using ERPSystem.WinForms.Services;
-
 namespace ERPSystem.WinForms.Controls;
 
 public class InspectionControl : UserControl
 {
-    private readonly InspectionService _service;
-    private readonly ListBox _findingsList = new() { Dock = DockStyle.Fill };
-    private readonly TextBox _newFinding = new() { Width = 320 };
-
-    public InspectionControl(InspectionService service)
+    public InspectionControl()
     {
-        _service = service;
         Dock = DockStyle.Fill;
 
-        var toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 42, Padding = new Padding(8) };
-        var add = new Button { Text = "Add Finding", AutoSize = true };
-        add.Click += (_, _) =>
+        var root = new TableLayoutPanel
         {
-            _service.AddFinding(_newFinding.Text);
-            _newFinding.Clear();
-            RefreshList();
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            Padding = new Padding(12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var title = new Label
+        {
+            Text = "Inspection Module",
+            AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold)
         };
 
-        var close = new Button { Text = "Close Selected", AutoSize = true };
-        close.Click += (_, _) =>
+        var as9102Placeholder = new GroupBox { Text = "AS9102 Section (Placeholder)", Dock = DockStyle.Fill };
+        as9102Placeholder.Controls.Add(new Label
         {
-            if (_findingsList.SelectedItem is string selected)
-            {
-                _service.CloseFinding(selected);
-            }
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Text = "FAI package checklist and ballooned drawing workflow will be implemented here."
+        });
 
-            RefreshList();
+        var qaSignoff = new CheckBox
+        {
+            Text = "QA Signoff",
+            AutoSize = true,
+            Margin = new Padding(0, 8, 0, 0)
         };
 
-        toolbar.Controls.Add(new Label { Text = "Finding:", Margin = new Padding(0, 8, 6, 0), AutoSize = true });
-        toolbar.Controls.Add(_newFinding);
-        toolbar.Controls.Add(add);
-        toolbar.Controls.Add(close);
+        root.Controls.Add(title, 0, 0);
+        root.Controls.Add(as9102Placeholder, 0, 1);
+        root.Controls.Add(qaSignoff, 0, 2);
 
-        Controls.Add(_findingsList);
-        Controls.Add(toolbar);
-    }
-
-    private void RefreshList()
-    {
-        _findingsList.Items.Clear();
-        foreach (var finding in _service.OpenFindings)
-        {
-            _findingsList.Items.Add(finding);
-        }
+        Controls.Add(root);
     }
 }
