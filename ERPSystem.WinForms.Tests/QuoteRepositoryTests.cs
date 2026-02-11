@@ -1,5 +1,6 @@
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
+using Microsoft.Data.Sqlite;
 
 namespace ERPSystem.WinForms.Tests;
 
@@ -75,6 +76,78 @@ public class QuoteRepositoryTests
         Assert.NotNull(loaded);
         Assert.Equal("Updated Customer", loaded!.CustomerName);
         Assert.Equal(QuoteStatus.Won, loaded.Status);
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task SaveQuoteAsync_CreatesAuditEvent()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-audit-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var quote = new Quote
+        {
+            CustomerName = "Audit Customer",
+            Status = QuoteStatus.InProgress,
+            LineItems =
+            [
+                new QuoteLineItem { Description = "Part A", Quantity = 2 },
+                new QuoteLineItem { Description = "Part B", Quantity = 1 }
+            ]
+        };
+
+        var id = await repository.SaveQuoteAsync(quote);
+
+        await using var connection = new SqliteConnection($"Data Source={dbPath}");
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT EventType, OperationMode, LineItemCount
+            FROM QuoteAuditEvents
+            WHERE QuoteId = $id
+            ORDER BY Id DESC
+            LIMIT 1;";
+        command.Parameters.AddWithValue("$id", id);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("save", reader.GetString(0));
+        Assert.Equal("create", reader.GetString(1));
+        Assert.Equal(2, reader.GetInt32(2));
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task UpdateStatusAsync_CreatesStatusTransitionAndArchiveEvents()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-status-audit-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var quote = new Quote
+        {
+            CustomerName = "Transition Customer",
+            Status = QuoteStatus.InProgress,
+            LineItems = [new QuoteLineItem { Description = "Bracket", Quantity = 1 }]
+        };
+
+        var id = await repository.SaveQuoteAsync(quote);
+        var updated = await repository.UpdateStatusAsync(id, QuoteStatus.Won);
+
+        Assert.True(updated);
+
+        await using var connection = new SqliteConnection($"Data Source={dbPath}");
+        await connection.OpenAsync();
+
+        var transitionCount = await CountEventsAsync(connection, id, "status_transition");
+        var archiveCount = await CountEventsAsync(connection, id, "archive");
+
+        Assert.Equal(1, transitionCount);
+        Assert.Equal(1, archiveCount);
 
         File.Delete(dbPath);
     }
