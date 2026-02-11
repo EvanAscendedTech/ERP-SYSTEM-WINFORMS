@@ -1,5 +1,6 @@
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
+using Microsoft.Data.Sqlite;
 
 namespace ERPSystem.WinForms.Controls;
 
@@ -131,10 +132,47 @@ public class QuotesControl : UserControl
             _quoteIdInput.Value = savedId;
             ShowFeedback($"Quote {savedId} saved with {quote.LineItems.Count} line items.");
         }
+        catch (SqliteException ex)
+        {
+            ShowFeedback(MapSaveError(ex));
+            System.Diagnostics.Trace.WriteLine($"[QuotesControl.SaveQuoteAsync] Database save error: code={ex.SqliteErrorCode}, extendedCode={ex.SqliteExtendedErrorCode}, detail={ex}");
+        }
         catch (Exception ex)
         {
-            ShowFeedback($"Save failed: {ex.Message}");
+            ShowFeedback("Save failed. Please review the quote details and try again.");
+            System.Diagnostics.Trace.WriteLine($"[QuotesControl.SaveQuoteAsync] Unexpected error: {ex}");
         }
+    }
+
+    private static string MapSaveError(SqliteException ex)
+    {
+        if (ex.SqliteErrorCode == 19)
+        {
+            var message = ex.Message;
+            if (message.Contains("FOREIGN KEY", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Save failed because the quote references related records that no longer exist. Reload the quote and try again.";
+            }
+
+            if (message.Contains("NOT NULL", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Save failed because one or more required fields are blank. Fill in customer and line-item details, then retry.";
+            }
+
+            if (message.Contains("CHECK", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Save failed validation checks. Verify numeric values and required fields, then try again.";
+            }
+
+            if (message.Contains("UNIQUE", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Save conflict detected. Reload the quote, confirm values, and save again.";
+            }
+
+            return "Save blocked by data validation rules. Review the quote values and try again.";
+        }
+
+        return "Save failed due to a database issue. Please retry, and contact support if it continues.";
     }
 
     private async Task LoadQuoteAsync()
