@@ -230,10 +230,10 @@ public class QuotesControl : UserControl
             return;
         }
 
-        var updated = await _quoteRepository.UpdateStatusAsync(quoteId, nextStatus);
-        if (!updated)
+        var result = await _quoteRepository.UpdateStatusAsync(quoteId, nextStatus, "ui-user");
+        if (!result.Success)
         {
-            ShowFeedback($"Status transition to {nextStatus} failed for quote {quoteId}. Allowed only from InProgress.");
+            ShowFeedback(result.Message);
             return;
         }
 

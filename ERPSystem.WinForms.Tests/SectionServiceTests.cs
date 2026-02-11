@@ -30,7 +30,31 @@ public class SectionServiceTests
     public void QuoteWorkflowService_AllowsExpectedTransitions()
     {
         Assert.True(QuoteWorkflowService.IsTransitionAllowed(QuoteStatus.InProgress, QuoteStatus.Expired));
-        Assert.True(QuoteWorkflowService.IsTransitionAllowed(QuoteStatus.Expired, QuoteStatus.Lost));
+        Assert.False(QuoteWorkflowService.IsTransitionAllowed(QuoteStatus.Expired, QuoteStatus.Lost));
         Assert.False(QuoteWorkflowService.IsTransitionAllowed(QuoteStatus.Won, QuoteStatus.InProgress));
+    }
+
+    [Fact]
+    public void LifecycleWorkflowService_RejectsCrossSectionJump_FromInProgressQuoteToArchive()
+    {
+        var service = new ArchiveService();
+
+        var archived = service.TryArchiveQuote("Q-10021", QuoteStatus.InProgress, "qa.user", out var message);
+
+        Assert.False(archived);
+        Assert.Contains("only allowed for terminal records", message.ToLowerInvariant());
+        Assert.Empty(service.ArchivedItems);
+    }
+
+    [Fact]
+    public void InspectionService_RequiresCompletedProductionBatch()
+    {
+        var service = new InspectionService();
+
+        var started = service.TryStartInspection("JOB-201", ProductionJobStatus.InProgress, "qa.user", out var message);
+
+        Assert.False(started);
+        Assert.Contains("completed production batches", message.ToLowerInvariant());
+        Assert.Empty(service.InspectionStarts);
     }
 }
