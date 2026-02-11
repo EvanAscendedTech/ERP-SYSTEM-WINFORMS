@@ -55,6 +55,7 @@ public class QuoteRepository
                 RequiresGForce INTEGER NOT NULL DEFAULT 0,
                 RequiresSecondaryProcessing INTEGER NOT NULL DEFAULT 0,
                 RequiresPlating INTEGER NOT NULL DEFAULT 0,
+                Notes TEXT NOT NULL DEFAULT '',
                 FOREIGN KEY(QuoteId) REFERENCES Quotes(Id) ON DELETE CASCADE
             );
 
@@ -92,6 +93,7 @@ public class QuoteRepository
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresGForce", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresSecondaryProcessing", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresPlating", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "Notes", "TEXT NOT NULL DEFAULT ''");
 
         await EnsureCustomerIndexesAsync(connection);
         await EnsureQuoteIndexesAsync(connection);
@@ -238,8 +240,9 @@ public class QuoteRepository
                         LeadTimeDays,
                         RequiresGForce,
                         RequiresSecondaryProcessing,
-                        RequiresPlating)
-                    VALUES ($quoteId, $description, $qty, $unitPrice, $leadTimeDays, $requiresGForce, $requiresSecondary, $requiresPlating);
+                        RequiresPlating,
+                        Notes)
+                    VALUES ($quoteId, $description, $qty, $unitPrice, $leadTimeDays, $requiresGForce, $requiresSecondary, $requiresPlating, $notes);
                     SELECT last_insert_rowid();";
                 insertLineItem.Parameters.AddWithValue("$quoteId", quote.Id);
                 insertLineItem.Parameters.AddWithValue("$description", lineItem.Description);
@@ -249,6 +252,7 @@ public class QuoteRepository
                 insertLineItem.Parameters.AddWithValue("$requiresGForce", lineItem.RequiresGForce ? 1 : 0);
                 insertLineItem.Parameters.AddWithValue("$requiresSecondary", lineItem.RequiresSecondaryProcessing ? 1 : 0);
                 insertLineItem.Parameters.AddWithValue("$requiresPlating", lineItem.RequiresPlating ? 1 : 0);
+                insertLineItem.Parameters.AddWithValue("$notes", lineItem.Notes ?? string.Empty);
                 lineItem.Id = Convert.ToInt32(await insertLineItem.ExecuteScalarAsync());
 
                 foreach (var filePath in lineItem.AssociatedFiles.Where(file => !string.IsNullOrWhiteSpace(file)))
@@ -327,6 +331,13 @@ public class QuoteRepository
         }
 
         return results;
+    }
+
+    public async Task<IReadOnlyList<Quote>> GetActiveQuotesAsync()
+    {
+        var terminalStatuses = new[] { QuoteStatus.Won, QuoteStatus.Lost, QuoteStatus.Expired };
+        var all = await GetQuotesAsync();
+        return all.Where(q => !terminalStatuses.Contains(q.Status)).ToList();
     }
 
     public async Task<IReadOnlyList<Quote>> GetQuotesByStatusAsync(QuoteStatus status)
@@ -562,6 +573,7 @@ public class QuoteRepository
                 li.RequiresGForce,
                 li.RequiresSecondaryProcessing,
                 li.RequiresPlating,
+                li.Notes,
                 f.FilePath
             FROM QuoteLineItems li
             LEFT JOIN LineItemFiles f ON f.LineItemId = li.Id
@@ -586,15 +598,16 @@ public class QuoteRepository
                     LeadTimeDays = reader.GetInt32(4),
                     RequiresGForce = reader.GetInt32(5) == 1,
                     RequiresSecondaryProcessing = reader.GetInt32(6) == 1,
-                    RequiresPlating = reader.GetInt32(7) == 1
+                    RequiresPlating = reader.GetInt32(7) == 1,
+                    Notes = reader.IsDBNull(8) ? string.Empty : reader.GetString(8)
                 };
                 cache[lineItemId] = lineItem;
                 lineItems.Add(lineItem);
             }
 
-            if (!reader.IsDBNull(8))
+            if (!reader.IsDBNull(9))
             {
-                lineItem.AssociatedFiles.Add(reader.GetString(8));
+                lineItem.AssociatedFiles.Add(reader.GetString(9));
             }
         }
 

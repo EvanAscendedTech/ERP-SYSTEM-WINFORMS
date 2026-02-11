@@ -1,19 +1,13 @@
 using ERPSystem.WinForms.Data;
+using ERPSystem.WinForms.Forms;
 using ERPSystem.WinForms.Models;
-using Microsoft.Data.Sqlite;
 
 namespace ERPSystem.WinForms.Controls;
 
 public class QuotesControl : UserControl
 {
     private readonly QuoteRepository _quoteRepository;
-    private bool _isCreateMode = true;
-
-    private readonly NumericUpDown _quoteIdInput = new() { Minimum = 0, Maximum = int.MaxValue, Width = 120, Enabled = false };
-    private readonly ComboBox _customerInput = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
-    private readonly TextBox _customerNameInput = new() { Width = 220 };
-    private readonly ComboBox _statusInput = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180 };
-    private readonly DataGridView _lineItemsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false };
+    private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
 
     public QuotesControl(QuoteRepository quoteRepository)
@@ -21,389 +15,83 @@ public class QuotesControl : UserControl
         _quoteRepository = quoteRepository;
         Dock = DockStyle.Fill;
 
-        ConfigureStatusInput();
-        ConfigureLineItemGrid();
-        ResetForNewQuote();
-        _ = LoadCustomersAsync();
+        ConfigureQuotesGrid();
 
-        var topPanel = BuildHeaderPanel();
-        var actionsPanel = BuildActionsPanel();
+        var actionsPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
+        var refreshButton = new Button { Text = "Refresh Active Quotes", AutoSize = true };
+        var openQuotePacketButton = new Button { Text = "Open Quote Packet", AutoSize = true };
 
-        var root = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 4
-        };
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        refreshButton.Click += async (_, _) => await LoadActiveQuotesAsync();
+        openQuotePacketButton.Click += async (_, _) => await OpenSelectedQuotePacketAsync();
 
-        root.Controls.Add(topPanel, 0, 0);
-        root.Controls.Add(actionsPanel, 0, 1);
-        root.Controls.Add(_lineItemsGrid, 0, 2);
-        root.Controls.Add(_feedback, 0, 3);
+        actionsPanel.Controls.Add(refreshButton);
+        actionsPanel.Controls.Add(openQuotePacketButton);
 
-        Controls.Add(root);
+        Controls.Add(_quotesGrid);
+        Controls.Add(actionsPanel);
+        Controls.Add(_feedback);
+
+        _ = LoadActiveQuotesAsync();
     }
 
-    private Control BuildHeaderPanel()
+    private void ConfigureQuotesGrid()
     {
-        var panel = new TableLayoutPanel
+        _quotesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuoteId", HeaderText = "Quote #", DataPropertyName = nameof(Quote.Id), Width = 80 });
+        _quotesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Customer", HeaderText = "Customer", DataPropertyName = nameof(Quote.CustomerName), Width = 240 });
+        _quotesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Status", DataPropertyName = nameof(Quote.Status), Width = 120 });
+        _quotesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuotedAt", HeaderText = "Quoted", DataPropertyName = nameof(Quote.CreatedUtc), Width = 180 });
+        _quotesGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "TimeSinceQuoted", HeaderText = "Timeframe Since Quoted", Width = 220 });
+        _quotesGrid.CellFormatting += (_, e) =>
         {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            ColumnCount = 4,
-            Padding = new Padding(8)
+            if (_quotesGrid.Columns[e.ColumnIndex].Name == "TimeSinceQuoted"
+                && _quotesGrid.Rows[e.RowIndex].DataBoundItem is Quote quote)
+            {
+                var elapsed = DateTime.UtcNow - quote.CreatedUtc;
+                e.Value = $"{elapsed.Days} days ({Math.Max(0, elapsed.Hours)}h)";
+                e.FormattingApplied = true;
+            }
         };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-
-        panel.Controls.Add(new Label { Text = "Quote ID", Margin = new Padding(0, 8, 6, 0), AutoSize = true }, 0, 0);
-        panel.Controls.Add(_quoteIdInput, 1, 0);
-        panel.Controls.Add(new Label { Text = "Customer", Margin = new Padding(16, 8, 6, 0), AutoSize = true }, 2, 0);
-        panel.Controls.Add(_customerInput, 3, 0);
-        panel.Controls.Add(new Label { Text = "Status", Margin = new Padding(0, 8, 6, 0), AutoSize = true }, 0, 1);
-        panel.Controls.Add(_statusInput, 1, 1);
-
-        return panel;
     }
 
-    private Control BuildActionsPanel()
-    {
-        var panel = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            Height = 44,
-            Padding = new Padding(8)
-        };
-
-        var addRow = new Button { Text = "Add Line", AutoSize = true };
-        addRow.Click += (_, _) => _lineItemsGrid.Rows.Add();
-
-        var saveQuote = new Button { Text = "Save Quote", AutoSize = true };
-        saveQuote.Click += async (_, _) => await SaveQuoteAsync();
-
-        var newQuote = new Button { Text = "New Quote", AutoSize = true };
-        newQuote.Click += (_, _) => ResetForNewQuote();
-
-        var loadQuote = new Button { Text = "Load Quote", AutoSize = true };
-        loadQuote.Click += async (_, _) => await LoadQuoteAsync();
-
-        var markWon = new Button { Text = "Mark Won", AutoSize = true };
-        markWon.Click += async (_, _) => await UpdateStatusAsync(QuoteStatus.Won);
-
-        var markLost = new Button { Text = "Mark Lost", AutoSize = true };
-        markLost.Click += async (_, _) => await UpdateStatusAsync(QuoteStatus.Lost);
-
-        var markExpired = new Button { Text = "Mark Expired", AutoSize = true };
-        markExpired.Click += async (_, _) => await UpdateStatusAsync(QuoteStatus.Expired);
-
-        panel.Controls.Add(addRow);
-        panel.Controls.Add(newQuote);
-        panel.Controls.Add(saveQuote);
-        panel.Controls.Add(loadQuote);
-        panel.Controls.Add(markWon);
-        panel.Controls.Add(markLost);
-        panel.Controls.Add(markExpired);
-
-        return panel;
-    }
-
-    private void ConfigureStatusInput()
-    {
-        _statusInput.DataSource = Enum.GetValues(typeof(QuoteStatus));
-    }
-
-    private async Task LoadCustomersAsync()
+    private async Task LoadActiveQuotesAsync()
     {
         try
         {
-            var customers = await _quoteRepository.GetCustomersAsync();
-            _customerInput.DataSource = customers.ToList();
-            _customerInput.DisplayMember = nameof(Customer.DisplayLabel);
-            _customerInput.ValueMember = nameof(Customer.Id);
-
-            if (customers.Count == 0)
-            {
-                ShowFeedback("No customers found. Existing quotes will still load using legacy names.");
-            }
+            var activeQuotes = await _quoteRepository.GetActiveQuotesAsync();
+            _quotesGrid.DataSource = activeQuotes.OrderByDescending(q => q.CreatedUtc).ToList();
+            _feedback.Text = $"Loaded {activeQuotes.Count} active quotes.";
         }
         catch (Exception ex)
         {
-            ShowFeedback($"Unable to load customers: {ex.Message}");
+            _feedback.Text = $"Unable to load active quotes: {ex.Message}";
         }
     }
 
-    private void ConfigureLineItemGrid()
+    private async Task OpenSelectedQuotePacketAsync()
     {
-        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Description", HeaderText = "Description", Width = 500 });
-        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Quantity", HeaderText = "Quantity", Width = 120 });
-        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "UnitPrice", HeaderText = "Unit Price", Width = 120 });
-        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "LeadTimeDays", HeaderText = "Lead Time (days)", Width = 120 });
-        _lineItemsGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "RequiresGForce", HeaderText = "G-Force", Width = 80 });
-        _lineItemsGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "RequiresSecondary", HeaderText = "Secondary", Width = 90 });
-        _lineItemsGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "RequiresPlating", HeaderText = "Plating", Width = 80 });
-        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Files", HeaderText = "Associated Files (semicolon separated)", Width = 320 });
-        _lineItemsGrid.AllowUserToAddRows = false;
-    }
-
-    private async Task SaveQuoteAsync()
-    {
-        try
+        if (_quotesGrid.CurrentRow?.DataBoundItem is not Quote selected)
         {
-            var quote = BuildQuoteFromInputs();
-            var isCreate = _isCreateMode || quote.Id <= 0;
-            var savedId = await _quoteRepository.SaveQuoteAsync(quote);
-            _quoteIdInput.Value = savedId;
-            _quoteIdInput.Enabled = true;
-            _isCreateMode = false;
-            var action = isCreate ? "Created" : "Updated";
-            ShowFeedback($"{action} quote {savedId} with {quote.LineItems.Count} line items.");
-        }
-        catch (SqliteException ex)
-        {
-            ShowFeedback(MapSaveError(ex));
-            System.Diagnostics.Trace.WriteLine($"[QuotesControl.SaveQuoteAsync] Database save error: code={ex.SqliteErrorCode}, extendedCode={ex.SqliteExtendedErrorCode}, detail={ex}");
-        }
-        catch (Exception ex)
-        {
-            ShowFeedback("Save failed. Please review the quote details and try again.");
-            System.Diagnostics.Trace.WriteLine($"[QuotesControl.SaveQuoteAsync] Unexpected error: {ex}");
-        }
-    }
-
-    private static string MapSaveError(SqliteException ex)
-    {
-        if (ex.SqliteErrorCode == 19)
-        {
-            var message = ex.Message;
-            if (message.Contains("FOREIGN KEY", StringComparison.OrdinalIgnoreCase))
-            {
-                return "Save failed because the quote references related records that no longer exist. Reload the quote and try again.";
-            }
-
-            if (message.Contains("NOT NULL", StringComparison.OrdinalIgnoreCase))
-            {
-                return "Save failed because one or more required fields are blank. Fill in customer and line-item details, then retry.";
-            }
-
-            if (message.Contains("CHECK", StringComparison.OrdinalIgnoreCase))
-            {
-                return "Save failed validation checks. Verify numeric values and required fields, then try again.";
-            }
-
-            if (message.Contains("UNIQUE", StringComparison.OrdinalIgnoreCase))
-            {
-                return "Save conflict detected. Reload the quote, confirm values, and save again.";
-            }
-
-            return "Save blocked by data validation rules. Review the quote values and try again.";
-        }
-
-        return "Save failed due to a database issue. Please retry, and contact support if it continues.";
-    }
-
-    private async Task LoadQuoteAsync()
-    {
-        try
-        {
-            if (!_quoteIdInput.Enabled)
-            {
-                _quoteIdInput.Enabled = true;
-                _quoteIdInput.Focus();
-                ShowFeedback("Enter an existing quote ID and click Load Quote again.");
-                return;
-            }
-
-            var quoteId = (int)_quoteIdInput.Value;
-            if (quoteId <= 0)
-            {
-                ShowFeedback("Enter a quote ID greater than zero before loading.");
-                return;
-            }
-
-            var quote = await _quoteRepository.GetQuoteAsync(quoteId);
-            if (quote is null)
-            {
-                ShowFeedback($"Quote {quoteId} does not exist.");
-                return;
-            }
-
-            PopulateInputs(quote);
-            _isCreateMode = false;
-            ShowFeedback($"Loaded quote {quote.Id} ({quote.Status}).");
-        }
-        catch (Exception ex)
-        {
-            ShowFeedback($"Load failed: {ex.Message}");
-        }
-    }
-
-    private async Task UpdateStatusAsync(QuoteStatus nextStatus)
-    {
-        var quoteId = (int)_quoteIdInput.Value;
-        if (quoteId <= 0)
-        {
-            ShowFeedback("Enter a quote ID greater than zero before changing status.");
+            _feedback.Text = "Select a quote row first.";
             return;
         }
 
-        var result = await _quoteRepository.UpdateStatusAsync(quoteId, nextStatus, "ui-user");
-        if (!result.Success)
+        var fullQuote = await _quoteRepository.GetQuoteAsync(selected.Id);
+        if (fullQuote is null)
         {
-            ShowFeedback(result.Message);
+            _feedback.Text = $"Quote {selected.Id} was not found.";
             return;
         }
 
-        await LoadQuoteAsync();
-    }
-
-    private Quote? BuildQuoteFromInputs()
-    {
-        if (_customerInput.SelectedItem is not Customer customer)
+        using var packetWindow = new QuotePacketForm(fullQuote);
+        if (packetWindow.ShowDialog(this) == DialogResult.OK)
         {
-            ShowFeedback("Select a customer before saving the quote.");
-            return null;
-        }
-
-        var quote = new Quote
-        {
-            Id = (int)_quoteIdInput.Value,
-            CustomerId = customer.Id,
-            CustomerName = customer.Name,
-            Status = (QuoteStatus)(_statusInput.SelectedItem ?? QuoteStatus.InProgress)
-        };
-
-        foreach (DataGridViewRow row in _lineItemsGrid.Rows)
-        {
-            if (row.IsNewRow)
-            {
-                continue;
-            }
-
-            var description = row.Cells[0].Value?.ToString()?.Trim() ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(description))
-            {
-                continue;
-            }
-
-            var quantity = decimal.TryParse(row.Cells[1].Value?.ToString(), out var parsedQty) ? parsedQty : 1m;
-            var unitPrice = decimal.TryParse(row.Cells[2].Value?.ToString(), out var parsedPrice) ? parsedPrice : 0m;
-            var leadTimeDays = int.TryParse(row.Cells[3].Value?.ToString(), out var parsedLeadTime) ? parsedLeadTime : 0;
-            var requiresGForce = ParseCheckCell(row.Cells[4].Value);
-            var requiresSecondary = ParseCheckCell(row.Cells[5].Value);
-            var requiresPlating = ParseCheckCell(row.Cells[6].Value);
-            var filesText = row.Cells[7].Value?.ToString() ?? string.Empty;
-
-            quote.LineItems.Add(new QuoteLineItem
-            {
-                Description = description,
-                Quantity = quantity,
-                UnitPrice = unitPrice,
-                LeadTimeDays = leadTimeDays,
-                RequiresGForce = requiresGForce,
-                RequiresSecondaryProcessing = requiresSecondary,
-                RequiresPlating = requiresPlating,
-                AssociatedFiles = filesText.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList()
-            });
-        }
-
-        return quote;
-    }
-
-    private void PopulateInputs(Quote quote)
-    {
-        _quoteIdInput.Value = quote.Id;
-        _quoteIdInput.Enabled = true;
-        _customerNameInput.Text = quote.CustomerName;
-        _statusInput.SelectedItem = quote.Status;
-
-        if (TrySelectCustomer(quote.CustomerId) || TrySelectCustomerByName(quote.CustomerName))
-        {
-            // customer selected
+            await _quoteRepository.SaveQuoteAsync(fullQuote);
+            _feedback.Text = $"Quote packet for quote {fullQuote.Id} saved to database.";
+            await LoadActiveQuotesAsync();
         }
         else
         {
-            ShowFeedback($"Quote references legacy customer '{quote.CustomerName}'. Review and resave to link it.");
+            _feedback.Text = "Quote packet closed without saving.";
         }
-
-        _lineItemsGrid.Rows.Clear();
-        foreach (var item in quote.LineItems)
-        {
-            _lineItemsGrid.Rows.Add(
-                item.Description,
-                item.Quantity,
-                item.UnitPrice,
-                item.LeadTimeDays,
-                item.RequiresGForce,
-                item.RequiresSecondaryProcessing,
-                item.RequiresPlating,
-                string.Join(';', item.AssociatedFiles));
-        }
-    }
-
-    private bool TrySelectCustomer(int customerId)
-    {
-        if (customerId <= 0 || _customerInput.DataSource is not IEnumerable<Customer> customers)
-        {
-            return false;
-        }
-
-        var customer = customers.FirstOrDefault(c => c.Id == customerId);
-        if (customer is null)
-        {
-            return false;
-        }
-
-        _customerInput.SelectedItem = customer;
-        return true;
-    }
-
-    private bool TrySelectCustomerByName(string customerName)
-    {
-        if (string.IsNullOrWhiteSpace(customerName) || _customerInput.DataSource is not IEnumerable<Customer> customers)
-        {
-            return false;
-        }
-
-        var customer = customers.FirstOrDefault(c => string.Equals(c.Name, customerName, StringComparison.OrdinalIgnoreCase));
-        if (customer is null)
-        {
-            return false;
-        }
-
-        _customerInput.SelectedItem = customer;
-        return true;
-    }
-
-
-    private void ResetForNewQuote()
-    {
-        _isCreateMode = true;
-        _quoteIdInput.Value = 0;
-        _quoteIdInput.Enabled = false;
-        _customerNameInput.Clear();
-        _statusInput.SelectedItem = QuoteStatus.InProgress;
-        _lineItemsGrid.Rows.Clear();
-        ShowFeedback("Creating a new quote. Click Save Quote to create it.");
-    }
-
-    private static bool ParseCheckCell(object? value)
-    {
-        return value switch
-        {
-            bool boolean => boolean,
-            string text when bool.TryParse(text, out var parsed) => parsed,
-            _ => false
-        };
-    }
-
-    private void ShowFeedback(string message)
-    {
-        _feedback.Text = message;
     }
 }

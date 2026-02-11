@@ -2,6 +2,7 @@ namespace ERPSystem.WinForms.Models;
 
 public class AppSettings
 {
+    public string CompanyName { get; set; } = "Your Company";
     public string Theme { get; set; } = "Light";
     public bool EnableNotifications { get; set; } = true;
     public int AutoRefreshSeconds { get; set; } = 30;

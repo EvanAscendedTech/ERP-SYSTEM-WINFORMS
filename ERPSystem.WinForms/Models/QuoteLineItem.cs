@@ -11,5 +11,6 @@ public class QuoteLineItem
     public bool RequiresGForce { get; set; }
     public bool RequiresSecondaryProcessing { get; set; }
     public bool RequiresPlating { get; set; }
+    public string Notes { get; set; } = string.Empty;
     public List<string> AssociatedFiles { get; set; } = new();
 }

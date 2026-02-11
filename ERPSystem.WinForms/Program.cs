@@ -1,5 +1,6 @@
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Forms;
+using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms;
 
@@ -16,6 +17,7 @@ internal static class Program
         Directory.CreateDirectory(appDataFolder);
 
         var dbPath = Path.Combine(appDataFolder, "erp_system.db");
+        var settingsPath = Path.Combine(appDataFolder, "appsettings.json");
 
         var quoteRepository = new QuoteRepository(dbPath);
         await quoteRepository.InitializeDatabaseAsync();
@@ -26,12 +28,23 @@ internal static class Program
         var userRepository = new UserManagementRepository(dbPath);
         await userRepository.InitializeDatabaseAsync();
 
+        var appSettingsService = new AppSettingsService(settingsPath);
+        var appSettings = await appSettingsService.LoadAsync();
+
         using var loginForm = new LoginForm();
         if (loginForm.ShowDialog() != DialogResult.OK)
         {
             return;
         }
 
-        Application.Run(new ERPMainForm(quoteRepository, productionRepository, userRepository));
+        var canManageSettings = string.Equals(loginForm.EnteredUsername, "admin", StringComparison.OrdinalIgnoreCase);
+
+        Application.Run(new ERPMainForm(
+            quoteRepository,
+            productionRepository,
+            userRepository,
+            appSettingsService,
+            canManageSettings,
+            appSettings.CompanyName));
     }
 }

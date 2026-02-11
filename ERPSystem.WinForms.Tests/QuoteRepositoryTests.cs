@@ -31,6 +31,7 @@ public class QuoteRepositoryTests
                     RequiresGForce = true,
                     RequiresSecondaryProcessing = true,
                     RequiresPlating = false,
+                    Notes = "Need anodized finish and marked revision B.",
                     AssociatedFiles = ["drawing-1.pdf", "model-1.step"]
                 }
             ]
@@ -48,6 +49,7 @@ public class QuoteRepositoryTests
         Assert.Equal(21, lineItem.LeadTimeDays);
         Assert.True(lineItem.RequiresGForce);
         Assert.True(lineItem.RequiresSecondaryProcessing);
+        Assert.Equal("Need anodized finish and marked revision B.", lineItem.Notes);
 
         File.Delete(dbPath);
     }
