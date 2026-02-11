@@ -45,6 +45,40 @@ public class QuoteRepositoryTests
         File.Delete(dbPath);
     }
 
+
+    [Fact]
+    public async Task SaveQuoteAsync_WithUnsetId_CreatesThenUpdatesSameQuote()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-create-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var quote = new Quote
+        {
+            Id = 0,
+            CustomerName = "Create Mode Customer",
+            Status = QuoteStatus.InProgress,
+            LineItems = [new QuoteLineItem { Description = "Panel", Quantity = 2 }]
+        };
+
+        var createdId = await repository.SaveQuoteAsync(quote);
+        Assert.True(createdId > 0);
+
+        quote.Id = createdId;
+        quote.CustomerName = "Updated Customer";
+        quote.Status = QuoteStatus.Won;
+
+        var updatedId = await repository.SaveQuoteAsync(quote);
+        var loaded = await repository.GetQuoteAsync(createdId);
+
+        Assert.Equal(createdId, updatedId);
+        Assert.NotNull(loaded);
+        Assert.Equal("Updated Customer", loaded!.CustomerName);
+        Assert.Equal(QuoteStatus.Won, loaded.Status);
+
+        File.Delete(dbPath);
+    }
+
     [Fact]
     public async Task ExpireStaleQuotesAsync_MarksOldInProgressQuotesAsExpired()
     {
