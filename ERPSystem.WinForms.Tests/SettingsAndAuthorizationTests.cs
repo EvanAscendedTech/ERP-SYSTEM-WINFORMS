@@ -12,6 +12,7 @@ public class SettingsAndAuthorizationTests
         var service = new AppSettingsService(jsonPath);
         var settings = new AppSettings
         {
+            CompanyName = "Acme Aerospace",
             Theme = "Dark",
             EnableNotifications = false,
             AutoRefreshSeconds = 120,
@@ -21,6 +22,7 @@ public class SettingsAndAuthorizationTests
         await service.SaveAsync(settings);
         var loaded = await service.LoadAsync();
 
+        Assert.Equal(settings.CompanyName, loaded.CompanyName);
         Assert.Equal(settings.Theme, loaded.Theme);
         Assert.Equal(settings.AutoRefreshSeconds, loaded.AutoRefreshSeconds);
 
