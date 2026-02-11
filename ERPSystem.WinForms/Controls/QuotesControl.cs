@@ -6,8 +6,9 @@ namespace ERPSystem.WinForms.Controls;
 public class QuotesControl : UserControl
 {
     private readonly QuoteRepository _quoteRepository;
+    private bool _isCreateMode = true;
 
-    private readonly NumericUpDown _quoteIdInput = new() { Minimum = 0, Maximum = int.MaxValue, Width = 120 };
+    private readonly NumericUpDown _quoteIdInput = new() { Minimum = 0, Maximum = int.MaxValue, Width = 120, Enabled = false };
     private readonly TextBox _customerNameInput = new() { Width = 220 };
     private readonly ComboBox _statusInput = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180 };
     private readonly DataGridView _lineItemsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false };
@@ -20,6 +21,7 @@ public class QuotesControl : UserControl
 
         ConfigureStatusInput();
         ConfigureLineItemGrid();
+        ResetForNewQuote();
 
         var topPanel = BuildHeaderPanel();
         var actionsPanel = BuildActionsPanel();
@@ -82,6 +84,9 @@ public class QuotesControl : UserControl
         var saveQuote = new Button { Text = "Save Quote", AutoSize = true };
         saveQuote.Click += async (_, _) => await SaveQuoteAsync();
 
+        var newQuote = new Button { Text = "New Quote", AutoSize = true };
+        newQuote.Click += (_, _) => ResetForNewQuote();
+
         var loadQuote = new Button { Text = "Load Quote", AutoSize = true };
         loadQuote.Click += async (_, _) => await LoadQuoteAsync();
 
@@ -95,6 +100,7 @@ public class QuotesControl : UserControl
         markExpired.Click += async (_, _) => await UpdateStatusAsync(QuoteStatus.Expired);
 
         panel.Controls.Add(addRow);
+        panel.Controls.Add(newQuote);
         panel.Controls.Add(saveQuote);
         panel.Controls.Add(loadQuote);
         panel.Controls.Add(markWon);
@@ -127,9 +133,13 @@ public class QuotesControl : UserControl
         try
         {
             var quote = BuildQuoteFromInputs();
+            var isCreate = _isCreateMode || quote.Id <= 0;
             var savedId = await _quoteRepository.SaveQuoteAsync(quote);
             _quoteIdInput.Value = savedId;
-            ShowFeedback($"Quote {savedId} saved with {quote.LineItems.Count} line items.");
+            _quoteIdInput.Enabled = true;
+            _isCreateMode = false;
+            var action = isCreate ? "Created" : "Updated";
+            ShowFeedback($"{action} quote {savedId} with {quote.LineItems.Count} line items.");
         }
         catch (Exception ex)
         {
@@ -141,6 +151,14 @@ public class QuotesControl : UserControl
     {
         try
         {
+            if (!_quoteIdInput.Enabled)
+            {
+                _quoteIdInput.Enabled = true;
+                _quoteIdInput.Focus();
+                ShowFeedback("Enter an existing quote ID and click Load Quote again.");
+                return;
+            }
+
             var quoteId = (int)_quoteIdInput.Value;
             if (quoteId <= 0)
             {
@@ -156,6 +174,7 @@ public class QuotesControl : UserControl
             }
 
             PopulateInputs(quote);
+            _isCreateMode = false;
             ShowFeedback($"Loaded quote {quote.Id} ({quote.Status}).");
         }
         catch (Exception ex)
@@ -232,6 +251,7 @@ public class QuotesControl : UserControl
     private void PopulateInputs(Quote quote)
     {
         _quoteIdInput.Value = quote.Id;
+        _quoteIdInput.Enabled = true;
         _customerNameInput.Text = quote.CustomerName;
         _statusInput.SelectedItem = quote.Status;
 
@@ -248,6 +268,17 @@ public class QuotesControl : UserControl
                 item.RequiresPlating,
                 string.Join(';', item.AssociatedFiles));
         }
+    }
+
+    private void ResetForNewQuote()
+    {
+        _isCreateMode = true;
+        _quoteIdInput.Value = 0;
+        _quoteIdInput.Enabled = false;
+        _customerNameInput.Clear();
+        _statusInput.SelectedItem = QuoteStatus.InProgress;
+        _lineItemsGrid.Rows.Clear();
+        ShowFeedback("Creating a new quote. Click Save Quote to create it.");
     }
 
     private static bool ParseCheckCell(object? value)
