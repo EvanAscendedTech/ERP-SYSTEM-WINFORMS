@@ -1,5 +1,6 @@
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
+using Microsoft.Data.Sqlite;
 
 namespace ERPSystem.WinForms.Tests;
 
@@ -12,9 +13,12 @@ public class QuoteRepositoryTests
         var repository = new QuoteRepository(dbPath);
         await repository.InitializeDatabaseAsync();
 
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+
         var quote = new Quote
         {
-            CustomerName = "Acme Aerospace",
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
             Status = QuoteStatus.InProgress,
             LineItems =
             [
@@ -36,11 +40,52 @@ public class QuoteRepositoryTests
         var loaded = await repository.GetQuoteAsync(id);
 
         Assert.NotNull(loaded);
-        var lineItem = Assert.Single(loaded!.LineItems);
+        Assert.Equal(customer.Id, loaded!.CustomerId);
+        Assert.Equal(customer.Name, loaded.CustomerName);
+
+        var lineItem = Assert.Single(loaded.LineItems);
         Assert.Equal(125.50m, lineItem.UnitPrice);
         Assert.Equal(21, lineItem.LeadTimeDays);
         Assert.True(lineItem.RequiresGForce);
         Assert.True(lineItem.RequiresSecondaryProcessing);
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task InitializeDatabaseAsync_BackfillsLegacyCustomerNameIntoCustomers()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-backfill-{Guid.NewGuid():N}.db");
+
+        await using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString()))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = @"
+                CREATE TABLE Quotes (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    CustomerName TEXT NOT NULL,
+                    Status INTEGER NOT NULL,
+                    CreatedUtc TEXT NOT NULL,
+                    LastUpdatedUtc TEXT NOT NULL
+                );
+
+                INSERT INTO Quotes (CustomerName, Status, CreatedUtc, LastUpdatedUtc)
+                VALUES ('Legacy Customer', 0, '2024-01-01T00:00:00.0000000Z', '2024-01-01T00:00:00.0000000Z');";
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customers = await repository.GetCustomersAsync();
+        var customer = Assert.Single(customers);
+        Assert.Equal("Legacy Customer", customer.Name);
+        Assert.StartsWith("LEG-", customer.Code);
+
+        var quote = await repository.GetQuoteAsync(1);
+        Assert.NotNull(quote);
+        Assert.Equal(customer.Id, quote!.CustomerId);
 
         File.Delete(dbPath);
     }
@@ -52,9 +97,12 @@ public class QuoteRepositoryTests
         var repository = new QuoteRepository(dbPath);
         await repository.InitializeDatabaseAsync();
 
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+
         var quote = new Quote
         {
-            CustomerName = "Legacy Customer",
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
             Status = QuoteStatus.InProgress,
             CreatedUtc = DateTime.UtcNow.AddDays(-90),
             LastUpdatedUtc = DateTime.UtcNow.AddDays(-90),

@@ -22,6 +22,13 @@ public class QuoteRepository
         await connection.OpenAsync();
 
         var sql = @"
+            CREATE TABLE IF NOT EXISTS Customers (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Code TEXT NOT NULL,
+                Name TEXT NOT NULL,
+                IsActive INTEGER NOT NULL DEFAULT 1
+            );
+
             CREATE TABLE IF NOT EXISTS Quotes (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 CustomerName TEXT NOT NULL,
@@ -59,6 +66,42 @@ public class QuoteRepository
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresGForce", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresSecondaryProcessing", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresPlating", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "Quotes", "CustomerId", "INTEGER");
+
+        await EnsureCustomerIndexesAsync(connection);
+        await EnsureQuoteIndexesAsync(connection);
+        await BackfillCustomersAsync(connection);
+        await EnsureDefaultCustomerAsync(connection);
+    }
+
+    public async Task<IReadOnlyList<Customer>> GetCustomersAsync(bool activeOnly = true)
+    {
+        var customers = new List<Customer>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT Id, Code, Name, IsActive
+            FROM Customers
+            WHERE $activeOnly = 0 OR IsActive = 1
+            ORDER BY Name;";
+        command.Parameters.AddWithValue("$activeOnly", activeOnly ? 1 : 0);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            customers.Add(new Customer
+            {
+                Id = reader.GetInt32(0),
+                Code = reader.GetString(1),
+                Name = reader.GetString(2),
+                IsActive = reader.GetInt32(3) == 1
+            });
+        }
+
+        return customers;
     }
 
     public async Task<int> SaveQuoteAsync(Quote quote)
@@ -75,9 +118,10 @@ public class QuoteRepository
             await using var insertQuote = connection.CreateCommand();
             insertQuote.Transaction = transaction;
             insertQuote.CommandText = @"
-                INSERT INTO Quotes (CustomerName, Status, CreatedUtc, LastUpdatedUtc)
-                VALUES ($name, $status, $created, $updated);
+                INSERT INTO Quotes (CustomerId, CustomerName, Status, CreatedUtc, LastUpdatedUtc)
+                VALUES ($customerId, $name, $status, $created, $updated);
                 SELECT last_insert_rowid();";
+            insertQuote.Parameters.AddWithValue("$customerId", quote.CustomerId);
             insertQuote.Parameters.AddWithValue("$name", quote.CustomerName);
             insertQuote.Parameters.AddWithValue("$status", (int)quote.Status);
             insertQuote.Parameters.AddWithValue("$created", quote.CreatedUtc.ToString("O"));
@@ -91,11 +135,13 @@ public class QuoteRepository
             updateQuote.Transaction = transaction;
             updateQuote.CommandText = @"
                 UPDATE Quotes
-                SET CustomerName = $name,
+                SET CustomerId = $customerId,
+                    CustomerName = $name,
                     Status = $status,
                     LastUpdatedUtc = $updated
                 WHERE Id = $id;";
             updateQuote.Parameters.AddWithValue("$id", quote.Id);
+            updateQuote.Parameters.AddWithValue("$customerId", quote.CustomerId);
             updateQuote.Parameters.AddWithValue("$name", quote.CustomerName);
             updateQuote.Parameters.AddWithValue("$status", (int)quote.Status);
             updateQuote.Parameters.AddWithValue("$updated", quote.LastUpdatedUtc.ToString("O"));
@@ -254,9 +300,10 @@ public class QuoteRepository
     {
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            SELECT Id, CustomerName, Status, CreatedUtc, LastUpdatedUtc
-            FROM Quotes
-            WHERE Id = $id";
+            SELECT q.Id, q.CustomerId, q.CustomerName, q.Status, q.CreatedUtc, q.LastUpdatedUtc, c.Name
+            FROM Quotes q
+            LEFT JOIN Customers c ON c.Id = q.CustomerId
+            WHERE q.Id = $id";
         command.Parameters.AddWithValue("$id", quoteId);
 
         await using var reader = await command.ExecuteReaderAsync();
@@ -265,13 +312,15 @@ public class QuoteRepository
             return null;
         }
 
+        var customerName = reader.IsDBNull(6) ? reader.GetString(2) : reader.GetString(6);
         return new Quote
         {
             Id = reader.GetInt32(0),
-            CustomerName = reader.GetString(1),
-            Status = (QuoteStatus)reader.GetInt32(2),
-            CreatedUtc = DateTime.Parse(reader.GetString(3)),
-            LastUpdatedUtc = DateTime.Parse(reader.GetString(4))
+            CustomerId = reader.IsDBNull(1) ? 0 : reader.GetInt32(1),
+            CustomerName = customerName,
+            Status = (QuoteStatus)reader.GetInt32(3),
+            CreatedUtc = DateTime.Parse(reader.GetString(4)),
+            LastUpdatedUtc = DateTime.Parse(reader.GetString(5))
         };
     }
 
@@ -346,5 +395,73 @@ public class QuoteRepository
         await using var alter = connection.CreateCommand();
         alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition};";
         await alter.ExecuteNonQueryAsync();
+    }
+
+    private static async Task EnsureCustomerIndexesAsync(SqliteConnection connection)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_Customers_Code ON Customers(Code);
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_Customers_Name ON Customers(Name);";
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task EnsureQuoteIndexesAsync(SqliteConnection connection)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            CREATE INDEX IF NOT EXISTS IX_Quotes_CustomerId ON Quotes(CustomerId);
+            CREATE INDEX IF NOT EXISTS IX_QuoteLineItems_QuoteId ON QuoteLineItems(QuoteId);";
+        await command.ExecuteNonQueryAsync();
+    }
+
+
+    private static async Task EnsureDefaultCustomerAsync(SqliteConnection connection)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO Customers (Code, Name, IsActive)
+            SELECT 'CUST-00001', 'Default Customer', 1
+            WHERE NOT EXISTS (SELECT 1 FROM Customers);";
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task BackfillCustomersAsync(SqliteConnection connection)
+    {
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
+
+        await using var insertCustomers = connection.CreateCommand();
+        insertCustomers.Transaction = transaction;
+        insertCustomers.CommandText = @"
+            INSERT INTO Customers (Code, Name, IsActive)
+            SELECT
+                'LEG-' || printf('%05d', ROW_NUMBER() OVER (ORDER BY CustomerName)),
+                CustomerName,
+                1
+            FROM (
+                SELECT DISTINCT TRIM(CustomerName) AS CustomerName
+                FROM Quotes
+                WHERE CustomerName IS NOT NULL AND TRIM(CustomerName) <> ''
+            ) q
+            WHERE NOT EXISTS (
+                SELECT 1 FROM Customers c WHERE c.Name = q.CustomerName
+            );";
+        await insertCustomers.ExecuteNonQueryAsync();
+
+        await using var updateQuotes = connection.CreateCommand();
+        updateQuotes.Transaction = transaction;
+        updateQuotes.CommandText = @"
+            UPDATE Quotes
+            SET CustomerId = (
+                SELECT c.Id
+                FROM Customers c
+                WHERE c.Name = TRIM(Quotes.CustomerName)
+            )
+            WHERE (CustomerId IS NULL OR CustomerId = 0)
+              AND CustomerName IS NOT NULL
+              AND TRIM(CustomerName) <> '';";
+        await updateQuotes.ExecuteNonQueryAsync();
+
+        await transaction.CommitAsync();
     }
 }
