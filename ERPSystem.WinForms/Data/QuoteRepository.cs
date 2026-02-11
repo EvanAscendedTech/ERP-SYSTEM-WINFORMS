@@ -80,7 +80,44 @@ public class QuoteRepository
 
         try
         {
-            quote.LastUpdatedUtc = DateTime.UtcNow;
+            quote.CreatedUtc = quote.LastUpdatedUtc;
+            await using var insertQuote = connection.CreateCommand();
+            insertQuote.Transaction = transaction;
+            insertQuote.CommandText = @"
+                INSERT INTO Quotes (CustomerName, Status, CreatedUtc, LastUpdatedUtc)
+                VALUES ($name, $status, $created, $updated);
+                SELECT last_insert_rowid();";
+            insertQuote.Parameters.AddWithValue("$name", quote.CustomerName);
+            insertQuote.Parameters.AddWithValue("$status", (int)quote.Status);
+            insertQuote.Parameters.AddWithValue("$created", quote.CreatedUtc.ToString("O"));
+            insertQuote.Parameters.AddWithValue("$updated", quote.LastUpdatedUtc.ToString("O"));
+
+            quote.Id = Convert.ToInt32(await insertQuote.ExecuteScalarAsync());
+        }
+        else
+        {
+            var quoteExists = await QuoteExistsAsync(connection, transaction, quote.Id);
+            if (!quoteExists)
+            {
+                throw new InvalidOperationException($"Quote {quote.Id} not found. Load an existing quote or create a new one.");
+            }
+
+            await using var updateQuote = connection.CreateCommand();
+            updateQuote.Transaction = transaction;
+            updateQuote.CommandText = @"
+                UPDATE Quotes
+                SET CustomerName = $name,
+                    Status = $status,
+                    LastUpdatedUtc = $updated
+                WHERE Id = $id;";
+            updateQuote.Parameters.AddWithValue("$id", quote.Id);
+            updateQuote.Parameters.AddWithValue("$name", quote.CustomerName);
+            updateQuote.Parameters.AddWithValue("$status", (int)quote.Status);
+            updateQuote.Parameters.AddWithValue("$updated", quote.LastUpdatedUtc.ToString("O"));
+            await updateQuote.ExecuteNonQueryAsync();
+
+            await DeleteLineItemsForQuoteAsync(connection, transaction, quote.Id);
+        }
 
             await using var connection = new SqliteConnection(_connectionString);
             await connection.OpenAsync();
@@ -318,27 +355,15 @@ public class QuoteRepository
         await deleteLineItems.ExecuteNonQueryAsync();
     }
 
-    private static async Task AppendAuditEventAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        int quoteId,
-        string eventType,
-        string operationMode,
-        int lineItemCount,
-        string details)
+    private static async Task<bool> QuoteExistsAsync(SqliteConnection connection, SqliteTransaction transaction, int quoteId)
     {
-        await using var insertAudit = connection.CreateCommand();
-        insertAudit.Transaction = transaction;
-        insertAudit.CommandText = @"
-            INSERT INTO QuoteAuditEvents (QuoteId, EventType, OperationMode, LineItemCount, Details, CreatedUtc)
-            VALUES ($quoteId, $eventType, $operationMode, $lineItemCount, $details, $createdUtc);";
-        insertAudit.Parameters.AddWithValue("$quoteId", quoteId);
-        insertAudit.Parameters.AddWithValue("$eventType", eventType);
-        insertAudit.Parameters.AddWithValue("$operationMode", operationMode);
-        insertAudit.Parameters.AddWithValue("$lineItemCount", lineItemCount);
-        insertAudit.Parameters.AddWithValue("$details", details);
-        insertAudit.Parameters.AddWithValue("$createdUtc", DateTime.UtcNow.ToString("O"));
-        await insertAudit.ExecuteNonQueryAsync();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT 1 FROM Quotes WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", quoteId);
+
+        var result = await command.ExecuteScalarAsync();
+        return result is not null;
     }
 
     private static async Task<Quote?> ReadQuoteHeaderAsync(SqliteConnection connection, int quoteId)
