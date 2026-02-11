@@ -75,4 +75,32 @@ public class QuoteRepositoryTests
 
         File.Delete(dbPath);
     }
+
+    [Fact]
+    public async Task UpdateStatusAsync_StoresTransitionAuditFieldsAndRejectsInvalidTransitions()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-status-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var quoteId = await repository.SaveQuoteAsync(new Quote
+        {
+            CustomerName = "Lifecycle Customer",
+            Status = QuoteStatus.InProgress,
+            LineItems = [new QuoteLineItem { Description = "Assembly", Quantity = 1 }]
+        });
+
+        var wonResult = await repository.UpdateStatusAsync(quoteId, QuoteStatus.Won, "sales.user");
+        var wonQuote = await repository.GetQuoteAsync(quoteId);
+
+        Assert.True(wonResult.Success);
+        Assert.Equal("sales.user", wonQuote!.WonByUserId);
+        Assert.NotNull(wonQuote.WonUtc);
+
+        var invalidResult = await repository.UpdateStatusAsync(quoteId, QuoteStatus.Expired, "sales.user");
+        Assert.False(invalidResult.Success);
+        Assert.Contains("invalid quote transition", invalidResult.Message.ToLowerInvariant());
+
+        File.Delete(dbPath);
+    }
 }

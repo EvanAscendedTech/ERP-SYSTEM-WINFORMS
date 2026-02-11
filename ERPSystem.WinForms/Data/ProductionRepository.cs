@@ -1,4 +1,5 @@
 using ERPSystem.WinForms.Models;
+using ERPSystem.WinForms.Services;
 using Microsoft.Data.Sqlite;
 
 namespace ERPSystem.WinForms.Data;
@@ -25,7 +26,12 @@ public class ProductionRepository
                 PlannedQuantity INTEGER NOT NULL,
                 ProducedQuantity INTEGER NOT NULL,
                 DueDateUtc TEXT NOT NULL,
-                Status INTEGER NOT NULL
+                Status INTEGER NOT NULL,
+                SourceQuoteId INTEGER NULL,
+                StartedUtc TEXT NULL,
+                StartedByUserId TEXT NULL,
+                CompletedUtc TEXT NULL,
+                CompletedByUserId TEXT NULL
             );
 
             CREATE TABLE IF NOT EXISTS MachineSchedules (
@@ -49,6 +55,12 @@ public class ProductionRepository
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync();
+
+        await EnsureColumnExistsAsync(connection, "ProductionJobs", "SourceQuoteId", "INTEGER NULL");
+        await EnsureColumnExistsAsync(connection, "ProductionJobs", "StartedUtc", "TEXT NULL");
+        await EnsureColumnExistsAsync(connection, "ProductionJobs", "StartedByUserId", "TEXT NULL");
+        await EnsureColumnExistsAsync(connection, "ProductionJobs", "CompletedUtc", "TEXT NULL");
+        await EnsureColumnExistsAsync(connection, "ProductionJobs", "CompletedByUserId", "TEXT NULL");
     }
 
     public async Task<int> SaveJobAsync(ProductionJob job)
@@ -58,14 +70,19 @@ public class ProductionRepository
 
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            INSERT INTO ProductionJobs (JobNumber, ProductName, PlannedQuantity, ProducedQuantity, DueDateUtc, Status)
-            VALUES ($jobNumber, $productName, $plannedQty, $producedQty, $dueDateUtc, $status)
+            INSERT INTO ProductionJobs (JobNumber, ProductName, PlannedQuantity, ProducedQuantity, DueDateUtc, Status, SourceQuoteId, StartedUtc, StartedByUserId, CompletedUtc, CompletedByUserId)
+            VALUES ($jobNumber, $productName, $plannedQty, $producedQty, $dueDateUtc, $status, $sourceQuoteId, $startedUtc, $startedByUserId, $completedUtc, $completedByUserId)
             ON CONFLICT(JobNumber) DO UPDATE SET
                 ProductName = excluded.ProductName,
                 PlannedQuantity = excluded.PlannedQuantity,
                 ProducedQuantity = excluded.ProducedQuantity,
                 DueDateUtc = excluded.DueDateUtc,
-                Status = excluded.Status;
+                Status = excluded.Status,
+                SourceQuoteId = excluded.SourceQuoteId,
+                StartedUtc = excluded.StartedUtc,
+                StartedByUserId = excluded.StartedByUserId,
+                CompletedUtc = excluded.CompletedUtc,
+                CompletedByUserId = excluded.CompletedByUserId;
 
             SELECT Id FROM ProductionJobs WHERE JobNumber = $jobNumber;";
         command.Parameters.AddWithValue("$jobNumber", job.JobNumber);
@@ -74,6 +91,11 @@ public class ProductionRepository
         command.Parameters.AddWithValue("$producedQty", job.ProducedQuantity);
         command.Parameters.AddWithValue("$dueDateUtc", job.DueDateUtc.ToString("O"));
         command.Parameters.AddWithValue("$status", (int)job.Status);
+        command.Parameters.AddWithValue("$sourceQuoteId", job.SourceQuoteId ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$startedUtc", job.StartedUtc?.ToString("O") ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$startedByUserId", job.StartedByUserId ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$completedUtc", job.CompletedUtc?.ToString("O") ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$completedByUserId", job.CompletedByUserId ?? (object)DBNull.Value);
 
         return Convert.ToInt32(await command.ExecuteScalarAsync());
     }
@@ -86,7 +108,9 @@ public class ProductionRepository
         await connection.OpenAsync();
 
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id, JobNumber, ProductName, PlannedQuantity, ProducedQuantity, DueDateUtc, Status FROM ProductionJobs ORDER BY DueDateUtc";
+        command.CommandText = @"SELECT Id, JobNumber, ProductName, PlannedQuantity, ProducedQuantity, DueDateUtc, Status,
+                                       SourceQuoteId, StartedUtc, StartedByUserId, CompletedUtc, CompletedByUserId
+                                FROM ProductionJobs ORDER BY DueDateUtc";
 
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
@@ -99,10 +123,70 @@ public class ProductionRepository
                 PlannedQuantity = reader.GetInt32(3),
                 ProducedQuantity = reader.GetInt32(4),
                 DueDateUtc = DateTime.Parse(reader.GetString(5)),
-                Status = (ProductionJobStatus)reader.GetInt32(6)
+                Status = (ProductionJobStatus)reader.GetInt32(6),
+                SourceQuoteId = reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                StartedUtc = reader.IsDBNull(8) ? null : DateTime.Parse(reader.GetString(8)),
+                StartedByUserId = reader.IsDBNull(9) ? null : reader.GetString(9),
+                CompletedUtc = reader.IsDBNull(10) ? null : DateTime.Parse(reader.GetString(10)),
+                CompletedByUserId = reader.IsDBNull(11) ? null : reader.GetString(11)
             });
         }
 
         return jobs;
+    }
+
+    public async Task<(bool Success, string Message)> StartJobAsync(string jobNumber, QuoteStatus sourceQuoteStatus, int sourceQuoteId, string actorUserId)
+    {
+        if (!LifecycleWorkflowService.CanStartProduction(sourceQuoteStatus, out var message))
+        {
+            return (false, message);
+        }
+
+        var job = (await GetJobsAsync()).FirstOrDefault(existing => string.Equals(existing.JobNumber, jobNumber, StringComparison.OrdinalIgnoreCase));
+        if (job is null)
+        {
+            return (false, $"Production job {jobNumber} was not found.");
+        }
+
+        job.Status = ProductionJobStatus.InProgress;
+        job.SourceQuoteId = sourceQuoteId;
+        job.StartedUtc = DateTime.UtcNow;
+        job.StartedByUserId = actorUserId;
+        await SaveJobAsync(job);
+        return (true, $"Production started for {jobNumber}.");
+    }
+
+    public async Task<(bool Success, string Message)> CompleteJobAsync(string jobNumber, string actorUserId)
+    {
+        var job = (await GetJobsAsync()).FirstOrDefault(existing => string.Equals(existing.JobNumber, jobNumber, StringComparison.OrdinalIgnoreCase));
+        if (job is null)
+        {
+            return (false, $"Production job {jobNumber} was not found.");
+        }
+
+        job.Status = ProductionJobStatus.Completed;
+        job.CompletedUtc = DateTime.UtcNow;
+        job.CompletedByUserId = actorUserId;
+        await SaveJobAsync(job);
+        return (true, $"Production completed for {jobNumber}.");
+    }
+
+    private static async Task EnsureColumnExistsAsync(SqliteConnection connection, string tableName, string columnName, string definition)
+    {
+        await using var pragma = connection.CreateCommand();
+        pragma.CommandText = $"PRAGMA table_info({tableName});";
+
+        await using var reader = await pragma.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        await using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition};";
+        await alter.ExecuteNonQueryAsync();
     }
 }

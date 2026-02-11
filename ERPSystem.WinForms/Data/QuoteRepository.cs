@@ -27,7 +27,13 @@ public class QuoteRepository
                 CustomerName TEXT NOT NULL,
                 Status INTEGER NOT NULL,
                 CreatedUtc TEXT NOT NULL,
-                LastUpdatedUtc TEXT NOT NULL
+                LastUpdatedUtc TEXT NOT NULL,
+                WonUtc TEXT NULL,
+                WonByUserId TEXT NULL,
+                LostUtc TEXT NULL,
+                LostByUserId TEXT NULL,
+                ExpiredUtc TEXT NULL,
+                ExpiredByUserId TEXT NULL
             );
 
             CREATE TABLE IF NOT EXISTS QuoteLineItems (
@@ -59,6 +65,12 @@ public class QuoteRepository
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresGForce", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresSecondaryProcessing", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresPlating", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "Quotes", "WonUtc", "TEXT NULL");
+        await EnsureColumnExistsAsync(connection, "Quotes", "WonByUserId", "TEXT NULL");
+        await EnsureColumnExistsAsync(connection, "Quotes", "LostUtc", "TEXT NULL");
+        await EnsureColumnExistsAsync(connection, "Quotes", "LostByUserId", "TEXT NULL");
+        await EnsureColumnExistsAsync(connection, "Quotes", "ExpiredUtc", "TEXT NULL");
+        await EnsureColumnExistsAsync(connection, "Quotes", "ExpiredByUserId", "TEXT NULL");
     }
 
     public async Task<int> SaveQuoteAsync(Quote quote)
@@ -75,13 +87,19 @@ public class QuoteRepository
             await using var insertQuote = connection.CreateCommand();
             insertQuote.Transaction = transaction;
             insertQuote.CommandText = @"
-                INSERT INTO Quotes (CustomerName, Status, CreatedUtc, LastUpdatedUtc)
-                VALUES ($name, $status, $created, $updated);
+                INSERT INTO Quotes (CustomerName, Status, CreatedUtc, LastUpdatedUtc, WonUtc, WonByUserId, LostUtc, LostByUserId, ExpiredUtc, ExpiredByUserId)
+                VALUES ($name, $status, $created, $updated, $wonUtc, $wonByUserId, $lostUtc, $lostByUserId, $expiredUtc, $expiredByUserId);
                 SELECT last_insert_rowid();";
             insertQuote.Parameters.AddWithValue("$name", quote.CustomerName);
             insertQuote.Parameters.AddWithValue("$status", (int)quote.Status);
             insertQuote.Parameters.AddWithValue("$created", quote.CreatedUtc.ToString("O"));
             insertQuote.Parameters.AddWithValue("$updated", quote.LastUpdatedUtc.ToString("O"));
+            AddNullableString(insertQuote, "$wonUtc", quote.WonUtc?.ToString("O"));
+            AddNullableString(insertQuote, "$wonByUserId", quote.WonByUserId);
+            AddNullableString(insertQuote, "$lostUtc", quote.LostUtc?.ToString("O"));
+            AddNullableString(insertQuote, "$lostByUserId", quote.LostByUserId);
+            AddNullableString(insertQuote, "$expiredUtc", quote.ExpiredUtc?.ToString("O"));
+            AddNullableString(insertQuote, "$expiredByUserId", quote.ExpiredByUserId);
 
             quote.Id = Convert.ToInt32(await insertQuote.ExecuteScalarAsync());
         }
@@ -93,12 +111,24 @@ public class QuoteRepository
                 UPDATE Quotes
                 SET CustomerName = $name,
                     Status = $status,
-                    LastUpdatedUtc = $updated
+                    LastUpdatedUtc = $updated,
+                    WonUtc = $wonUtc,
+                    WonByUserId = $wonByUserId,
+                    LostUtc = $lostUtc,
+                    LostByUserId = $lostByUserId,
+                    ExpiredUtc = $expiredUtc,
+                    ExpiredByUserId = $expiredByUserId
                 WHERE Id = $id;";
             updateQuote.Parameters.AddWithValue("$id", quote.Id);
             updateQuote.Parameters.AddWithValue("$name", quote.CustomerName);
             updateQuote.Parameters.AddWithValue("$status", (int)quote.Status);
             updateQuote.Parameters.AddWithValue("$updated", quote.LastUpdatedUtc.ToString("O"));
+            AddNullableString(updateQuote, "$wonUtc", quote.WonUtc?.ToString("O"));
+            AddNullableString(updateQuote, "$wonByUserId", quote.WonByUserId);
+            AddNullableString(updateQuote, "$lostUtc", quote.LostUtc?.ToString("O"));
+            AddNullableString(updateQuote, "$lostByUserId", quote.LostByUserId);
+            AddNullableString(updateQuote, "$expiredUtc", quote.ExpiredUtc?.ToString("O"));
+            AddNullableString(updateQuote, "$expiredByUserId", quote.ExpiredByUserId);
             await updateQuote.ExecuteNonQueryAsync();
 
             await DeleteLineItemsForQuoteAsync(connection, transaction, quote.Id);
@@ -215,20 +245,43 @@ public class QuoteRepository
 
     public async Task<bool> UpdateStatusAsync(int quoteId, QuoteStatus nextStatus)
     {
+        var result = await UpdateStatusAsync(quoteId, nextStatus, "system");
+        return result.Success;
+    }
+
+    public async Task<(bool Success, string Message)> UpdateStatusAsync(int quoteId, QuoteStatus nextStatus, string actorUserId)
+    {
         var quote = await GetQuoteAsync(quoteId);
         if (quote is null)
         {
-            return false;
+            return (false, $"Quote {quoteId} was not found.");
         }
 
         if (!QuoteWorkflowService.IsTransitionAllowed(quote.Status, nextStatus))
         {
-            return false;
+            return (false, QuoteWorkflowService.BuildTransitionErrorMessage(quote.Status, nextStatus));
         }
 
+        var now = DateTime.UtcNow;
         quote.Status = nextStatus;
+        switch (nextStatus)
+        {
+            case QuoteStatus.Won:
+                quote.WonUtc = now;
+                quote.WonByUserId = actorUserId;
+                break;
+            case QuoteStatus.Lost:
+                quote.LostUtc = now;
+                quote.LostByUserId = actorUserId;
+                break;
+            case QuoteStatus.Expired:
+                quote.ExpiredUtc = now;
+                quote.ExpiredByUserId = actorUserId;
+                break;
+        }
+
         await SaveQuoteAsync(quote);
-        return true;
+        return (true, $"Quote {quoteId} moved to {nextStatus}.");
     }
 
     private static async Task DeleteLineItemsForQuoteAsync(SqliteConnection connection, SqliteTransaction transaction, int quoteId)
@@ -255,6 +308,7 @@ public class QuoteRepository
         await using var command = connection.CreateCommand();
         command.CommandText = @"
             SELECT Id, CustomerName, Status, CreatedUtc, LastUpdatedUtc
+                , WonUtc, WonByUserId, LostUtc, LostByUserId, ExpiredUtc, ExpiredByUserId
             FROM Quotes
             WHERE Id = $id";
         command.Parameters.AddWithValue("$id", quoteId);
@@ -271,8 +325,19 @@ public class QuoteRepository
             CustomerName = reader.GetString(1),
             Status = (QuoteStatus)reader.GetInt32(2),
             CreatedUtc = DateTime.Parse(reader.GetString(3)),
-            LastUpdatedUtc = DateTime.Parse(reader.GetString(4))
+            LastUpdatedUtc = DateTime.Parse(reader.GetString(4)),
+            WonUtc = reader.IsDBNull(5) ? null : DateTime.Parse(reader.GetString(5)),
+            WonByUserId = reader.IsDBNull(6) ? null : reader.GetString(6),
+            LostUtc = reader.IsDBNull(7) ? null : DateTime.Parse(reader.GetString(7)),
+            LostByUserId = reader.IsDBNull(8) ? null : reader.GetString(8),
+            ExpiredUtc = reader.IsDBNull(9) ? null : DateTime.Parse(reader.GetString(9)),
+            ExpiredByUserId = reader.IsDBNull(10) ? null : reader.GetString(10)
         };
+    }
+
+    private static void AddNullableString(SqliteCommand command, string parameterName, string? value)
+    {
+        command.Parameters.AddWithValue(parameterName, value ?? (object)DBNull.Value);
     }
 
     private static async Task<List<QuoteLineItem>> ReadLineItemsAsync(SqliteConnection connection, int quoteId)
