@@ -76,7 +76,7 @@ public class QuotingBoardForm : Form
         };
 
         var addRow = new Button { Text = "Add Line Item", AutoSize = true };
-        addRow.Click += (_, _) => _lineItemsGrid.Rows.Add(string.Empty, 1m, string.Empty);
+        addRow.Click += (_, _) => _lineItemsGrid.Rows.Add(string.Empty, 1m, 0m, 0, false, false, false, string.Empty);
 
         var saveQuote = new Button { Text = "Save Quote", AutoSize = true };
         saveQuote.Click += async (_, _) => await SaveQuoteAsync();
@@ -90,11 +90,15 @@ public class QuotingBoardForm : Form
         var markLost = new Button { Text = "Mark Lost", AutoSize = true };
         markLost.Click += async (_, _) => await UpdateStatusAsync(QuoteStatus.Lost);
 
+        var markExpired = new Button { Text = "Mark Expired", AutoSize = true };
+        markExpired.Click += async (_, _) => await UpdateStatusAsync(QuoteStatus.Expired);
+
         panel.Controls.Add(addRow);
         panel.Controls.Add(saveQuote);
         panel.Controls.Add(loadQuote);
         panel.Controls.Add(markWon);
         panel.Controls.Add(markLost);
+        panel.Controls.Add(markExpired);
 
         return panel;
     }
@@ -117,6 +121,36 @@ public class QuotingBoardForm : Form
             Name = "Quantity",
             HeaderText = "Quantity",
             Width = 120
+        });
+        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "UnitPrice",
+            HeaderText = "Unit Price",
+            Width = 120
+        });
+        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "LeadTimeDays",
+            HeaderText = "Lead Time (days)",
+            Width = 120
+        });
+        _lineItemsGrid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "RequiresGForce",
+            HeaderText = "G-Force",
+            Width = 80
+        });
+        _lineItemsGrid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "RequiresSecondary",
+            HeaderText = "Secondary",
+            Width = 90
+        });
+        _lineItemsGrid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "RequiresPlating",
+            HeaderText = "Plating",
+            Width = 80
         });
         _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
@@ -211,13 +245,25 @@ public class QuotingBoardForm : Form
             }
 
             var quantityText = row.Cells[1].Value?.ToString();
-            var quantity = decimal.TryParse(quantityText, out var parsed) ? parsed : 1m;
-            var filesText = row.Cells[2].Value?.ToString() ?? string.Empty;
+            var quantity = decimal.TryParse(quantityText, out var parsedQty) ? parsedQty : 1m;
+            var unitPriceText = row.Cells[2].Value?.ToString();
+            var unitPrice = decimal.TryParse(unitPriceText, out var parsedPrice) ? parsedPrice : 0m;
+            var leadTimeText = row.Cells[3].Value?.ToString();
+            var leadTimeDays = int.TryParse(leadTimeText, out var parsedLeadTime) ? parsedLeadTime : 0;
+            var requiresGForce = ParseCheckCell(row.Cells[4].Value);
+            var requiresSecondary = ParseCheckCell(row.Cells[5].Value);
+            var requiresPlating = ParseCheckCell(row.Cells[6].Value);
+            var filesText = row.Cells[7].Value?.ToString() ?? string.Empty;
 
             quote.LineItems.Add(new QuoteLineItem
             {
                 Description = description,
                 Quantity = quantity,
+                UnitPrice = unitPrice,
+                LeadTimeDays = leadTimeDays,
+                RequiresGForce = requiresGForce,
+                RequiresSecondaryProcessing = requiresSecondary,
+                RequiresPlating = requiresPlating,
                 AssociatedFiles = filesText
                     .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                     .ToList()
@@ -239,8 +285,24 @@ public class QuotingBoardForm : Form
             _lineItemsGrid.Rows.Add(
                 lineItem.Description,
                 lineItem.Quantity,
+                lineItem.UnitPrice,
+                lineItem.LeadTimeDays,
+                lineItem.RequiresGForce,
+                lineItem.RequiresSecondaryProcessing,
+                lineItem.RequiresPlating,
                 string.Join(";", lineItem.AssociatedFiles));
         }
+    }
+
+
+    private static bool ParseCheckCell(object? value)
+    {
+        if (value is bool b)
+        {
+            return b;
+        }
+
+        return bool.TryParse(value?.ToString(), out var parsed) && parsed;
     }
 
     private void ShowFeedback(string message)
@@ -248,3 +310,4 @@ public class QuotingBoardForm : Form
         _feedback.Text = message;
     }
 }
+

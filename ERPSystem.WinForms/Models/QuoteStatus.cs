@@ -4,5 +4,6 @@ public enum QuoteStatus
 {
     InProgress = 0,
     Won = 1,
-    Lost = 2
+    Lost = 2,
+    Expired = 3
 }
