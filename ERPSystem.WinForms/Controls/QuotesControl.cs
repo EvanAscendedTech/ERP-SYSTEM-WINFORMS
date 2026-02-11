@@ -63,7 +63,7 @@ public class QuotesControl : UserControl
         panel.Controls.Add(new Label { Text = "Quote ID", Margin = new Padding(0, 8, 6, 0), AutoSize = true }, 0, 0);
         panel.Controls.Add(_quoteIdInput, 1, 0);
         panel.Controls.Add(new Label { Text = "Customer", Margin = new Padding(16, 8, 6, 0), AutoSize = true }, 2, 0);
-        panel.Controls.Add(_customerNameInput, 3, 0);
+        panel.Controls.Add(_customerInput, 3, 0);
         panel.Controls.Add(new Label { Text = "Status", Margin = new Padding(0, 8, 6, 0), AutoSize = true }, 0, 1);
         panel.Controls.Add(_statusInput, 1, 1);
 
@@ -114,6 +114,26 @@ public class QuotesControl : UserControl
     private void ConfigureStatusInput()
     {
         _statusInput.DataSource = Enum.GetValues(typeof(QuoteStatus));
+    }
+
+    private async Task LoadCustomersAsync()
+    {
+        try
+        {
+            var customers = await _quoteRepository.GetCustomersAsync();
+            _customerInput.DataSource = customers.ToList();
+            _customerInput.DisplayMember = nameof(Customer.DisplayLabel);
+            _customerInput.ValueMember = nameof(Customer.Id);
+
+            if (customers.Count == 0)
+            {
+                ShowFeedback("No customers found. Existing quotes will still load using legacy names.");
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"Unable to load customers: {ex.Message}");
+        }
     }
 
     private void ConfigureLineItemGrid()
@@ -240,12 +260,19 @@ public class QuotesControl : UserControl
         await LoadQuoteAsync();
     }
 
-    private Quote BuildQuoteFromInputs()
+    private Quote? BuildQuoteFromInputs()
     {
+        if (_customerInput.SelectedItem is not Customer customer)
+        {
+            ShowFeedback("Select a customer before saving the quote.");
+            return null;
+        }
+
         var quote = new Quote
         {
             Id = (int)_quoteIdInput.Value,
-            CustomerName = _customerNameInput.Text.Trim(),
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
             Status = (QuoteStatus)(_statusInput.SelectedItem ?? QuoteStatus.InProgress)
         };
 
@@ -293,6 +320,15 @@ public class QuotesControl : UserControl
         _customerNameInput.Text = quote.CustomerName;
         _statusInput.SelectedItem = quote.Status;
 
+        if (TrySelectCustomer(quote.CustomerId) || TrySelectCustomerByName(quote.CustomerName))
+        {
+            // customer selected
+        }
+        else
+        {
+            ShowFeedback($"Quote references legacy customer '{quote.CustomerName}'. Review and resave to link it.");
+        }
+
         _lineItemsGrid.Rows.Clear();
         foreach (var item in quote.LineItems)
         {
@@ -307,6 +343,41 @@ public class QuotesControl : UserControl
                 string.Join(';', item.AssociatedFiles));
         }
     }
+
+    private bool TrySelectCustomer(int customerId)
+    {
+        if (customerId <= 0 || _customerInput.DataSource is not IEnumerable<Customer> customers)
+        {
+            return false;
+        }
+
+        var customer = customers.FirstOrDefault(c => c.Id == customerId);
+        if (customer is null)
+        {
+            return false;
+        }
+
+        _customerInput.SelectedItem = customer;
+        return true;
+    }
+
+    private bool TrySelectCustomerByName(string customerName)
+    {
+        if (string.IsNullOrWhiteSpace(customerName) || _customerInput.DataSource is not IEnumerable<Customer> customers)
+        {
+            return false;
+        }
+
+        var customer = customers.FirstOrDefault(c => string.Equals(c.Name, customerName, StringComparison.OrdinalIgnoreCase));
+        if (customer is null)
+        {
+            return false;
+        }
+
+        _customerInput.SelectedItem = customer;
+        return true;
+    }
+
 
     private void ResetForNewQuote()
     {
