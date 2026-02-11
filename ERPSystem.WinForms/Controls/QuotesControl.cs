@@ -1,9 +1,9 @@
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
 
-namespace ERPSystem.WinForms.Forms;
+namespace ERPSystem.WinForms.Controls;
 
-public class QuotingBoardForm : Form
+public class QuotesControl : UserControl
 {
     private readonly QuoteRepository _quoteRepository;
 
@@ -13,14 +13,10 @@ public class QuotingBoardForm : Form
     private readonly DataGridView _lineItemsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
 
-    public QuotingBoardForm(QuoteRepository quoteRepository)
+    public QuotesControl(QuoteRepository quoteRepository)
     {
         _quoteRepository = quoteRepository;
-
-        Text = "Quoting Board";
-        Width = 1000;
-        Height = 650;
-        StartPosition = FormStartPosition.CenterScreen;
+        Dock = DockStyle.Fill;
 
         ConfigureStatusInput();
         ConfigureLineItemGrid();
@@ -49,19 +45,24 @@ public class QuotingBoardForm : Form
 
     private Control BuildHeaderPanel()
     {
-        var panel = new FlowLayoutPanel
+        var panel = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
-            Padding = new Padding(12),
-            AutoSize = true
+            AutoSize = true,
+            ColumnCount = 4,
+            Padding = new Padding(8)
         };
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-        panel.Controls.Add(new Label { Text = "Quote ID", AutoSize = true, Margin = new Padding(6, 8, 6, 0) });
-        panel.Controls.Add(_quoteIdInput);
-        panel.Controls.Add(new Label { Text = "Customer", AutoSize = true, Margin = new Padding(14, 8, 6, 0) });
-        panel.Controls.Add(_customerNameInput);
-        panel.Controls.Add(new Label { Text = "Status", AutoSize = true, Margin = new Padding(14, 8, 6, 0) });
-        panel.Controls.Add(_statusInput);
+        panel.Controls.Add(new Label { Text = "Quote ID", Margin = new Padding(0, 8, 6, 0), AutoSize = true }, 0, 0);
+        panel.Controls.Add(_quoteIdInput, 1, 0);
+        panel.Controls.Add(new Label { Text = "Customer", Margin = new Padding(16, 8, 6, 0), AutoSize = true }, 2, 0);
+        panel.Controls.Add(_customerNameInput, 3, 0);
+        panel.Controls.Add(new Label { Text = "Status", Margin = new Padding(0, 8, 6, 0), AutoSize = true }, 0, 1);
+        panel.Controls.Add(_statusInput, 1, 1);
 
         return panel;
     }
@@ -71,12 +72,12 @@ public class QuotingBoardForm : Form
         var panel = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
-            Padding = new Padding(12, 0, 12, 12),
-            AutoSize = true
+            Height = 44,
+            Padding = new Padding(8)
         };
 
-        var addRow = new Button { Text = "Add Line Item", AutoSize = true };
-        addRow.Click += (_, _) => _lineItemsGrid.Rows.Add(string.Empty, 1m, 0m, 0, false, false, false, string.Empty);
+        var addRow = new Button { Text = "Add Line", AutoSize = true };
+        addRow.Click += (_, _) => _lineItemsGrid.Rows.Add();
 
         var saveQuote = new Button { Text = "Save Quote", AutoSize = true };
         saveQuote.Click += async (_, _) => await SaveQuoteAsync();
@@ -110,54 +111,14 @@ public class QuotingBoardForm : Form
 
     private void ConfigureLineItemGrid()
     {
-        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn
-        {
-            Name = "Description",
-            HeaderText = "Description",
-            Width = 500
-        });
-        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn
-        {
-            Name = "Quantity",
-            HeaderText = "Quantity",
-            Width = 120
-        });
-        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn
-        {
-            Name = "UnitPrice",
-            HeaderText = "Unit Price",
-            Width = 120
-        });
-        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn
-        {
-            Name = "LeadTimeDays",
-            HeaderText = "Lead Time (days)",
-            Width = 120
-        });
-        _lineItemsGrid.Columns.Add(new DataGridViewCheckBoxColumn
-        {
-            Name = "RequiresGForce",
-            HeaderText = "G-Force",
-            Width = 80
-        });
-        _lineItemsGrid.Columns.Add(new DataGridViewCheckBoxColumn
-        {
-            Name = "RequiresSecondary",
-            HeaderText = "Secondary",
-            Width = 90
-        });
-        _lineItemsGrid.Columns.Add(new DataGridViewCheckBoxColumn
-        {
-            Name = "RequiresPlating",
-            HeaderText = "Plating",
-            Width = 80
-        });
-        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn
-        {
-            Name = "Files",
-            HeaderText = "Associated Files (semicolon separated)",
-            Width = 320
-        });
+        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Description", HeaderText = "Description", Width = 500 });
+        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Quantity", HeaderText = "Quantity", Width = 120 });
+        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "UnitPrice", HeaderText = "Unit Price", Width = 120 });
+        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "LeadTimeDays", HeaderText = "Lead Time (days)", Width = 120 });
+        _lineItemsGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "RequiresGForce", HeaderText = "G-Force", Width = 80 });
+        _lineItemsGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "RequiresSecondary", HeaderText = "Secondary", Width = 90 });
+        _lineItemsGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "RequiresPlating", HeaderText = "Plating", Width = 80 });
+        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Files", HeaderText = "Associated Files (semicolon separated)", Width = 320 });
         _lineItemsGrid.AllowUserToAddRows = false;
     }
 
@@ -244,12 +205,9 @@ public class QuotingBoardForm : Form
                 continue;
             }
 
-            var quantityText = row.Cells[1].Value?.ToString();
-            var quantity = decimal.TryParse(quantityText, out var parsedQty) ? parsedQty : 1m;
-            var unitPriceText = row.Cells[2].Value?.ToString();
-            var unitPrice = decimal.TryParse(unitPriceText, out var parsedPrice) ? parsedPrice : 0m;
-            var leadTimeText = row.Cells[3].Value?.ToString();
-            var leadTimeDays = int.TryParse(leadTimeText, out var parsedLeadTime) ? parsedLeadTime : 0;
+            var quantity = decimal.TryParse(row.Cells[1].Value?.ToString(), out var parsedQty) ? parsedQty : 1m;
+            var unitPrice = decimal.TryParse(row.Cells[2].Value?.ToString(), out var parsedPrice) ? parsedPrice : 0m;
+            var leadTimeDays = int.TryParse(row.Cells[3].Value?.ToString(), out var parsedLeadTime) ? parsedLeadTime : 0;
             var requiresGForce = ParseCheckCell(row.Cells[4].Value);
             var requiresSecondary = ParseCheckCell(row.Cells[5].Value);
             var requiresPlating = ParseCheckCell(row.Cells[6].Value);
@@ -264,9 +222,7 @@ public class QuotingBoardForm : Form
                 RequiresGForce = requiresGForce,
                 RequiresSecondaryProcessing = requiresSecondary,
                 RequiresPlating = requiresPlating,
-                AssociatedFiles = filesText
-                    .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .ToList()
+                AssociatedFiles = filesText.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList()
             });
         }
 
@@ -280,29 +236,28 @@ public class QuotingBoardForm : Form
         _statusInput.SelectedItem = quote.Status;
 
         _lineItemsGrid.Rows.Clear();
-        foreach (var lineItem in quote.LineItems)
+        foreach (var item in quote.LineItems)
         {
             _lineItemsGrid.Rows.Add(
-                lineItem.Description,
-                lineItem.Quantity,
-                lineItem.UnitPrice,
-                lineItem.LeadTimeDays,
-                lineItem.RequiresGForce,
-                lineItem.RequiresSecondaryProcessing,
-                lineItem.RequiresPlating,
-                string.Join(";", lineItem.AssociatedFiles));
+                item.Description,
+                item.Quantity,
+                item.UnitPrice,
+                item.LeadTimeDays,
+                item.RequiresGForce,
+                item.RequiresSecondaryProcessing,
+                item.RequiresPlating,
+                string.Join(';', item.AssociatedFiles));
         }
     }
 
-
     private static bool ParseCheckCell(object? value)
     {
-        if (value is bool b)
+        return value switch
         {
-            return b;
-        }
-
-        return bool.TryParse(value?.ToString(), out var parsed) && parsed;
+            bool boolean => boolean,
+            string text when bool.TryParse(text, out var parsed) => parsed,
+            _ => false
+        };
     }
 
     private void ShowFeedback(string message)
@@ -310,4 +265,3 @@ public class QuotingBoardForm : Form
         _feedback.Text = message;
     }
 }
-
