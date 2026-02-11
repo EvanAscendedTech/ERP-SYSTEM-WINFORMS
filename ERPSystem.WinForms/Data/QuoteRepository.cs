@@ -56,7 +56,7 @@ public class QuoteRepository
 
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
-        await using var transaction = await connection.BeginTransactionAsync();
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
 
         if (quote.Id == 0)
         {
