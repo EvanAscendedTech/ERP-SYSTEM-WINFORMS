@@ -75,4 +75,25 @@ public class QuoteRepositoryTests
 
         File.Delete(dbPath);
     }
+
+    [Fact]
+    public async Task SaveQuoteAsync_WithNonExistentNonZeroId_ThrowsClearValidationError()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-missing-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var quote = new Quote
+        {
+            Id = 999999,
+            CustomerName = "Unknown Customer",
+            Status = QuoteStatus.InProgress,
+            LineItems = [new QuoteLineItem { Description = "Bracket", Quantity = 1 }]
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.SaveQuoteAsync(quote));
+        Assert.Equal("Quote 999999 not found. Load an existing quote or create a new one.", exception.Message);
+
+        File.Delete(dbPath);
+    }
 }
