@@ -35,6 +35,11 @@ public class QuoteRepository
                 QuoteId INTEGER NOT NULL,
                 Description TEXT NOT NULL,
                 Quantity REAL NOT NULL,
+                UnitPrice REAL NOT NULL DEFAULT 0,
+                LeadTimeDays INTEGER NOT NULL DEFAULT 0,
+                RequiresGForce INTEGER NOT NULL DEFAULT 0,
+                RequiresSecondaryProcessing INTEGER NOT NULL DEFAULT 0,
+                RequiresPlating INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY(QuoteId) REFERENCES Quotes(Id) ON DELETE CASCADE
             );
 
@@ -48,6 +53,12 @@ public class QuoteRepository
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync();
+
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "UnitPrice", "REAL NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "LeadTimeDays", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresGForce", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresSecondaryProcessing", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresPlating", "INTEGER NOT NULL DEFAULT 0");
     }
 
     public async Task<int> SaveQuoteAsync(Quote quote)
@@ -98,12 +109,25 @@ public class QuoteRepository
             await using var insertLineItem = connection.CreateCommand();
             insertLineItem.Transaction = transaction;
             insertLineItem.CommandText = @"
-                INSERT INTO QuoteLineItems (QuoteId, Description, Quantity)
-                VALUES ($quoteId, $description, $qty);
+                INSERT INTO QuoteLineItems (
+                    QuoteId,
+                    Description,
+                    Quantity,
+                    UnitPrice,
+                    LeadTimeDays,
+                    RequiresGForce,
+                    RequiresSecondaryProcessing,
+                    RequiresPlating)
+                VALUES ($quoteId, $description, $qty, $unitPrice, $leadTimeDays, $requiresGForce, $requiresSecondary, $requiresPlating);
                 SELECT last_insert_rowid();";
             insertLineItem.Parameters.AddWithValue("$quoteId", quote.Id);
             insertLineItem.Parameters.AddWithValue("$description", lineItem.Description);
             insertLineItem.Parameters.AddWithValue("$qty", lineItem.Quantity);
+            insertLineItem.Parameters.AddWithValue("$unitPrice", lineItem.UnitPrice);
+            insertLineItem.Parameters.AddWithValue("$leadTimeDays", lineItem.LeadTimeDays);
+            insertLineItem.Parameters.AddWithValue("$requiresGForce", lineItem.RequiresGForce ? 1 : 0);
+            insertLineItem.Parameters.AddWithValue("$requiresSecondary", lineItem.RequiresSecondaryProcessing ? 1 : 0);
+            insertLineItem.Parameters.AddWithValue("$requiresPlating", lineItem.RequiresPlating ? 1 : 0);
             lineItem.Id = Convert.ToInt32(await insertLineItem.ExecuteScalarAsync());
 
             foreach (var filePath in lineItem.AssociatedFiles.Where(file => !string.IsNullOrWhiteSpace(file)))
@@ -165,6 +189,28 @@ public class QuoteRepository
         }
 
         return results;
+    }
+
+    public async Task<IReadOnlyList<Quote>> GetQuotesByStatusAsync(QuoteStatus status)
+    {
+        var all = await GetQuotesAsync();
+        return all.Where(q => q.Status == status).ToList();
+    }
+
+    public async Task<int> ExpireStaleQuotesAsync(TimeSpan maxAge)
+    {
+        var candidates = await GetQuotesByStatusAsync(QuoteStatus.InProgress);
+        var cutoffUtc = DateTime.UtcNow.Subtract(maxAge);
+        var expired = 0;
+
+        foreach (var quote in candidates.Where(q => q.LastUpdatedUtc <= cutoffUtc))
+        {
+            quote.Status = QuoteStatus.Expired;
+            await SaveQuoteAsync(quote);
+            expired++;
+        }
+
+        return expired;
     }
 
     public async Task<bool> UpdateStatusAsync(int quoteId, QuoteStatus nextStatus)
@@ -235,7 +281,16 @@ public class QuoteRepository
 
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            SELECT li.Id, li.Description, li.Quantity, f.FilePath
+            SELECT
+                li.Id,
+                li.Description,
+                li.Quantity,
+                li.UnitPrice,
+                li.LeadTimeDays,
+                li.RequiresGForce,
+                li.RequiresSecondaryProcessing,
+                li.RequiresPlating,
+                f.FilePath
             FROM QuoteLineItems li
             LEFT JOIN LineItemFiles f ON f.LineItemId = li.Id
             WHERE li.QuoteId = $quoteId
@@ -254,18 +309,42 @@ public class QuoteRepository
                     Id = lineItemId,
                     QuoteId = quoteId,
                     Description = reader.GetString(1),
-                    Quantity = Convert.ToDecimal(reader.GetDouble(2))
+                    Quantity = Convert.ToDecimal(reader.GetDouble(2)),
+                    UnitPrice = Convert.ToDecimal(reader.GetDouble(3)),
+                    LeadTimeDays = reader.GetInt32(4),
+                    RequiresGForce = reader.GetInt32(5) == 1,
+                    RequiresSecondaryProcessing = reader.GetInt32(6) == 1,
+                    RequiresPlating = reader.GetInt32(7) == 1
                 };
                 cache[lineItemId] = lineItem;
                 lineItems.Add(lineItem);
             }
 
-            if (!reader.IsDBNull(3))
+            if (!reader.IsDBNull(8))
             {
-                lineItem.AssociatedFiles.Add(reader.GetString(3));
+                lineItem.AssociatedFiles.Add(reader.GetString(8));
             }
         }
 
         return lineItems;
+    }
+
+    private static async Task EnsureColumnExistsAsync(SqliteConnection connection, string tableName, string columnName, string definition)
+    {
+        await using var pragma = connection.CreateCommand();
+        pragma.CommandText = $"PRAGMA table_info({tableName});";
+
+        await using var reader = await pragma.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        await using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition};";
+        await alter.ExecuteNonQueryAsync();
     }
 }

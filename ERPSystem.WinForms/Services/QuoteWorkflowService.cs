@@ -13,7 +13,8 @@ public static class QuoteWorkflowService
 
         return currentStatus switch
         {
-            QuoteStatus.InProgress when nextStatus is QuoteStatus.Won or QuoteStatus.Lost => true,
+            QuoteStatus.InProgress when nextStatus is QuoteStatus.Won or QuoteStatus.Lost or QuoteStatus.Expired => true,
+            QuoteStatus.Expired when nextStatus is QuoteStatus.Lost or QuoteStatus.InProgress => true,
             _ => false
         };
     }
