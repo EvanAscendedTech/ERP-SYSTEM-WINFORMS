@@ -10,6 +10,7 @@ public class QuotesControl : UserControl
     private bool _isCreateMode = true;
 
     private readonly NumericUpDown _quoteIdInput = new() { Minimum = 0, Maximum = int.MaxValue, Width = 120, Enabled = false };
+    private readonly ComboBox _customerInput = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
     private readonly TextBox _customerNameInput = new() { Width = 220 };
     private readonly ComboBox _statusInput = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180 };
     private readonly DataGridView _lineItemsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false };
@@ -23,6 +24,7 @@ public class QuotesControl : UserControl
         ConfigureStatusInput();
         ConfigureLineItemGrid();
         ResetForNewQuote();
+        _ = LoadCustomersAsync();
 
         var topPanel = BuildHeaderPanel();
         var actionsPanel = BuildActionsPanel();
