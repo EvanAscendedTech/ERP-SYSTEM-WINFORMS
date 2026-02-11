@@ -87,6 +87,12 @@ public class QuoteRepository
         }
         else
         {
+            var quoteExists = await QuoteExistsAsync(connection, transaction, quote.Id);
+            if (!quoteExists)
+            {
+                throw new InvalidOperationException($"Quote {quote.Id} not found. Load an existing quote or create a new one.");
+            }
+
             await using var updateQuote = connection.CreateCommand();
             updateQuote.Transaction = transaction;
             updateQuote.CommandText = @"
@@ -248,6 +254,17 @@ public class QuoteRepository
         deleteLineItems.CommandText = "DELETE FROM QuoteLineItems WHERE QuoteId = $quoteId;";
         deleteLineItems.Parameters.AddWithValue("$quoteId", quoteId);
         await deleteLineItems.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<bool> QuoteExistsAsync(SqliteConnection connection, SqliteTransaction transaction, int quoteId)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT 1 FROM Quotes WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", quoteId);
+
+        var result = await command.ExecuteScalarAsync();
+        return result is not null;
     }
 
     private static async Task<Quote?> ReadQuoteHeaderAsync(SqliteConnection connection, int quoteId)
