@@ -9,6 +9,7 @@ public class ErpMainForm : Form
     private readonly TabControl _sectionsTabs = new() { Dock = DockStyle.Fill };
 
     public ErpMainForm(
+        QuoteRepository quoteRepository,
         ProductionRepository productionRepository,
         UserManagementRepository userRepository,
         AppSettingsService settingsService,
@@ -21,7 +22,7 @@ public class ErpMainForm : Form
         StartPosition = FormStartPosition.CenterScreen;
 
         BuildNavigation();
-        BuildSections(productionRepository, userRepository, settingsService, inspectionService, archiveService);
+        BuildSections(quoteRepository, productionRepository, userRepository, settingsService, inspectionService, archiveService);
 
         Controls.Add(_sectionsTabs);
     }
@@ -31,10 +32,11 @@ public class ErpMainForm : Form
         var menu = new MenuStrip();
         var sections = new ToolStripMenuItem("Sections");
 
-        sections.DropDownItems.Add(CreateSectionMenuItem("Production", 0));
-        sections.DropDownItems.Add(CreateSectionMenuItem("Inspection", 1));
-        sections.DropDownItems.Add(CreateSectionMenuItem("Archive", 2));
-        sections.DropDownItems.Add(CreateSectionMenuItem("Settings", 3));
+        sections.DropDownItems.Add(CreateSectionMenuItem("Quoting", 0));
+        sections.DropDownItems.Add(CreateSectionMenuItem("Production", 1));
+        sections.DropDownItems.Add(CreateSectionMenuItem("Inspection", 2));
+        sections.DropDownItems.Add(CreateSectionMenuItem("Archive", 3));
+        sections.DropDownItems.Add(CreateSectionMenuItem("Settings", 4));
 
         menu.Items.Add(sections);
         MainMenuStrip = menu;
@@ -49,12 +51,24 @@ public class ErpMainForm : Form
     }
 
     private void BuildSections(
+        QuoteRepository quoteRepository,
         ProductionRepository productionRepository,
         UserManagementRepository userRepository,
         AppSettingsService settingsService,
         InspectionService inspectionService,
         ArchiveService archiveService)
     {
+        var quotingHost = new Panel { Dock = DockStyle.Fill };
+        var quoting = new QuotingBoardForm(quoteRepository)
+        {
+            TopLevel = false,
+            FormBorderStyle = FormBorderStyle.None,
+            Dock = DockStyle.Fill
+        };
+        quotingHost.Controls.Add(quoting);
+        quoting.Show();
+
+        _sectionsTabs.TabPages.Add(new TabPage("Quoting") { Controls = { quotingHost } });
         _sectionsTabs.TabPages.Add(new TabPage("Production") { Controls = { new ProductionControl(productionRepository) } });
         _sectionsTabs.TabPages.Add(new TabPage("Inspection") { Controls = { new InspectionControl(inspectionService) } });
         _sectionsTabs.TabPages.Add(new TabPage("Archive") { Controls = { new ArchiveControl(archiveService) } });

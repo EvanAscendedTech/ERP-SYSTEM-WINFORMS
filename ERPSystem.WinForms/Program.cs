@@ -14,6 +14,9 @@ internal static class Program
         var dbPath = Path.Combine(AppContext.BaseDirectory, "erp_system.db");
         var settingsPath = Path.Combine(AppContext.BaseDirectory, "settings", "appsettings.json");
 
+        var quoteRepository = new QuoteRepository(dbPath);
+        await quoteRepository.InitializeDatabaseAsync();
+
         var productionRepository = new ProductionRepository(dbPath);
         await productionRepository.InitializeDatabaseAsync();
 
@@ -24,6 +27,6 @@ internal static class Program
         var inspectionService = new InspectionService();
         var archiveService = new ArchiveService();
 
-        Application.Run(new ErpMainForm(productionRepository, userRepository, settingsService, inspectionService, archiveService));
+        Application.Run(new ErpMainForm(quoteRepository, productionRepository, userRepository, settingsService, inspectionService, archiveService));
     }
 }
