@@ -52,6 +52,112 @@ public class QuoteRepositoryTests
         File.Delete(dbPath);
     }
 
+
+    [Fact]
+    public async Task SaveQuoteAsync_WithUnsetId_CreatesThenUpdatesSameQuote()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-create-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var quote = new Quote
+        {
+            Id = 0,
+            CustomerName = "Create Mode Customer",
+            Status = QuoteStatus.InProgress,
+            LineItems = [new QuoteLineItem { Description = "Panel", Quantity = 2 }]
+        };
+
+        var createdId = await repository.SaveQuoteAsync(quote);
+        Assert.True(createdId > 0);
+
+        quote.Id = createdId;
+        quote.CustomerName = "Updated Customer";
+        quote.Status = QuoteStatus.Won;
+
+        var updatedId = await repository.SaveQuoteAsync(quote);
+        var loaded = await repository.GetQuoteAsync(createdId);
+
+        Assert.Equal(createdId, updatedId);
+        Assert.NotNull(loaded);
+        Assert.Equal("Updated Customer", loaded!.CustomerName);
+        Assert.Equal(QuoteStatus.Won, loaded.Status);
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task SaveQuoteAsync_CreatesAuditEvent()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-audit-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var quote = new Quote
+        {
+            CustomerName = "Audit Customer",
+            Status = QuoteStatus.InProgress,
+            LineItems =
+            [
+                new QuoteLineItem { Description = "Part A", Quantity = 2 },
+                new QuoteLineItem { Description = "Part B", Quantity = 1 }
+            ]
+        };
+
+        var id = await repository.SaveQuoteAsync(quote);
+
+        await using var connection = new SqliteConnection($"Data Source={dbPath}");
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT EventType, OperationMode, LineItemCount
+            FROM QuoteAuditEvents
+            WHERE QuoteId = $id
+            ORDER BY Id DESC
+            LIMIT 1;";
+        command.Parameters.AddWithValue("$id", id);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("save", reader.GetString(0));
+        Assert.Equal("create", reader.GetString(1));
+        Assert.Equal(2, reader.GetInt32(2));
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task UpdateStatusAsync_CreatesStatusTransitionAndArchiveEvents()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-status-audit-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var quote = new Quote
+        {
+            CustomerName = "Transition Customer",
+            Status = QuoteStatus.InProgress,
+            LineItems = [new QuoteLineItem { Description = "Bracket", Quantity = 1 }]
+        };
+
+        var id = await repository.SaveQuoteAsync(quote);
+        var updated = await repository.UpdateStatusAsync(id, QuoteStatus.Won);
+
+        Assert.True(updated);
+
+        await using var connection = new SqliteConnection($"Data Source={dbPath}");
+        await connection.OpenAsync();
+
+        var transitionCount = await CountEventsAsync(connection, id, "status_transition");
+        var archiveCount = await CountEventsAsync(connection, id, "archive");
+
+        Assert.Equal(1, transitionCount);
+        Assert.Equal(1, archiveCount);
+
+        File.Delete(dbPath);
+    }
+
     [Fact]
     public async Task InitializeDatabaseAsync_BackfillsLegacyCustomerNameIntoCustomers()
     {
@@ -120,6 +226,27 @@ public class QuoteRepositoryTests
 
         Assert.Equal(1, affected);
         Assert.Equal(QuoteStatus.Expired, expired!.Status);
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task SaveQuoteAsync_WithNonExistentNonZeroId_ThrowsClearValidationError()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-missing-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var quote = new Quote
+        {
+            Id = 999999,
+            CustomerName = "Unknown Customer",
+            Status = QuoteStatus.InProgress,
+            LineItems = [new QuoteLineItem { Description = "Bracket", Quantity = 1 }]
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.SaveQuoteAsync(quote));
+        Assert.Equal("Quote 999999 not found. Load an existing quote or create a new one.", exception.Message);
 
         File.Delete(dbPath);
     }
