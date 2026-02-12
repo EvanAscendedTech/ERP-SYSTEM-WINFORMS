@@ -1,118 +1,88 @@
-using System.Drawing;
-using System.Windows.Forms;
-
 namespace ERPSystem.WinForms;
 
 public sealed class DashboardControl : UserControl
 {
-    private readonly Label titleLabel;
-    private readonly Label subTitleLabel;
-    private readonly TableLayoutPanel cardsLayout;
-
     public DashboardControl()
     {
         DoubleBuffered = true;
         Dock = DockStyle.Fill;
-        Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
 
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(20),
             ColumnCount = 1,
-            RowCount = 3
+            RowCount = 3,
+            Padding = new Padding(20)
         };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-        titleLabel = new Label
+        var title = new Label
         {
-            AutoSize = true,
             Text = "Dashboard",
-            Font = new Font("Segoe UI", 18F, FontStyle.Bold, GraphicsUnit.Point),
-            Margin = new Padding(0, 0, 0, 4)
+            Font = new Font("Segoe UI", 19F, FontStyle.Bold),
+            AutoSize = true
         };
 
-        subTitleLabel = new Label
+        var subtitle = new Label
         {
+            Text = "Operational summary across quotes, production and users.",
+            Font = new Font("Segoe UI", 10F),
             AutoSize = true,
-            Text = "Real-time snapshot of quote, production and workflow KPIs.",
-            Font = new Font("Segoe UI", 10F, FontStyle.Regular, GraphicsUnit.Point),
-            Margin = new Padding(0, 0, 0, 12)
+            Margin = new Padding(0, 4, 0, 16),
+            Tag = "secondary"
         };
 
-        cardsLayout = new TableLayoutPanel
+        var cards = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 3,
-            RowCount = 2,
-            AutoSize = false
+            RowCount = 2
         };
-        cardsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33F));
-        cardsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33F));
-        cardsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34F));
-        cardsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-        cardsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
 
-        cardsLayout.Controls.Add(CreateMetricCard("Open Quotes", "26"), 0, 0);
-        cardsLayout.Controls.Add(CreateMetricCard("Pending Approvals", "7"), 1, 0);
-        cardsLayout.Controls.Add(CreateMetricCard("Production Jobs", "15"), 2, 0);
-        cardsLayout.Controls.Add(CreateMetricCard("On-time Delivery", "96%"), 0, 1);
-        cardsLayout.Controls.Add(CreateMetricCard("Machine Utilization", "82%"), 1, 1);
-        cardsLayout.Controls.Add(CreateMetricCard("Scrap Rate", "1.7%"), 2, 1);
+        cards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33F));
+        cards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33F));
+        cards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34F));
+        cards.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+        cards.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
 
-        root.Controls.Add(titleLabel, 0, 0);
-        root.Controls.Add(subTitleLabel, 0, 1);
-        root.Controls.Add(cardsLayout, 0, 2);
+        cards.Controls.Add(CreateCard("Open Quotes", "42"), 0, 0);
+        cards.Controls.Add(CreateCard("In Production", "18"), 1, 0);
+        cards.Controls.Add(CreateCard("Active Users", "9"), 2, 0);
+        cards.Controls.Add(CreateCard("On-time Delivery", "95%"), 0, 1);
+        cards.Controls.Add(CreateCard("Inspection Queue", "6"), 1, 1);
+        cards.Controls.Add(CreateCard("Archive This Month", "114"), 2, 1);
 
+        root.Controls.Add(title, 0, 0);
+        root.Controls.Add(subtitle, 0, 1);
+        root.Controls.Add(cards, 0, 2);
         Controls.Add(root);
     }
 
-    public void ApplyTheme(ThemePalette palette)
-    {
-        BackColor = palette.Background;
-        ForeColor = palette.TextPrimary;
-        titleLabel.ForeColor = palette.TextPrimary;
-        subTitleLabel.ForeColor = palette.TextSecondary;
-
-        foreach (Control card in cardsLayout.Controls)
-        {
-            card.BackColor = palette.Panel;
-            card.ForeColor = palette.TextPrimary;
-
-            foreach (Control child in card.Controls)
-            {
-                child.ForeColor = child.Tag?.ToString() == "secondary"
-                    ? palette.TextSecondary
-                    : palette.TextPrimary;
-            }
-        }
-    }
-
-    private static Panel CreateMetricCard(string metric, string value)
+    private static Panel CreateCard(string metric, string value)
     {
         var panel = new Panel
         {
+            Dock = DockStyle.Fill,
             Margin = new Padding(8),
-            Padding = new Padding(14),
-            Dock = DockStyle.Fill
+            Padding = new Padding(14)
         };
 
         var valueLabel = new Label
         {
             Text = value,
-            Font = new Font("Segoe UI", 20F, FontStyle.Bold, GraphicsUnit.Point),
+            Font = new Font("Segoe UI", 22F, FontStyle.Bold),
             Dock = DockStyle.Top,
-            Height = 44
+            Height = 46
         };
 
         var metricLabel = new Label
         {
             Text = metric,
+            Font = new Font("Segoe UI", 10F),
             Dock = DockStyle.Top,
-            Tag = "secondary",
-            Font = new Font("Segoe UI", 9.5F, FontStyle.Regular, GraphicsUnit.Point)
+            Tag = "secondary"
         };
 
         panel.Controls.Add(metricLabel);

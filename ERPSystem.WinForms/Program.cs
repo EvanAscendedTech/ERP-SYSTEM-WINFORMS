@@ -31,7 +31,7 @@ internal static class Program
         await EnsureDefaultAdminAsync(userRepository);
 
         var appSettingsService = new AppSettingsService(settingsPath);
-        var appSettings = await appSettingsService.LoadAsync();
+        _ = await appSettingsService.LoadAsync();
 
         using var loginForm = new LoginForm(userRepository);
         if (loginForm.ShowDialog() != DialogResult.OK || loginForm.AuthenticatedUser is null)
@@ -39,13 +39,16 @@ internal static class Program
             return;
         }
 
+        var inspectionService = new InspectionService();
+        var archiveService = new ArchiveService();
+
         Application.Run(new ERPMainForm(
             quoteRepository,
             productionRepository,
             userRepository,
             appSettingsService,
-            loginForm.AuthenticatedUser,
-            appSettings.CompanyName));
+            inspectionService,
+            archiveService));
     }
 
     private static async Task EnsureDefaultAdminAsync(UserManagementRepository userRepository)
