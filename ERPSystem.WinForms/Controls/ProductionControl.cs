@@ -1,112 +1,119 @@
+using ERPSystem.WinForms.Data;
+using ERPSystem.WinForms.Models;
+using ERPSystem.WinForms.Services;
+
 namespace ERPSystem.WinForms.Controls;
 
 public class ProductionControl : UserControl
 {
-    public ProductionControl()
+    private readonly ProductionRepository _productionRepository;
+    private readonly JobFlowService _flowService;
+    private readonly Action<string> _openSection;
+    private readonly DataGridView _jobsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
+    private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
+
+    public ProductionControl(ProductionRepository productionRepository, JobFlowService flowService, Action<string> openSection)
     {
+        _productionRepository = productionRepository;
+        _flowService = flowService;
+        _openSection = openSection;
         Dock = DockStyle.Fill;
 
-        var root = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 3,
-            Padding = new Padding(8)
-        };
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
+        ConfigureGrid();
 
-        var heading = new Label
-        {
-            Text = "Production Planning - machine utilization and in-process job progress",
-            AutoSize = true,
-            Font = new Font(Font, FontStyle.Bold)
-        };
+        var actionsPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
+        var refreshButton = new Button { Text = "Refresh Jobs", AutoSize = true };
+        var startButton = new Button { Text = "Start Production", AutoSize = true };
+        var completeButton = new Button { Text = "Complete Production", AutoSize = true };
+        var qualityButton = new Button { Text = "Move to Quality", AutoSize = true };
 
-        var machineGroup = new GroupBox { Text = "Machine utilization calendar (daily blocks)", Dock = DockStyle.Fill };
-        var scheduleGrid = new DataGridView
-        {
-            Dock = DockStyle.Fill,
-            ReadOnly = true,
-            AllowUserToAddRows = false,
-            AllowUserToDeleteRows = false,
-            RowHeadersVisible = false,
-            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
-        };
-        scheduleGrid.Columns.Add("machine", "Machine");
-        scheduleGrid.Columns.Add("utilization", "Utilization %");
-        scheduleGrid.Columns.Add("dayBlock", "Today's Scheduled Blocks");
-        scheduleGrid.Rows.Add("Haas VF-2 - CNC Mill", "75%", "07:00-10:00 JOB-1452 | 13:00-16:00 JOB-1466");
-        scheduleGrid.Rows.Add("Mazak QT-200 - CNC Lathe", "50%", "09:00-13:00 JOB-1454");
-        scheduleGrid.Rows.Add("Wire EDM 01", "87%", "06:30-11:30 JOB-1458 | 12:00-14:00 JOB-1462");
-        scheduleGrid.Rows.Add("CMM Station A", "62%", "08:00-12:00 JOB-1461 | 14:00-15:00 JOB-1466");
-        scheduleGrid.Rows.Add("Deburr / Secondary Cell", "45%", "10:00-12:00 JOB-1452 | 13:00-14:00 JOB-1458");
-        machineGroup.Controls.Add(scheduleGrid);
+        refreshButton.Click += async (_, _) => await LoadJobsAsync();
+        startButton.Click += async (_, _) => await StartSelectedJobAsync();
+        completeButton.Click += async (_, _) => await CompleteSelectedJobAsync();
+        qualityButton.Click += async (_, _) => await MoveSelectedToQualityAsync();
 
-        var productionJobsGroup = new GroupBox { Text = "Jobs currently in production", Dock = DockStyle.Fill };
-        var jobsPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoScroll = true, Padding = new Padding(8) };
-        jobsPanel.RowStyles.Clear();
-        AddProductionProgress(jobsPanel, "JOB-1452", "Valve body", 4, 5, true);
-        AddProductionProgress(jobsPanel, "JOB-1454", "Drive shaft", 2, 4, false);
-        AddProductionProgress(jobsPanel, "JOB-1458", "Heat sink", 3, 5, true);
-        AddProductionProgress(jobsPanel, "JOB-1461", "Housing plate", 1, 4, false);
-        productionJobsGroup.Controls.Add(jobsPanel);
+        actionsPanel.Controls.Add(refreshButton);
+        actionsPanel.Controls.Add(startButton);
+        actionsPanel.Controls.Add(completeButton);
+        actionsPanel.Controls.Add(qualityButton);
 
-        var inspectionGroup = new GroupBox { Text = "Inspection packet handoff", Dock = DockStyle.Fill };
-        inspectionGroup.Controls.Add(new Label
-        {
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft,
-            Text = "Line items can move to Inspection when each selected flow stage is complete. Inspection supports upload/download of forms and line-item packet data."
-        });
+        Controls.Add(_jobsGrid);
+        Controls.Add(actionsPanel);
+        Controls.Add(_feedback);
 
-        root.Controls.Add(heading, 0, 0);
-        root.Controls.Add(machineGroup, 0, 1);
-        root.Controls.Add(productionJobsGroup, 0, 2);
-        root.Controls.Add(inspectionGroup, 0, 2);
-
-        var lowerPanel = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 740 };
-        lowerPanel.Panel1.Controls.Add(productionJobsGroup);
-        lowerPanel.Panel2.Controls.Add(inspectionGroup);
-        root.Controls.Remove(productionJobsGroup);
-        root.Controls.Remove(inspectionGroup);
-        root.Controls.Add(lowerPanel, 0, 2);
-
-        Controls.Add(root);
+        _ = LoadJobsAsync();
     }
 
-    private static void AddProductionProgress(TableLayoutPanel jobsPanel, string jobNumber, string partName, int completedStages, int totalStages, bool includePostProcessing)
+    private void ConfigureGrid()
     {
-        var card = new GroupBox { Dock = DockStyle.Top, Height = 96, Text = $"{jobNumber} - {partName}" };
+        _jobsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "JobNumber", HeaderText = "Job #", DataPropertyName = nameof(ProductionJob.JobNumber), Width = 120 });
+        _jobsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Product", HeaderText = "Product", DataPropertyName = nameof(ProductionJob.ProductName), Width = 220 });
+        _jobsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Production Status", DataPropertyName = nameof(ProductionJob.Status), Width = 140 });
+        _jobsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Planned", HeaderText = "Planned Qty", DataPropertyName = nameof(ProductionJob.PlannedQuantity), Width = 110 });
+        _jobsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Produced", HeaderText = "Produced Qty", DataPropertyName = nameof(ProductionJob.ProducedQuantity), Width = 110 });
+        _jobsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "DueDate", HeaderText = "Due (UTC)", DataPropertyName = nameof(ProductionJob.DueDateUtc), Width = 180 });
+        _jobsGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "QualityApproved", HeaderText = "Quality Approved", Width = 120 });
 
-        var stageLabel = includePostProcessing
-            ? "Ordered Material / Production Started / Production Finished / Post Processing Started / Post Processing Finished"
-            : "Ordered Material / Production Started / Production Finished / Post Processing (N/A) / Post Processing Finished (N/A)";
-
-        var progress = new ProgressBar
+        _jobsGrid.CellFormatting += (_, e) =>
         {
-            Dock = DockStyle.Top,
-            Minimum = 0,
-            Maximum = totalStages,
-            Value = Math.Min(completedStages, totalStages),
-            Height = 24,
-            Style = ProgressBarStyle.Continuous
+            if (_jobsGrid.Columns[e.ColumnIndex].Name == "QualityApproved"
+                && _jobsGrid.Rows[e.RowIndex].DataBoundItem is ProductionJob job)
+            {
+                e.Value = _flowService.IsQualityApproved(job.JobNumber);
+                e.FormattingApplied = true;
+            }
         };
+    }
 
-        var status = new Label
+    private async Task LoadJobsAsync()
+    {
+        var jobs = await _productionRepository.GetJobsAsync();
+        _jobsGrid.DataSource = jobs.OrderBy(x => x.DueDateUtc).ToList();
+        _feedback.Text = $"Loaded {jobs.Count} production jobs.";
+    }
+
+    private async Task StartSelectedJobAsync()
+    {
+        if (_jobsGrid.CurrentRow?.DataBoundItem is not ProductionJob selected)
         {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            Text = $"{completedStages}/{totalStages} stages complete ({(completedStages * 100) / totalStages}%)"
-        };
+            _feedback.Text = "Select a job first.";
+            return;
+        }
 
-        var stages = new Label { Dock = DockStyle.Top, AutoSize = true, Text = stageLabel };
+        var result = await _productionRepository.StartJobAsync(selected.JobNumber, QuoteStatus.Won, selected.SourceQuoteId ?? 0, "system.user");
+        _feedback.Text = result.Message;
+        await LoadJobsAsync();
+    }
 
-        card.Controls.Add(stages);
-        card.Controls.Add(status);
-        card.Controls.Add(progress);
+    private async Task CompleteSelectedJobAsync()
+    {
+        if (_jobsGrid.CurrentRow?.DataBoundItem is not ProductionJob selected)
+        {
+            _feedback.Text = "Select a job first.";
+            return;
+        }
 
-        jobsPanel.Controls.Add(card);
+        var result = await _productionRepository.CompleteJobAsync(selected.JobNumber, "system.user");
+        _feedback.Text = result.Message;
+        await LoadJobsAsync();
+    }
+
+    private async Task MoveSelectedToQualityAsync()
+    {
+        if (_jobsGrid.CurrentRow?.DataBoundItem is not ProductionJob selected)
+        {
+            _feedback.Text = "Select a job first.";
+            return;
+        }
+
+        if (selected.Status != ProductionJobStatus.Completed)
+        {
+            _feedback.Text = $"Job {selected.JobNumber} must be completed before Quality.";
+            return;
+        }
+
+        _feedback.Text = $"Job {selected.JobNumber} is ready for Quality.";
+        await LoadJobsAsync();
+        _openSection("Quality");
     }
 }
