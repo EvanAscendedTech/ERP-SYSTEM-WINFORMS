@@ -86,7 +86,7 @@ public partial class ERPMainForm : Form
         return key switch
         {
             "Dashboard" => new DashboardControl(),
-            "Quotes" => new QuotesControl(_quoteRepo, _prodRepo, LoadSection),
+            "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, LoadSection),
             "Production" => new ProductionControl(_prodRepo, _jobFlow, LoadSection),
             "Quality" => new QualityControl(_prodRepo, _jobFlow, LoadSection),
             "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, LoadSection),
