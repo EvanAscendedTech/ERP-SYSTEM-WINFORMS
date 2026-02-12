@@ -1,5 +1,6 @@
 using ERPSystem.WinForms.Models;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 
 namespace ERPSystem.WinForms.Data;
 
@@ -276,7 +277,7 @@ public class UserManagementRepository
                 RequestedUsername = reader.GetString(1),
                 RequestNote = reader.GetString(2),
                 TermsAccepted = reader.GetInt32(3) == 1,
-                RequestedUtc = DateTime.Parse(reader.GetString(4))
+                RequestedUtc = DateTime.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
             });
         }
 
