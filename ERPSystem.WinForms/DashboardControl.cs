@@ -60,6 +60,13 @@ public sealed class DashboardControl : UserControl
         Controls.Add(root);
     }
 
+
+    public void ApplyTheme(ThemePalette palette)
+    {
+        BackColor = palette.Background;
+        ForeColor = palette.TextPrimary;
+    }
+
     private static Panel CreateCard(string metric, string value)
     {
         var panel = new Panel
