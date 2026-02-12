@@ -1,96 +1,85 @@
-using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Windows.Forms;
 
 namespace ERPSystem.WinForms;
 
 public class ModernButton : Button
 {
-    private readonly System.Windows.Forms.Timer animationTimer;
-    private float hoverProgress;
-    private bool isHovered;
-    private bool isPressed;
+    private bool _isHovered;
+    private bool _isPressed;
 
-    public int CornerRadius { get; set; } = 6;
+    public int CornerRadius { get; set; } = 5;
 
-    public Color AccentColor { get; private set; } = ColorTranslator.FromHtml("#3A96DD");
+    public Color OverrideBaseColor { get; set; } = ColorTranslator.FromHtml("#3A96DD");
 
-    public Color HoverColor { get; private set; } = ColorTranslator.FromHtml("#4CA6EA");
-
-    public Color PressedColor { get; private set; } = ColorTranslator.FromHtml("#2E7DB8");
+    public Color OverrideBorderColor { get; set; } = Color.Transparent;
 
     public ModernButton()
     {
         FlatStyle = FlatStyle.Flat;
         FlatAppearance.BorderSize = 0;
         Cursor = Cursors.Hand;
-        Font = new Font(new FontFamily("Segoe UI"), 9F, FontStyle.Bold, GraphicsUnit.Point);
+        BackColor = Color.Transparent;
         ForeColor = Color.White;
-        BackColor = AccentColor;
+        Font = new Font("Segoe UI", 9F, FontStyle.Bold);
 
-        SetStyle(ControlStyles.AllPaintingInWmPaint |
-                 ControlStyles.OptimizedDoubleBuffer |
-                 ControlStyles.ResizeRedraw |
-                 ControlStyles.UserPaint, true);
-
-        animationTimer = new System.Windows.Forms.Timer { Interval = 15 };
-        animationTimer.Tick += (_, _) =>
-        {
-            const float step = 0.12f;
-            hoverProgress = isHovered
-                ? Math.Min(1f, hoverProgress + step)
-                : Math.Max(0f, hoverProgress - step);
-
-            Invalidate();
-
-            if (hoverProgress is 0f or 1f)
-            {
-                animationTimer.Stop();
-            }
-        };
+        SetStyle(
+            ControlStyles.UserPaint |
+            ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer |
+            ControlStyles.ResizeRedraw,
+            true);
     }
 
     public void ApplyPalette(ThemePalette palette)
     {
-        AccentColor = palette.Accent;
-        HoverColor = palette.AccentHover;
-        PressedColor = palette.AccentPressed;
-        ForeColor = palette.TextPrimary;
+        if (Equals(Tag, "active"))
+        {
+            OverrideBaseColor = palette.Accent;
+            OverrideBorderColor = palette.Accent;
+            ForeColor = Color.White;
+        }
+        else
+        {
+            OverrideBaseColor = palette.Panel;
+            OverrideBorderColor = palette.Border;
+            ForeColor = palette.TextPrimary;
+        }
+
         Invalidate();
     }
 
     protected override void OnMouseEnter(EventArgs e)
     {
+        _isHovered = true;
         base.OnMouseEnter(e);
-        isHovered = true;
-        animationTimer.Start();
+        Invalidate();
     }
 
     protected override void OnMouseLeave(EventArgs e)
     {
+        _isHovered = false;
+        _isPressed = false;
         base.OnMouseLeave(e);
-        isHovered = false;
-        animationTimer.Start();
+        Invalidate();
     }
 
     protected override void OnMouseDown(MouseEventArgs mevent)
     {
+        _isPressed = true;
         base.OnMouseDown(mevent);
-        isPressed = true;
         Invalidate();
     }
 
     protected override void OnMouseUp(MouseEventArgs mevent)
     {
+        _isPressed = false;
         base.OnMouseUp(mevent);
-        isPressed = false;
         Invalidate();
     }
 
     protected override void OnPaint(PaintEventArgs pevent)
     {
         pevent.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        pevent.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
 
         var rect = ClientRectangle;
         if (rect.Width <= 0 || rect.Height <= 0)
@@ -98,22 +87,24 @@ public class ModernButton : Button
             return;
         }
 
-        var baseColor = isPressed
-            ? PressedColor
-            : BlendColors(AccentColor, HoverColor, hoverProgress);
-
-        using var path = CreateRoundedRectanglePath(rect, CornerRadius);
-        using var brush = new SolidBrush(baseColor);
-
-        pevent.Graphics.FillPath(brush, path);
-
-        if (isPressed)
+        var currentColor = OverrideBaseColor;
+        if (_isHovered)
         {
-            var pressRect = new Rectangle(rect.X + 1, rect.Y + 1, rect.Width - 2, rect.Height - 2);
-            using var pressPath = CreateRoundedRectanglePath(pressRect, CornerRadius);
-            using var pressBrush = new SolidBrush(Color.FromArgb(25, Color.Black));
-            pevent.Graphics.FillPath(pressBrush, pressPath);
+            currentColor = ChangeBrightness(currentColor, 0.08f);
         }
+
+        if (_isPressed)
+        {
+            currentColor = ChangeBrightness(currentColor, -0.12f);
+            rect = new Rectangle(rect.X, rect.Y + 1, rect.Width, rect.Height - 1);
+        }
+
+        using var path = CreateRoundedRectangle(rect, CornerRadius);
+        using var background = new SolidBrush(currentColor);
+        using var border = new Pen(OverrideBorderColor, 1F);
+
+        pevent.Graphics.FillPath(background, path);
+        pevent.Graphics.DrawPath(border, path);
 
         TextRenderer.DrawText(
             pevent.Graphics,
@@ -121,33 +112,47 @@ public class ModernButton : Button
             Font,
             rect,
             ForeColor,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
     }
 
-    private static GraphicsPath CreateRoundedRectanglePath(Rectangle rect, int radius)
+    private static GraphicsPath CreateRoundedRectangle(Rectangle bounds, int radius)
     {
         var diameter = Math.Max(1, radius * 2);
-        var arc = new Rectangle(rect.Location, new Size(diameter, diameter));
+        var arc = new Rectangle(bounds.Location, new Size(diameter, diameter));
         var path = new GraphicsPath();
 
         path.AddArc(arc, 180, 90);
-        arc.X = rect.Right - diameter;
+        arc.X = bounds.Right - diameter;
         path.AddArc(arc, 270, 90);
-        arc.Y = rect.Bottom - diameter;
+        arc.Y = bounds.Bottom - diameter;
         path.AddArc(arc, 0, 90);
-        arc.X = rect.Left;
+        arc.X = bounds.Left;
         path.AddArc(arc, 90, 90);
         path.CloseFigure();
 
         return path;
     }
 
-    private static Color BlendColors(Color from, Color to, float amount)
+    private static Color ChangeBrightness(Color color, float correctionFactor)
     {
-        var a = (byte)(from.A + ((to.A - from.A) * amount));
-        var r = (byte)(from.R + ((to.R - from.R) * amount));
-        var g = (byte)(from.G + ((to.G - from.G) * amount));
-        var b = (byte)(from.B + ((to.B - from.B) * amount));
-        return Color.FromArgb(a, r, g, b);
+        float red = color.R;
+        float green = color.G;
+        float blue = color.B;
+
+        if (correctionFactor < 0)
+        {
+            correctionFactor = 1 + correctionFactor;
+            red *= correctionFactor;
+            green *= correctionFactor;
+            blue *= correctionFactor;
+        }
+        else
+        {
+            red = (255 - red) * correctionFactor + red;
+            green = (255 - green) * correctionFactor + green;
+            blue = (255 - blue) * correctionFactor + blue;
+        }
+
+        return Color.FromArgb(color.A, (int)red, (int)green, (int)blue);
     }
 }

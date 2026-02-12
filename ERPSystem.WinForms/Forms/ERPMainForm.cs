@@ -1,101 +1,153 @@
-using ERPSystem.WinForms.Controls;
 using ERPSystem.WinForms.Data;
-using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms.Forms;
 
-public class ERPMainForm : Form
+public partial class ERPMainForm : Form
 {
-    private readonly TabControl _sectionsTabs = new() { Dock = DockStyle.Fill };
-    private readonly FlowLayoutPanel _onlineUsersPanel = new() { Dock = DockStyle.Top, Height = 56, Padding = new Padding(8), AutoScroll = true, WrapContents = false };
-    private readonly UserManagementRepository _userRepository;
-    private readonly UserAccount _currentUser;
-    private readonly HomeControl _homeControl;
+    private readonly QuoteRepository _quoteRepo;
+    private readonly ProductionRepository _prodRepo;
+    private readonly UserManagementRepository _userRepo;
+    private readonly AppSettingsService _settings;
+    private readonly InspectionService _inspection;
+    private readonly ArchiveService _archive;
+    private readonly ThemeManager _themeManager = new();
 
-    public ERPMainForm(
-        QuoteRepository quoteRepository,
-        ProductionRepository productionRepository,
-        UserManagementRepository userRepository,
-        AppSettingsService appSettingsService,
-        UserAccount currentUser,
-        string companyName)
+    private readonly Dictionary<string, ModernButton> _navButtons;
+
+    public ERPMainForm(QuoteRepository quoteRepo, ProductionRepository prodRepo, UserManagementRepository userRepo,
+               AppSettingsService settings, InspectionService inspection, ArchiveService archive)
     {
-        _userRepository = userRepository;
-        _currentUser = currentUser;
+        _quoteRepo = quoteRepo;
+        _prodRepo = prodRepo;
+        _userRepo = userRepo;
+        _settings = settings;
+        _inspection = inspection;
+        _archive = archive;
 
-        Text = "ERP MainShell";
-        Width = 1280;
-        Height = 780;
-        StartPosition = FormStartPosition.CenterScreen;
+        InitializeComponent();
+        DoubleBuffered = true;
 
-        _homeControl = new HomeControl(companyName, SelectSection);
-        BuildSections(quoteRepository, productionRepository, userRepository, appSettingsService, currentUser);
-
-        Controls.Add(_sectionsTabs);
-        Controls.Add(_onlineUsersPanel);
-
-        _ = RefreshOnlineUsersAsync();
-    }
-
-    private void BuildSections(
-        QuoteRepository quoteRepository,
-        ProductionRepository productionRepository,
-        UserManagementRepository userRepository,
-        AppSettingsService appSettingsService,
-        UserAccount currentUser)
-    {
-        _sectionsTabs.TabPages.Add(new TabPage("Home") { Controls = { _homeControl } });
-        _sectionsTabs.TabPages.Add(new TabPage("Quotes") { Controls = { new QuotesControl(quoteRepository, productionRepository, SelectSection) } });
-        _sectionsTabs.TabPages.Add(new TabPage("Production") { Controls = { new ProductionControl() } });
-        _sectionsTabs.TabPages.Add(new TabPage("Inspection") { Controls = { new InspectionControl() } });
-        _sectionsTabs.TabPages.Add(new TabPage("Shipping") { Controls = { new ShippingControl() } });
-        _sectionsTabs.TabPages.Add(new TabPage("Quality") { Controls = { new QualityControl() } });
-        _sectionsTabs.TabPages.Add(new TabPage("Performance") { Controls = { new PerformanceControl() } });
-        _sectionsTabs.TabPages.Add(new TabPage("Settings") { Controls = { new SettingsControl(appSettingsService, AuthorizationService.HasPermission(currentUser, UserPermission.ManageSettings), _homeControl.UpdateCompanyName) } });
-        _sectionsTabs.TabPages.Add(new TabPage("Users") { Controls = { new UsersControl(userRepository, currentUser, async () => await RefreshOnlineUsersAsync()) } });
-
-        _sectionsTabs.SelectedIndex = 0;
-    }
-
-    private void SelectSection(string sectionName)
-    {
-        foreach (TabPage tab in _sectionsTabs.TabPages)
+        _navButtons = new Dictionary<string, ModernButton>(StringComparer.OrdinalIgnoreCase)
         {
-            if (string.Equals(tab.Text, sectionName, StringComparison.OrdinalIgnoreCase))
-            {
-                _sectionsTabs.SelectedTab = tab;
-                return;
-            }
+            ["Dashboard"] = btnDashboard,
+            ["Quotes"] = btnQuotes,
+            ["Production"] = btnProduction,
+            ["Users"] = btnUsers,
+            ["Settings"] = btnSettings
+        };
+
+        _themeManager.ThemeChanged += (_, _) => ApplyTheme();
+        WireEvents();
+
+        LoadSection("Dashboard");
+        ApplyTheme();
+    }
+
+    private void WireEvents()
+    {
+        btnDashboard.Click += (_, _) => LoadSection("Dashboard");
+        btnQuotes.Click += (_, _) => LoadSection("Quotes");
+        btnProduction.Click += (_, _) => LoadSection("Production");
+        btnUsers.Click += (_, _) => LoadSection("Users");
+        btnSettings.Click += (_, _) => LoadSection("Settings");
+
+        btnThemeToggle.Click += (_, _) =>
+        {
+            _themeManager.ToggleTheme();
+            btnThemeToggle.Text = _themeManager.CurrentTheme == AppTheme.Dark ? "☾ Dark" : "☀ Light";
+        };
+    }
+
+    private void LoadSection(string key)
+    {
+        var control = CreateControlForKey(key);
+        mainContentPanel.SuspendLayout();
+        mainContentPanel.Controls.Clear();
+        control.Dock = DockStyle.Fill;
+        mainContentPanel.Controls.Add(control);
+        mainContentPanel.ResumeLayout();
+
+        lblSection.Text = key;
+        MarkActiveButton(key);
+        ApplyTheme();
+    }
+
+    private UserControl CreateControlForKey(string key)
+    {
+        return key switch
+        {
+            "Dashboard" => new DashboardControl(),
+            "Quotes" => new QuotesControl(),
+            "Production" => BuildPlaceholder("Production", "Production queue and scheduling will render here."),
+            "Users" => BuildPlaceholder("Users", "User administration and permissions will render here."),
+            "Settings" => BuildPlaceholder("Settings", "Application settings and preferences will render here."),
+            _ => BuildPlaceholder("Not Found", "The requested section is not available.")
+        };
+    }
+
+    private static UserControl BuildPlaceholder(string title, string text)
+    {
+        var panel = new UserControl { BackColor = Color.Transparent };
+
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            RowCount = 3,
+            ColumnCount = 1,
+            Padding = new Padding(24)
+        };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+        var titleLabel = new Label
+        {
+            Text = title,
+            Dock = DockStyle.Top,
+            Font = new Font("Segoe UI", 18F, FontStyle.Bold),
+            Height = 44
+        };
+
+        var bodyLabel = new Label
+        {
+            Text = text,
+            Dock = DockStyle.Top,
+            Font = new Font("Segoe UI", 10F),
+            Height = 28
+        };
+
+        layout.Controls.Add(titleLabel, 0, 0);
+        layout.Controls.Add(bodyLabel, 0, 1);
+        panel.Controls.Add(layout);
+
+        return panel;
+    }
+
+    private void MarkActiveButton(string activeKey)
+    {
+        foreach (var pair in _navButtons)
+        {
+            pair.Value.Tag = pair.Key.Equals(activeKey, StringComparison.OrdinalIgnoreCase) ? "active" : "idle";
         }
     }
 
-    private async Task RefreshOnlineUsersAsync()
+    private void ApplyTheme()
     {
-        var users = (await _userRepository.GetUsersAsync()).Where(x => x.IsActive).ToList();
+        _themeManager.ApplyTheme(this);
+        var palette = _themeManager.CurrentPalette;
 
-        _onlineUsersPanel.Controls.Clear();
-        foreach (var user in users)
+        headerPanel.BackColor = palette.Panel;
+        navPanel.BackColor = palette.Panel;
+        mainContentPanel.BackColor = palette.Background;
+
+        foreach (var button in _navButtons.Values)
         {
-            _onlineUsersPanel.Controls.Add(BuildOnlineUserBadge(user));
+            var active = Equals(button.Tag, "active");
+            button.OverrideBaseColor = active ? palette.Accent : palette.Panel;
+            button.OverrideBorderColor = active ? palette.Accent : palette.Border;
+            button.ForeColor = active ? Color.White : palette.TextPrimary;
+            button.Invalidate();
         }
-    }
-
-    private static Control BuildOnlineUserBadge(UserAccount user)
-    {
-        var container = new FlowLayoutPanel { Width = 180, Height = 40, FlowDirection = FlowDirection.LeftToRight };
-        var icon = new PictureBox { Width = 24, Height = 24, SizeMode = PictureBoxSizeMode.Zoom };
-        if (!string.IsNullOrWhiteSpace(user.IconPath) && File.Exists(user.IconPath))
-        {
-            icon.Image = Image.FromFile(user.IconPath);
-        }
-
-        var statusDot = new Label { Text = "●", AutoSize = true, ForeColor = Color.LimeGreen, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold), Margin = new Padding(3, 5, 3, 0) };
-        var name = new Label { Text = user.Username, AutoSize = true, Margin = new Padding(3, 6, 3, 0) };
-
-        container.Controls.Add(icon);
-        container.Controls.Add(statusDot);
-        container.Controls.Add(name);
-        return container;
     }
 }
