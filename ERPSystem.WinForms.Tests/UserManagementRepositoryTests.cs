@@ -36,4 +36,38 @@ public class UserManagementRepositoryTests
 
         File.Delete(dbPath);
     }
+
+    [Fact]
+    public async Task GetAccountRequestsAsync_ReturnsMostRecentRequestWithUtcTimestamp()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-requests-{Guid.NewGuid():N}.db");
+        var repository = new UserManagementRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var older = DateTime.UtcNow.AddMinutes(-10);
+        var newer = DateTime.UtcNow;
+
+        await repository.SaveAccountRequestAsync(new AccountRequest
+        {
+            RequestedUsername = "older-user",
+            RequestNote = "older",
+            TermsAccepted = true,
+            RequestedUtc = older
+        });
+
+        await repository.SaveAccountRequestAsync(new AccountRequest
+        {
+            RequestedUsername = "newer-user",
+            RequestNote = "newer",
+            TermsAccepted = true,
+            RequestedUtc = newer
+        });
+
+        var requests = await repository.GetAccountRequestsAsync();
+
+        Assert.Equal("newer-user", requests[0].RequestedUsername);
+        Assert.Equal(DateTimeKind.Utc, requests[0].RequestedUtc.Kind);
+
+        File.Delete(dbPath);
+    }
 }
