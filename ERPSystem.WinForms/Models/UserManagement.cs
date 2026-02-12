@@ -25,7 +25,18 @@ public class UserAccount
     public string DisplayName { get; set; } = string.Empty;
     public string PasswordHash { get; set; } = string.Empty;
     public bool IsActive { get; set; } = true;
+    public string IconPath { get; set; } = string.Empty;
+    public bool IsOnline { get; set; }
     public List<RoleDefinition> Roles { get; set; } = new();
+}
+
+public class AccountRequest
+{
+    public int Id { get; set; }
+    public string RequestedUsername { get; set; } = string.Empty;
+    public string RequestNote { get; set; } = string.Empty;
+    public bool TermsAccepted { get; set; }
+    public DateTime RequestedUtc { get; set; } = DateTime.UtcNow;
 }
 
 public class EmployeeRecord
