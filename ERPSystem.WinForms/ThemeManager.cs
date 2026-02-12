@@ -12,6 +12,7 @@ public sealed class ThemePalette
     public required Color Panel { get; init; }
     public required Color Accent { get; init; }
     public required Color AccentHover { get; init; }
+    public required Color NavHover { get; init; }
     public required Color AccentPressed { get; init; }
     public required Color TextPrimary { get; init; }
     public required Color TextSecondary { get; init; }
@@ -28,6 +29,7 @@ public sealed class ThemeManager
             Panel = ColorTranslator.FromHtml("#252526"),
             Accent = ColorTranslator.FromHtml("#3A96DD"),
             AccentHover = ColorTranslator.FromHtml("#51A8EA"),
+            NavHover = ColorTranslator.FromHtml("#2D3E50"),
             AccentPressed = ColorTranslator.FromHtml("#2E7DB8"),
             TextPrimary = ColorTranslator.FromHtml("#FFFFFF"),
             TextSecondary = ColorTranslator.FromHtml("#C8C8C8"),
@@ -39,6 +41,7 @@ public sealed class ThemeManager
             Panel = ColorTranslator.FromHtml("#FFFFFF"),
             Accent = ColorTranslator.FromHtml("#3A96DD"),
             AccentHover = ColorTranslator.FromHtml("#4FA5E7"),
+            NavHover = ColorTranslator.FromHtml("#E5EAF0"),
             AccentPressed = ColorTranslator.FromHtml("#2A7AB7"),
             TextPrimary = ColorTranslator.FromHtml("#1F2937"),
             TextSecondary = ColorTranslator.FromHtml("#6B7280"),
@@ -77,9 +80,9 @@ public sealed class ThemeManager
             case DataGridView grid:
                 ApplyGridTheme(grid, palette);
                 break;
-            case Panel:
             case FlowLayoutPanel:
             case TableLayoutPanel:
+            case Panel:
             case GroupBox:
                 control.BackColor = palette.Panel;
                 control.ForeColor = palette.TextPrimary;
