@@ -1,5 +1,6 @@
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Forms;
+using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms;
@@ -27,24 +28,48 @@ internal static class Program
 
         var userRepository = new UserManagementRepository(dbPath);
         await userRepository.InitializeDatabaseAsync();
+        await EnsureDefaultAdminAsync(userRepository);
 
         var appSettingsService = new AppSettingsService(settingsPath);
         var appSettings = await appSettingsService.LoadAsync();
 
-        using var loginForm = new LoginForm();
-        if (loginForm.ShowDialog() != DialogResult.OK)
+        using var loginForm = new LoginForm(userRepository);
+        if (loginForm.ShowDialog() != DialogResult.OK || loginForm.AuthenticatedUser is null)
         {
             return;
         }
-
-        var canManageSettings = string.Equals(loginForm.EnteredUsername, "admin", StringComparison.OrdinalIgnoreCase);
 
         Application.Run(new ERPMainForm(
             quoteRepository,
             productionRepository,
             userRepository,
             appSettingsService,
-            canManageSettings,
+            loginForm.AuthenticatedUser,
             appSettings.CompanyName));
+    }
+
+    private static async Task EnsureDefaultAdminAsync(UserManagementRepository userRepository)
+    {
+        var existingAdmin = await userRepository.FindByUsernameAsync("ASTECH");
+        if (existingAdmin is not null)
+        {
+            return;
+        }
+
+        await userRepository.SaveUserAsync(new UserAccount
+        {
+            Username = "ASTECH",
+            DisplayName = "Admin",
+            PasswordHash = AuthorizationService.HashPassword("ASTECH123!"),
+            IsActive = true,
+            Roles =
+            [
+                new RoleDefinition
+                {
+                    Name = "Administrator",
+                    Permissions = Enum.GetValues<UserPermission>().ToList()
+                }
+            ]
+        });
     }
 }
