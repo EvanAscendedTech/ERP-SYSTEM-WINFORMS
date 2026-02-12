@@ -1,79 +1,102 @@
+using ERPSystem.WinForms.Data;
+using ERPSystem.WinForms.Models;
+using ERPSystem.WinForms.Services;
+
 namespace ERPSystem.WinForms.Controls;
 
 public class InspectionControl : UserControl
 {
-    public InspectionControl()
+    private readonly ProductionRepository _productionRepository;
+    private readonly JobFlowService _flowService;
+    private readonly InspectionService _inspectionService;
+    private readonly Action<string> _openSection;
+    private readonly DataGridView _jobsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
+    private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
+
+    public InspectionControl(ProductionRepository productionRepository, JobFlowService flowService, InspectionService inspectionService, Action<string> openSection)
     {
+        _productionRepository = productionRepository;
+        _flowService = flowService;
+        _inspectionService = inspectionService;
+        _openSection = openSection;
         Dock = DockStyle.Fill;
 
-        var root = new TableLayoutPanel
+        ConfigureGrid();
+
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
+        var refresh = new Button { Text = "Refresh", AutoSize = true };
+        var startAndPass = new Button { Text = "Start + Pass Inspection", AutoSize = true };
+
+        refresh.Click += async (_, _) => await LoadJobsAsync();
+        startAndPass.Click += async (_, _) => await PassSelectedAsync();
+
+        actions.Controls.Add(refresh);
+        actions.Controls.Add(startAndPass);
+
+        Controls.Add(_jobsGrid);
+        Controls.Add(actions);
+        Controls.Add(_feedback);
+
+        _ = LoadJobsAsync();
+    }
+
+    private void ConfigureGrid()
+    {
+        _jobsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Job #", DataPropertyName = nameof(ProductionJob.JobNumber), Width = 120 });
+        _jobsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Product", DataPropertyName = nameof(ProductionJob.ProductName), Width = 240 });
+        _jobsGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "QualityApproved", HeaderText = "Quality Approved", Width = 120 });
+        _jobsGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "InspectionPassed", HeaderText = "Inspection Passed", Width = 120 });
+
+        _jobsGrid.CellFormatting += (_, e) =>
         {
-            Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 3,
-            Padding = new Padding(12)
-        };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 65));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            if (_jobsGrid.Rows[e.RowIndex].DataBoundItem is not ProductionJob job)
+            {
+                return;
+            }
 
-        var title = new Label
+            if (_jobsGrid.Columns[e.ColumnIndex].Name == "QualityApproved")
+            {
+                e.Value = _flowService.IsQualityApproved(job.JobNumber);
+                e.FormattingApplied = true;
+            }
+
+            if (_jobsGrid.Columns[e.ColumnIndex].Name == "InspectionPassed")
+            {
+                e.Value = _flowService.IsInspectionPassed(job.JobNumber);
+                e.FormattingApplied = true;
+            }
+        };
+    }
+
+    private async Task LoadJobsAsync()
+    {
+        var jobs = await _productionRepository.GetJobsAsync();
+        _jobsGrid.DataSource = jobs.Where(x => _flowService.IsQualityApproved(x.JobNumber)).OrderBy(x => x.JobNumber).ToList();
+        _feedback.Text = "Inspection queue refreshed.";
+    }
+
+    private async Task PassSelectedAsync()
+    {
+        if (_jobsGrid.CurrentRow?.DataBoundItem is not ProductionJob selected)
         {
-            Text = "Inspection Module",
-            AutoSize = true,
-            Font = new Font(Font, FontStyle.Bold)
-        };
+            _feedback.Text = "Select a job first.";
+            return;
+        }
 
-        var packetGrid = new GroupBox { Text = "Production / Inspection Packet by Line Item", Dock = DockStyle.Fill };
-        var lineItemGrid = new DataGridView
+        var started = _inspectionService.TryStartInspection(selected.JobNumber, selected.Status, "qa.user", out var startMessage);
+        if (!started)
         {
-            Dock = DockStyle.Fill,
-            ReadOnly = true,
-            AllowUserToAddRows = false,
-            AllowUserToDeleteRows = false,
-            RowHeadersVisible = false,
-            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
-        };
-        lineItemGrid.Columns.Add("job", "Job");
-        lineItemGrid.Columns.Add("line", "Line Item");
-        lineItemGrid.Columns.Add("ready", "Ready For Inspection");
-        lineItemGrid.Columns.Add("packet", "Packet Status");
-        lineItemGrid.Rows.Add("JOB-1452", "Line 1", "Yes", "Awaiting final checklist");
-        lineItemGrid.Rows.Add("JOB-1458", "Line 2", "Yes", "Inspection form uploaded");
-        lineItemGrid.Rows.Add("JOB-1461", "Line 1", "No", "Still in production flow");
-        packetGrid.Controls.Add(lineItemGrid);
+            _feedback.Text = startMessage;
+            return;
+        }
 
-        var formsPanel = new GroupBox { Text = "Inspection Forms & Files", Dock = DockStyle.Fill };
-        var formsLayout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(8), WrapContents = false };
-        formsLayout.Controls.Add(new Button { Text = "Upload Inspection Form", Width = 200, Height = 34 });
-        formsLayout.Controls.Add(new Button { Text = "Download Inspection Packet", Width = 200, Height = 34 });
-        formsLayout.Controls.Add(new Button { Text = "Upload Supporting Data", Width = 200, Height = 34 });
-        formsLayout.Controls.Add(new Label { AutoSize = true, Text = "Attach certs, measurements, and line-item notes for complete traceability.", MaximumSize = new Size(220, 0) });
-        formsPanel.Controls.Add(formsLayout);
+        _flowService.TryPassInspection(selected, out var passMessage);
+        _feedback.Text = $"{startMessage} {passMessage}";
+        await LoadJobsAsync();
 
-        var flowRule = new Label
+        if (_flowService.IsInspectionPassed(selected.JobNumber))
         {
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft,
-            Text = "Only line items that complete all enabled production stages (including post-process when selected on quote) can be moved into inspection."
-        };
-
-        var qaSignoff = new CheckBox
-        {
-            Text = "QA Signoff",
-            AutoSize = true,
-            Margin = new Padding(0, 8, 0, 0)
-        };
-
-        root.Controls.Add(title, 0, 0);
-        root.SetColumnSpan(title, 2);
-        root.Controls.Add(packetGrid, 0, 1);
-        root.Controls.Add(formsPanel, 1, 1);
-        root.Controls.Add(flowRule, 0, 2);
-        root.Controls.Add(qaSignoff, 1, 2);
-
-        Controls.Add(root);
+            _openSection("Shipping");
+        }
     }
 }

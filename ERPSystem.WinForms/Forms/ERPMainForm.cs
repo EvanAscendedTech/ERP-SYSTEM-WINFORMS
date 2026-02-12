@@ -1,3 +1,4 @@
+using ERPSystem.WinForms.Controls;
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Services;
 
@@ -11,6 +12,7 @@ public partial class ERPMainForm : Form
     private readonly AppSettingsService _settings;
     private readonly InspectionService _inspection;
     private readonly ArchiveService _archive;
+    private readonly JobFlowService _jobFlow = new();
     private readonly ThemeManager _themeManager = new();
 
     private readonly Dictionary<string, ModernButton> _navButtons;
@@ -33,6 +35,9 @@ public partial class ERPMainForm : Form
             ["Dashboard"] = btnDashboard,
             ["Quotes"] = btnQuotes,
             ["Production"] = btnProduction,
+            ["Quality"] = btnQuality,
+            ["Inspection"] = btnInspection,
+            ["Shipping"] = btnShipping,
             ["Users"] = btnUsers,
             ["Settings"] = btnSettings
         };
@@ -49,6 +54,9 @@ public partial class ERPMainForm : Form
         btnDashboard.Click += (_, _) => LoadSection("Dashboard");
         btnQuotes.Click += (_, _) => LoadSection("Quotes");
         btnProduction.Click += (_, _) => LoadSection("Production");
+        btnQuality.Click += (_, _) => LoadSection("Quality");
+        btnInspection.Click += (_, _) => LoadSection("Inspection");
+        btnShipping.Click += (_, _) => LoadSection("Shipping");
         btnUsers.Click += (_, _) => LoadSection("Users");
         btnSettings.Click += (_, _) => LoadSection("Settings");
 
@@ -78,10 +86,13 @@ public partial class ERPMainForm : Form
         return key switch
         {
             "Dashboard" => new DashboardControl(),
-            "Quotes" => new QuotesControl(),
-            "Production" => BuildPlaceholder("Production", "Production queue and scheduling will render here."),
-            "Users" => BuildPlaceholder("Users", "User administration and permissions will render here."),
-            "Settings" => BuildPlaceholder("Settings", "Application settings and preferences will render here."),
+            "Quotes" => new QuotesControl(_quoteRepo, _prodRepo, LoadSection),
+            "Production" => new ProductionControl(_prodRepo, _jobFlow, LoadSection),
+            "Quality" => new QualityControl(_prodRepo, _jobFlow, LoadSection),
+            "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, LoadSection),
+            "Shipping" => new ShippingControl(_prodRepo, _jobFlow),
+            "Users" => BuildPlaceholder("Users", "User administration can be restored here with the authenticated context."),
+            "Settings" => new SettingsControl(_settings, canManageSettings: true, companyNameChanged: name => lblAppTitle.Text = $"{name} Command Center"),
             _ => BuildPlaceholder("Not Found", "The requested section is not available.")
         };
     }
