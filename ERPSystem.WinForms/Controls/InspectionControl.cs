@@ -58,7 +58,7 @@ public class InspectionControl : UserControl
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleLeft,
             Text = "Only line items that complete all enabled production stages (including post-process when selected on quote) can be moved into inspection."
-        });
+        };
 
         var qaSignoff = new CheckBox
         {
