@@ -10,11 +10,12 @@ public class HomeControl : UserControl
     {
         Dock = DockStyle.Fill;
 
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(12), RowCount = 4 };
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(12), RowCount = 5 };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 120));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
 
@@ -26,15 +27,15 @@ public class HomeControl : UserControl
             Height = 42
         };
 
-        var onTimeGraph = BuildMetricGraph("On-time delivery", [95, 92, 97, 93]);
-        var qualityGraph = BuildMetricGraph("Quality metric", [98, 99, 97, 100]);
+        var onTimeGraph = BuildMetricGraph("On-time delivery (30 day)", [95, 92, 97, 93]);
+        var qualityGraph = BuildMetricGraph("Quality metric (30 day)", [98, 99, 97, 100]);
 
         root.Controls.Add(_companyNameLabel, 0, 0);
         root.SetColumnSpan(_companyNameLabel, 2);
         root.Controls.Add(onTimeGraph, 0, 1);
         root.Controls.Add(qualityGraph, 1, 1);
 
-        var sections = new[] { "Quotes", "Production", "Inspection", "Shipping" };
+        var sections = new[] { "Quotes", "Production", "Inspection", "Shipping", "Quality", "Performance" };
         for (var index = 0; index < sections.Length; index++)
         {
             root.Controls.Add(BuildWorkflowList(sections[index], openSection), index % 2, (index / 2) + 2);

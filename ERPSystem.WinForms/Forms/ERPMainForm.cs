@@ -50,6 +50,8 @@ public class ERPMainForm : Form
         _sectionsTabs.TabPages.Add(new TabPage("Production") { Controls = { new ProductionControl() } });
         _sectionsTabs.TabPages.Add(new TabPage("Inspection") { Controls = { new InspectionControl() } });
         _sectionsTabs.TabPages.Add(new TabPage("Shipping") { Controls = { new ShippingControl() } });
+        _sectionsTabs.TabPages.Add(new TabPage("Quality") { Controls = { new QualityControl() } });
+        _sectionsTabs.TabPages.Add(new TabPage("Performance") { Controls = { new PerformanceControl() } });
         _sectionsTabs.TabPages.Add(new TabPage("Settings") { Controls = { new SettingsControl(appSettingsService, AuthorizationService.HasPermission(currentUser, UserPermission.ManageSettings), _homeControl.UpdateCompanyName) } });
         _sectionsTabs.TabPages.Add(new TabPage("Users") { Controls = { new UsersControl(userRepository, currentUser, async () => await RefreshOnlineUsersAsync()) } });
 
