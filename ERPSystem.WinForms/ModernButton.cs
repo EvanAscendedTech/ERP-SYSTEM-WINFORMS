@@ -24,7 +24,7 @@ public class ModernButton : Button
         FlatStyle = FlatStyle.Flat;
         FlatAppearance.BorderSize = 0;
         Cursor = Cursors.Hand;
-        Font = new Font("Segoe UI", 9F, FontStyle.Semibold, GraphicsUnit.Point);
+        Font = new Font(new FontFamily("Segoe UI"), 9F, FontStyle.Bold, GraphicsUnit.Point);
         ForeColor = Color.White;
         BackColor = AccentColor;
 
