@@ -6,7 +6,7 @@ namespace ERPSystem.WinForms;
 
 public class ModernButton : Button
 {
-    private readonly Timer animationTimer;
+    private readonly System.Windows.Forms.Timer animationTimer;
     private float hoverProgress;
     private bool isHovered;
     private bool isPressed;
@@ -33,7 +33,7 @@ public class ModernButton : Button
                  ControlStyles.ResizeRedraw |
                  ControlStyles.UserPaint, true);
 
-        animationTimer = new Timer { Interval = 15 };
+        animationTimer = new System.Windows.Forms.Timer { Interval = 15 };
         animationTimer.Tick += (_, _) =>
         {
             const float step = 0.12f;
