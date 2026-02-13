@@ -1,5 +1,7 @@
 using System.Drawing;
 using System.Windows.Forms;
+using ERPSystem.WinForms.Data;
+using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms;
 
@@ -31,12 +33,23 @@ public partial class MainForm : Form, IMainView
     private readonly Dictionary<string, Control> pages = new();
     private readonly ThemeManager themeManager = new();
     private readonly MainPresenter presenter;
+    private readonly QuoteRepository quoteRepository;
+    private readonly ProductionRepository productionRepository;
+    private readonly JobFlowService jobFlowService = new();
 
     private bool sidebarCollapsed;
 
     public MainForm()
     {
         presenter = new MainPresenter(this);
+
+        var dbPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ERPSystem.WinForms",
+            "erp_system.db");
+
+        quoteRepository = new QuoteRepository(dbPath);
+        productionRepository = new ProductionRepository(dbPath);
 
         InitializeComponent();
         DoubleBuffered = true;
@@ -115,7 +128,7 @@ public partial class MainForm : Form, IMainView
 
     private void InitializePages()
     {
-        pages["Dashboard"] = new DashboardControl();
+        pages["Dashboard"] = new DashboardControl(quoteRepository, productionRepository, jobFlowService, ActivatePage);
         pages["Quotes"] = BuildPlaceholderPage("Quotes", "Quote creation, approvals, and customer pricing.");
         pages["Production"] = BuildPlaceholderPage("Production", "Work orders, machine queues, and schedules.");
         pages["Settings"] = BuildPlaceholderPage("Settings", "Company preferences, users, and integrations.");
