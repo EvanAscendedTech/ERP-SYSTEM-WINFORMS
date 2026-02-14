@@ -4,7 +4,7 @@ public partial class ERPMainForm
 {
     private TableLayoutPanel rootLayout = null!;
     private Panel headerPanel = null!;
-    private Panel navPanel = null!;
+    private Panel tabStripPanel = null!;
     private Panel mainContentPanel = null!;
 
     private Label lblAppTitle = null!;
@@ -25,7 +25,7 @@ public partial class ERPMainForm
     {
         rootLayout = new TableLayoutPanel();
         headerPanel = new Panel();
-        navPanel = new Panel();
+        tabStripPanel = new Panel();
         mainContentPanel = new Panel();
 
         lblAppTitle = new Label();
@@ -48,38 +48,39 @@ public partial class ERPMainForm
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
         Text = "ERP System";
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(1100, 700);
+        MinimumSize = new Size(1200, 760);
+        WindowState = FormWindowState.Maximized;
 
         rootLayout.Dock = DockStyle.Fill;
-        rootLayout.RowCount = 2;
-        rootLayout.ColumnCount = 2;
-        rootLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220F));
+        rootLayout.RowCount = 3;
+        rootLayout.ColumnCount = 1;
         rootLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 62F));
+        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 68F));
+        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 64F));
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
         headerPanel.Dock = DockStyle.Fill;
-        headerPanel.Padding = new Padding(16, 12, 16, 12);
+        headerPanel.Padding = new Padding(20, 12, 20, 12);
 
         lblAppTitle.AutoSize = true;
         lblAppTitle.Text = "ERP Command Center";
-        lblAppTitle.Font = new Font("Segoe UI", 12F, FontStyle.Bold);
-        lblAppTitle.Location = new Point(16, 15);
+        lblAppTitle.Font = new Font("Segoe UI", 14F, FontStyle.Bold);
+        lblAppTitle.Location = new Point(20, 17);
 
         lblSection.AutoSize = true;
-        lblSection.Font = new Font("Segoe UI", 10F, FontStyle.Regular);
+        lblSection.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
         lblSection.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        lblSection.Location = new Point(540, 20);
+        lblSection.Location = new Point(540, 22);
 
         btnThemeToggle.Text = "☾ Dark";
-        btnThemeToggle.Size = new Size(96, 34);
+        btnThemeToggle.Size = new Size(108, 36);
         btnThemeToggle.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        btnThemeToggle.Location = new Point(660, 14);
-        btnThemeToggle.CornerRadius = 5;
+        btnThemeToggle.Location = new Point(660, 15);
+        btnThemeToggle.CornerRadius = 8;
 
         headerPanel.Resize += (_, _) =>
         {
-            btnThemeToggle.Left = headerPanel.Width - btnThemeToggle.Width - 16;
+            btnThemeToggle.Left = headerPanel.Width - btnThemeToggle.Width - 20;
             lblSection.Left = btnThemeToggle.Left - lblSection.Width - 16;
         };
 
@@ -87,12 +88,13 @@ public partial class ERPMainForm
         headerPanel.Controls.Add(lblSection);
         headerPanel.Controls.Add(btnThemeToggle);
 
-        navPanel.Dock = DockStyle.Fill;
-        navPanel.Padding = new Padding(12);
+        tabStripPanel.Dock = DockStyle.Fill;
+        tabStripPanel.Padding = new Padding(12, 10, 12, 10);
 
         navButtonsPanel.Dock = DockStyle.Fill;
-        navButtonsPanel.FlowDirection = FlowDirection.TopDown;
+        navButtonsPanel.FlowDirection = FlowDirection.LeftToRight;
         navButtonsPanel.WrapContents = false;
+        navButtonsPanel.AutoScroll = true;
 
         ConfigureNavButton(btnDashboard, "Dashboard");
         ConfigureNavButton(btnQuotes, "Quotes");
@@ -111,15 +113,14 @@ public partial class ERPMainForm
         navButtonsPanel.Controls.Add(btnShipping);
         navButtonsPanel.Controls.Add(btnUsers);
         navButtonsPanel.Controls.Add(btnSettings);
-        navPanel.Controls.Add(navButtonsPanel);
+        tabStripPanel.Controls.Add(navButtonsPanel);
 
         mainContentPanel.Dock = DockStyle.Fill;
-        mainContentPanel.Padding = new Padding(12);
+        mainContentPanel.Padding = new Padding(14);
 
-        rootLayout.Controls.Add(navPanel, 0, 0);
-        rootLayout.SetRowSpan(navPanel, 2);
-        rootLayout.Controls.Add(headerPanel, 1, 0);
-        rootLayout.Controls.Add(mainContentPanel, 1, 1);
+        rootLayout.Controls.Add(headerPanel, 0, 0);
+        rootLayout.Controls.Add(tabStripPanel, 0, 1);
+        rootLayout.Controls.Add(mainContentPanel, 0, 2);
 
         Controls.Add(rootLayout);
 
@@ -129,11 +130,11 @@ public partial class ERPMainForm
     private static void ConfigureNavButton(ModernButton button, string text)
     {
         button.Text = text;
-        button.Width = 192;
-        button.Height = 42;
-        button.Margin = new Padding(0, 0, 0, 10);
-        button.TextAlign = ContentAlignment.MiddleLeft;
-        button.Padding = new Padding(14, 0, 0, 0);
-        button.CornerRadius = 5;
+        button.Width = 142;
+        button.Height = 40;
+        button.Margin = new Padding(0, 0, 10, 0);
+        button.TextAlign = ContentAlignment.MiddleCenter;
+        button.Padding = new Padding(0);
+        button.CornerRadius = 10;
     }
 }

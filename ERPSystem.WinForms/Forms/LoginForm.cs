@@ -7,9 +7,9 @@ namespace ERPSystem.WinForms.Forms;
 public class LoginForm : Form
 {
     private readonly UserManagementRepository _userRepository;
-    private readonly TextBox _username = new() { Width = 220, PlaceholderText = "Username" };
-    private readonly TextBox _password = new() { Width = 220, PlaceholderText = "Password", UseSystemPasswordChar = true };
-    private readonly TextBox _requestNote = new() { Width = 280, Height = 70, Multiline = true, PlaceholderText = "Request note for admin" };
+    private readonly TextBox _username = new() { Width = 340, PlaceholderText = "Username" };
+    private readonly TextBox _password = new() { Width = 340, PlaceholderText = "Password", UseSystemPasswordChar = true };
+    private readonly TextBox _requestNote = new() { Width = 340, Height = 78, Multiline = true, PlaceholderText = "Request note for admin" };
     private readonly CheckBox _requestTerms = new() { Text = "I understand account creation is admin approved only.", AutoSize = true };
 
     public UserAccount? AuthenticatedUser { get; private set; }
@@ -19,35 +19,130 @@ public class LoginForm : Form
         _userRepository = userRepository;
 
         Text = "ERP Login";
-        Width = 380;
-        Height = 420;
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false;
-        MinimizeBox = false;
+        FormBorderStyle = FormBorderStyle.FixedSingle;
         StartPosition = FormStartPosition.CenterScreen;
+        WindowState = FormWindowState.Maximized;
+        MinimumSize = new Size(1200, 760);
+        BackColor = ColorTranslator.FromHtml("#0F172A");
 
-        var layout = new TableLayoutPanel
+        var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(16),
-            ColumnCount = 1,
-            RowCount = 6
+            ColumnCount = 2,
+            RowCount = 1,
+            Padding = new Padding(24)
+        };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52F));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48F));
+
+        var heroPanel = BuildHeroPanel();
+        var loginPanel = BuildLoginPanel();
+
+        root.Controls.Add(heroPanel, 0, 0);
+        root.Controls.Add(loginPanel, 1, 0);
+        Controls.Add(root);
+    }
+
+    private static Control BuildHeroPanel()
+    {
+        var panel = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(46, 44, 40, 44),
+            BackColor = ColorTranslator.FromHtml("#111827")
         };
 
-        var title = new Label { Text = "Sign in to ERP", AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
-        var fields = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
-        fields.Controls.Add(_username);
-        fields.Controls.Add(_password);
+        var title = new Label
+        {
+            Text = "ERP Command Center",
+            Font = new Font("Segoe UI", 30F, FontStyle.Bold),
+            ForeColor = Color.White,
+            AutoSize = true,
+            Dock = DockStyle.Top
+        };
 
-        var loginButton = new Button { Text = "Login", AutoSize = true };
+        var subtitle = new Label
+        {
+            Text = "A clean, full-screen workspace with responsive controls and tabbed workflows.",
+            Font = new Font("Segoe UI", 12F, FontStyle.Regular),
+            ForeColor = ColorTranslator.FromHtml("#CBD5E1"),
+            AutoSize = true,
+            MaximumSize = new Size(520, 0),
+            Dock = DockStyle.Top,
+            Padding = new Padding(0, 14, 0, 0)
+        };
+
+        panel.Controls.Add(subtitle);
+        panel.Controls.Add(title);
+        return panel;
+    }
+
+    private Control BuildLoginPanel()
+    {
+        var panel = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(40, 40, 40, 40),
+            BackColor = ColorTranslator.FromHtml("#1F2937")
+        };
+
+        var layout = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoScroll = true,
+            Padding = new Padding(16)
+        };
+
+        var title = new Label
+        {
+            Text = "Sign in",
+            AutoSize = true,
+            Font = new Font("Segoe UI", 22F, FontStyle.Bold),
+            ForeColor = Color.White,
+            Margin = new Padding(0, 0, 0, 14)
+        };
+
+        StyleInput(_username);
+        StyleInput(_password);
+        StyleInput(_requestNote);
+
+        var loginButton = new ModernButton
+        {
+            Text = "Login",
+            Width = 340,
+            Height = 42,
+            CornerRadius = 10,
+            Margin = new Padding(0, 10, 0, 18)
+        };
         loginButton.Click += async (_, _) => await AttemptLoginAsync();
 
-        var requestGroup = new GroupBox { Text = "Need an account?", Dock = DockStyle.Fill, AutoSize = true };
-        var requestLayout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
-        var requestButton = new Button { Text = "Submit Account Request", AutoSize = true };
+        var requestGroup = new GroupBox
+        {
+            Text = "Need an account?",
+            Width = 366,
+            Height = 265,
+            ForeColor = Color.White,
+            Padding = new Padding(12)
+        };
+
+        var requestLayout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, AutoSize = false, WrapContents = false };
+        var requestButton = new ModernButton { Text = "Submit Account Request", Width = 340, Height = 40, CornerRadius = 10 };
         requestButton.Click += async (_, _) => await SubmitAccountRequestAsync();
-        requestLayout.Controls.Add(new Label { Text = "Requested username", AutoSize = true });
-        requestLayout.Controls.Add(new TextBox { Width = 280, Name = "RequestedUsernameTextBox", PlaceholderText = "Requested username" });
+
+        requestLayout.Controls.Add(new Label { Text = "Requested username", AutoSize = true, ForeColor = ColorTranslator.FromHtml("#CBD5E1") });
+        requestLayout.Controls.Add(new TextBox
+        {
+            Width = 340,
+            Height = 34,
+            Name = "RequestedUsernameTextBox",
+            PlaceholderText = "Requested username",
+            BackColor = ColorTranslator.FromHtml("#0F172A"),
+            ForeColor = Color.White,
+            BorderStyle = BorderStyle.FixedSingle,
+            Margin = new Padding(0, 6, 0, 8)
+        });
         requestLayout.Controls.Add(_requestNote);
         requestLayout.Controls.Add(_requestTerms);
         requestLayout.Controls.Add(requestButton);
@@ -55,12 +150,26 @@ public class LoginForm : Form
 
         AcceptButton = loginButton;
 
-        layout.Controls.Add(title, 0, 0);
-        layout.Controls.Add(fields, 0, 1);
-        layout.Controls.Add(loginButton, 0, 2);
-        layout.Controls.Add(requestGroup, 0, 3);
+        layout.Controls.Add(title);
+        layout.Controls.Add(_username);
+        layout.Controls.Add(_password);
+        layout.Controls.Add(loginButton);
+        layout.Controls.Add(requestGroup);
 
-        Controls.Add(layout);
+        panel.Controls.Add(layout);
+        return panel;
+    }
+
+    private static void StyleInput(TextBox textBox)
+    {
+        textBox.BackColor = ColorTranslator.FromHtml("#0F172A");
+        textBox.ForeColor = Color.White;
+        textBox.BorderStyle = BorderStyle.FixedSingle;
+        textBox.Margin = new Padding(0, 0, 0, 10);
+        if (!textBox.Multiline)
+        {
+            textBox.Height = 34;
+        }
     }
 
     private async Task AttemptLoginAsync()

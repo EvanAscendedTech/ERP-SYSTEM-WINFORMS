@@ -9,6 +9,8 @@ public class ModernButton : Button
 
     public int CornerRadius { get; set; } = 5;
 
+    public bool IsActive { get; set; }
+
     public Color OverrideBaseColor { get; set; } = ColorTranslator.FromHtml("#3A96DD");
 
     public Color OverrideBorderColor { get; set; } = Color.Transparent;
@@ -32,7 +34,7 @@ public class ModernButton : Button
 
     public void ApplyPalette(ThemePalette palette)
     {
-        if (Equals(Tag, "active"))
+        if (Equals(Tag, "active") || IsActive)
         {
             OverrideBaseColor = palette.Accent;
             OverrideBorderColor = palette.Accent;
@@ -87,32 +89,51 @@ public class ModernButton : Button
             return;
         }
 
-        var currentColor = OverrideBaseColor;
-        if (_isHovered)
+        var baseRect = Rectangle.Inflate(rect, -1, -1);
+        if (_isHovered && !_isPressed)
         {
-            currentColor = ChangeBrightness(currentColor, 0.08f);
+            baseRect = Rectangle.Inflate(baseRect, 1, 1);
         }
 
         if (_isPressed)
         {
-            currentColor = ChangeBrightness(currentColor, -0.12f);
-            rect = new Rectangle(rect.X, rect.Y + 1, rect.Width, rect.Height - 1);
+            baseRect = new Rectangle(baseRect.X, baseRect.Y + 1, baseRect.Width, baseRect.Height - 1);
         }
 
-        using var path = CreateRoundedRectangle(rect, CornerRadius);
+        var currentColor = OverrideBaseColor;
+        if (_isHovered)
+        {
+            currentColor = ChangeBrightness(currentColor, 0.12f);
+        }
+
+        if (_isPressed)
+        {
+            currentColor = ChangeBrightness(currentColor, -0.15f);
+        }
+
+        using var path = CreateRoundedRectangle(baseRect, CornerRadius);
         using var background = new SolidBrush(currentColor);
-        using var border = new Pen(OverrideBorderColor, 1F);
+        using var border = new Pen(_isHovered ? ChangeBrightness(OverrideBorderColor, 0.2f) : OverrideBorderColor, _isHovered ? 1.4F : 1F);
 
         pevent.Graphics.FillPath(background, path);
         pevent.Graphics.DrawPath(border, path);
 
+        var textRect = Rectangle.Inflate(baseRect, -10, 0);
         TextRenderer.DrawText(
             pevent.Graphics,
             Text,
             Font,
-            rect,
+            textRect,
             ForeColor,
-            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+        if (_isHovered || IsActive)
+        {
+            var underlineColor = IsActive ? Color.White : ChangeBrightness(ForeColor, -0.1f);
+            using var underlinePen = new Pen(underlineColor, 2F);
+            var underlineY = baseRect.Bottom - 6;
+            pevent.Graphics.DrawLine(underlinePen, baseRect.Left + 18, underlineY, baseRect.Right - 18, underlineY);
+        }
     }
 
     private static GraphicsPath CreateRoundedRectangle(Rectangle bounds, int radius)
