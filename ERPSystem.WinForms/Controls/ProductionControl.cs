@@ -9,14 +9,17 @@ public class ProductionControl : UserControl
     private readonly ProductionRepository _productionRepository;
     private readonly JobFlowService _flowService;
     private readonly Action<string> _openSection;
+    private readonly bool _isAdmin;
     private readonly DataGridView _jobsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
 
-    public ProductionControl(ProductionRepository productionRepository, JobFlowService flowService, Action<string> openSection)
+    public ProductionControl(ProductionRepository productionRepository, JobFlowService flowService, Models.UserAccount currentUser, Action<string> openSection)
     {
         _productionRepository = productionRepository;
         _flowService = flowService;
         _openSection = openSection;
+        _isAdmin = currentUser.Roles.Any(r => string.Equals(r.Name, "Admin", StringComparison.OrdinalIgnoreCase)
+                                           || string.Equals(r.Name, "Administrator", StringComparison.OrdinalIgnoreCase));
         Dock = DockStyle.Fill;
 
         ConfigureGrid();
@@ -27,18 +30,24 @@ public class ProductionControl : UserControl
         var completeButton = new Button { Text = "Complete Production", AutoSize = true };
         var qualityButton = new Button { Text = "Move to Quality", AutoSize = true };
         var openDetailsButton = new Button { Text = "Open Production View", AutoSize = true };
+        var advanceButton = new Button { Text = "Admin: Push Forward", AutoSize = true, Visible = _isAdmin };
+        var rewindButton = new Button { Text = "Admin: Push Backward", AutoSize = true, Visible = _isAdmin };
 
         refreshButton.Click += async (_, _) => await LoadJobsAsync();
         startButton.Click += async (_, _) => await StartSelectedJobAsync();
         completeButton.Click += async (_, _) => await CompleteSelectedJobAsync();
         qualityButton.Click += async (_, _) => await MoveSelectedToQualityAsync();
         openDetailsButton.Click += (_, _) => OpenSelectedProductionWindow();
+        advanceButton.Click += async (_, _) => await AdminMoveSelectedAsync(forward: true);
+        rewindButton.Click += async (_, _) => await AdminMoveSelectedAsync(forward: false);
 
         actionsPanel.Controls.Add(refreshButton);
         actionsPanel.Controls.Add(startButton);
         actionsPanel.Controls.Add(completeButton);
         actionsPanel.Controls.Add(qualityButton);
         actionsPanel.Controls.Add(openDetailsButton);
+        actionsPanel.Controls.Add(advanceButton);
+        actionsPanel.Controls.Add(rewindButton);
 
         Controls.Add(_jobsGrid);
         Controls.Add(actionsPanel);
@@ -72,8 +81,11 @@ public class ProductionControl : UserControl
     private async Task LoadJobsAsync()
     {
         var jobs = await _productionRepository.GetJobsAsync();
-        _jobsGrid.DataSource = jobs.OrderBy(x => x.DueDateUtc).ToList();
-        _feedback.Text = $"Loaded {jobs.Count} production jobs.";
+        var queuedJobs = jobs.Where(x => _flowService.IsInModule(x.JobNumber, JobFlowService.WorkflowModule.Production))
+            .OrderBy(x => x.DueDateUtc)
+            .ToList();
+        _jobsGrid.DataSource = queuedJobs;
+        _feedback.Text = $"Loaded {queuedJobs.Count} production jobs.";
     }
 
     private async Task StartSelectedJobAsync()
@@ -147,5 +159,33 @@ public class ProductionControl : UserControl
 
         window.Controls.Add(details);
         window.ShowDialog(this);
+    }
+
+    private async Task AdminMoveSelectedAsync(bool forward)
+    {
+        if (_jobsGrid.CurrentRow?.DataBoundItem is not ProductionJob selected)
+        {
+            _feedback.Text = "Select a job first.";
+            return;
+        }
+
+        string message;
+        var moved = forward
+            ? _flowService.TryAdvanceModule(selected, out message)
+            : _flowService.TryRewindModule(selected, out message);
+
+        _feedback.Text = message;
+        await LoadJobsAsync();
+
+        if (!moved)
+        {
+            return;
+        }
+
+        var currentModule = _flowService.GetCurrentModule(selected.JobNumber);
+        if (currentModule != JobFlowService.WorkflowModule.Production)
+        {
+            _openSection(currentModule.ToString());
+        }
     }
 }

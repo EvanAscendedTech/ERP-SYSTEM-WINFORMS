@@ -10,15 +10,18 @@ public class InspectionControl : UserControl
     private readonly JobFlowService _flowService;
     private readonly InspectionService _inspectionService;
     private readonly Action<string> _openSection;
+    private readonly bool _isAdmin;
     private readonly DataGridView _jobsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
 
-    public InspectionControl(ProductionRepository productionRepository, JobFlowService flowService, InspectionService inspectionService, Action<string> openSection)
+    public InspectionControl(ProductionRepository productionRepository, JobFlowService flowService, InspectionService inspectionService, Models.UserAccount currentUser, Action<string> openSection)
     {
         _productionRepository = productionRepository;
         _flowService = flowService;
         _inspectionService = inspectionService;
         _openSection = openSection;
+        _isAdmin = currentUser.Roles.Any(r => string.Equals(r.Name, "Admin", StringComparison.OrdinalIgnoreCase)
+                                           || string.Equals(r.Name, "Administrator", StringComparison.OrdinalIgnoreCase));
         Dock = DockStyle.Fill;
 
         ConfigureGrid();
@@ -26,12 +29,18 @@ public class InspectionControl : UserControl
         var actions = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
         var refresh = new Button { Text = "Refresh", AutoSize = true };
         var startAndPass = new Button { Text = "Start + Pass Inspection", AutoSize = true };
+        var advance = new Button { Text = "Admin: Push Forward", AutoSize = true, Visible = _isAdmin };
+        var rewind = new Button { Text = "Admin: Push Backward", AutoSize = true, Visible = _isAdmin };
 
         refresh.Click += async (_, _) => await LoadJobsAsync();
         startAndPass.Click += async (_, _) => await PassSelectedAsync();
+        advance.Click += async (_, _) => await AdminMoveSelectedAsync(forward: true);
+        rewind.Click += async (_, _) => await AdminMoveSelectedAsync(forward: false);
 
         actions.Controls.Add(refresh);
         actions.Controls.Add(startAndPass);
+        actions.Controls.Add(advance);
+        actions.Controls.Add(rewind);
 
         Controls.Add(_jobsGrid);
         Controls.Add(actions);
@@ -71,7 +80,7 @@ public class InspectionControl : UserControl
     private async Task LoadJobsAsync()
     {
         var jobs = await _productionRepository.GetJobsAsync();
-        _jobsGrid.DataSource = jobs.Where(x => _flowService.IsQualityApproved(x.JobNumber)).OrderBy(x => x.JobNumber).ToList();
+        _jobsGrid.DataSource = jobs.Where(x => _flowService.IsInModule(x.JobNumber, JobFlowService.WorkflowModule.Inspection)).OrderBy(x => x.JobNumber).ToList();
         _feedback.Text = "Inspection queue refreshed.";
     }
 
@@ -98,5 +107,28 @@ public class InspectionControl : UserControl
         {
             _openSection("Shipping");
         }
+    }
+
+    private async Task AdminMoveSelectedAsync(bool forward)
+    {
+        if (_jobsGrid.CurrentRow?.DataBoundItem is not ProductionJob selected)
+        {
+            _feedback.Text = "Select a job first.";
+            return;
+        }
+
+        string message;
+        var moved = forward
+            ? _flowService.TryAdvanceModule(selected, out message)
+            : _flowService.TryRewindModule(selected, out message);
+        _feedback.Text = message;
+        await LoadJobsAsync();
+
+        if (!moved)
+        {
+            return;
+        }
+
+        _openSection(_flowService.GetCurrentModule(selected.JobNumber).ToString());
     }
 }

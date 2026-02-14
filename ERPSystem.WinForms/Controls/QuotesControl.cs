@@ -28,17 +28,23 @@ public class QuotesControl : UserControl
         var refreshButton = new Button { Text = "Refresh Active Quotes", AutoSize = true };
         var newQuoteButton = new Button { Text = "Create New Quote", AutoSize = true };
         var openQuotePacketButton = new Button { Text = "Open Quote Packet", AutoSize = true };
+        var editQuoteButton = new Button { Text = "Edit In-Process Quote", AutoSize = true };
+        var deleteQuoteButton = new Button { Text = "Delete In-Process Quote", AutoSize = true };
         var passToProductionButton = new Button { Text = "Pass to Production", AutoSize = true };
 
         refreshButton.Click += async (_, _) => await LoadActiveQuotesAsync();
         newQuoteButton.Click += async (_, _) => await CreateNewQuoteAsync();
         openQuotePacketButton.Click += async (_, _) => await OpenSelectedQuotePacketAsync();
+        editQuoteButton.Click += async (_, _) => await EditSelectedQuoteAsync();
+        deleteQuoteButton.Click += async (_, _) => await DeleteSelectedQuoteAsync();
         passToProductionButton.Click += async (_, _) => await PassSelectedToProductionAsync();
-        _quotesGrid.CellDoubleClick += async (_, _) => await OpenSelectedQuotePacketAsync();
+        _quotesGrid.CellDoubleClick += async (_, _) => await EditSelectedQuoteAsync();
 
         actionsPanel.Controls.Add(refreshButton);
         actionsPanel.Controls.Add(newQuoteButton);
         actionsPanel.Controls.Add(openQuotePacketButton);
+        actionsPanel.Controls.Add(editQuoteButton);
+        actionsPanel.Controls.Add(deleteQuoteButton);
         actionsPanel.Controls.Add(passToProductionButton);
 
         Controls.Add(_quotesGrid);
@@ -116,6 +122,57 @@ public class QuotesControl : UserControl
         else
         {
             _feedback.Text = "Quote packet closed without saving.";
+        }
+    }
+
+    private async Task EditSelectedQuoteAsync()
+    {
+        if (_quotesGrid.CurrentRow?.DataBoundItem is not Quote selected)
+        {
+            _feedback.Text = "Select a quote row first.";
+            return;
+        }
+
+        var fullQuote = await _quoteRepository.GetQuoteAsync(selected.Id);
+        if (fullQuote is null)
+        {
+            _feedback.Text = $"Quote {selected.Id} was not found.";
+            return;
+        }
+
+        if (fullQuote.Status != QuoteStatus.InProgress)
+        {
+            _feedback.Text = "Only in-process quotes can be edited from this screen.";
+            return;
+        }
+
+        using var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing), _currentUser.Username, fullQuote);
+        if (draft.ShowDialog(this) == DialogResult.OK)
+        {
+            _feedback.Text = draft.WasDeleted
+                ? $"Quote {fullQuote.Id} deleted."
+                : $"Quote {fullQuote.Id} updated.";
+            await LoadActiveQuotesAsync();
+        }
+    }
+
+    private async Task DeleteSelectedQuoteAsync()
+    {
+        if (_quotesGrid.CurrentRow?.DataBoundItem is not Quote selected)
+        {
+            _feedback.Text = "Select a quote first.";
+            return;
+        }
+
+        try
+        {
+            await _quoteRepository.DeleteQuoteAsync(selected.Id);
+            _feedback.Text = $"Quote {selected.Id} deleted.";
+            await LoadActiveQuotesAsync();
+        }
+        catch (Exception ex)
+        {
+            _feedback.Text = $"Unable to delete quote: {ex.Message}";
         }
     }
 
