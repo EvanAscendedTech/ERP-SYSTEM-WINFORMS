@@ -1,5 +1,6 @@
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
+using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms.Forms;
 
@@ -9,11 +10,16 @@ public class QuoteDraftForm : Form
     {
         public required QuoteBlobType BlobType { get; init; }
         public required string Title { get; init; }
+        public required Label DropZoneLabel { get; init; }
+        public required DataGridView UploadGrid { get; init; }
+        public required Dictionary<string, int> RowByFilePath { get; init; }
         public List<QuoteBlobAttachment> Attachments { get; } = new();
     }
 
     private readonly QuoteRepository _quoteRepository;
+    private readonly BlobImportService _blobImportService;
     private readonly bool _canViewPricing;
+    private readonly string _uploadedBy;
     private readonly ComboBox _customerPicker = new() { Width = 320, DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox _customerQuoteNumber = new() { Width = 220, PlaceholderText = "Customer quote number" };
     private readonly TextBox _quoteLifecycleId = new() { Width = 220, ReadOnly = true };
@@ -22,11 +28,32 @@ public class QuoteDraftForm : Form
 
     public int CreatedQuoteId { get; private set; }
 
-    public QuoteDraftForm(QuoteRepository quoteRepository, bool canViewPricing)
+    public QuoteDraftForm(QuoteRepository quoteRepository, bool canViewPricing, string uploadedBy)
     {
         _quoteRepository = quoteRepository;
         _canViewPricing = canViewPricing;
+        _uploadedBy = uploadedBy;
         _quoteLifecycleId.Text = GenerateLifecycleQuoteId();
+
+        _blobImportService = new BlobImportService((quoteId, lineItemId, lifecycleId, blobType, fileName, extension, fileSizeBytes, sha256, uploadedByValue, uploadedUtc, blobData) =>
+        {
+            return Task.FromResult(new QuoteBlobAttachment
+            {
+                QuoteId = quoteId,
+                LineItemId = lineItemId,
+                LifecycleId = lifecycleId,
+                BlobType = blobType,
+                FileName = fileName,
+                Extension = extension,
+                ContentType = extension,
+                FileSizeBytes = fileSizeBytes,
+                Sha256 = sha256,
+                UploadedBy = uploadedByValue,
+                UploadedUtc = uploadedUtc,
+                BlobData = blobData
+            });
+        });
+        _blobImportService.UploadProgressChanged += OnBlobUploadProgressChanged;
 
         Text = $"New Quote Draft - {_quoteLifecycleId.Text}";
         Width = 1200;
@@ -68,6 +95,16 @@ public class QuoteDraftForm : Form
         _ = LoadCustomersAsync();
     }
 
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _blobImportService.UploadProgressChanged -= OnBlobUploadProgressChanged;
+        }
+
+        base.Dispose(disposing);
+    }
+
     private static string GenerateLifecycleQuoteId()
     {
         return $"Q-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()}";
@@ -102,9 +139,9 @@ public class QuoteDraftForm : Form
         }
     }
 
-    private static Control BuildLineItemCard(int lineIndex, bool canViewPricing)
+    private Control BuildLineItemCard(int lineIndex, bool canViewPricing)
     {
-        var group = new GroupBox { Text = $"Line Item {lineIndex}", Width = 1100, Height = 390 };
+        var group = new GroupBox { Text = $"Line Item {lineIndex}", Width = 1100, Height = 420 };
         var container = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -143,103 +180,271 @@ public class QuoteDraftForm : Form
         return group;
     }
 
-    private static Control BuildBlobUploadSection(string title, QuoteBlobType blobType)
+    private Control BuildBlobUploadSection(string title, QuoteBlobType blobType)
     {
+        var uploadGrid = new DataGridView
+        {
+            Width = 312,
+            Height = 188,
+            Top = 108,
+            Left = 6,
+            AllowUserToAddRows = false,
+            AllowUserToDeleteRows = false,
+            ReadOnly = true,
+            RowHeadersVisible = false,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            MultiSelect = false
+        };
+
+        uploadGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "FileName", HeaderText = "File", Width = 150 });
+        uploadGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Status", Width = 80 });
+        uploadGrid.Columns.Add(new DataGridViewButtonColumn
+        {
+            Name = "Remove",
+            HeaderText = "",
+            Text = "Remove",
+            UseColumnTextForButtonValue = true,
+            Width = 70
+        });
+
+        var dropZone = new Label
+        {
+            Text = "Click or drag files here",
+            AutoSize = false,
+            Width = 312,
+            Height = 58,
+            TextAlign = ContentAlignment.MiddleCenter,
+            BorderStyle = BorderStyle.FixedSingle,
+            Cursor = Cursors.Hand,
+            Top = 26,
+            Left = 6,
+            AllowDrop = true
+        };
+
         var state = new BlobUploadSectionState
         {
             BlobType = blobType,
-            Title = title
+            Title = title,
+            DropZoneLabel = dropZone,
+            UploadGrid = uploadGrid,
+            RowByFilePath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         };
 
         var panel = new Panel
         {
             Width = 330,
-            Height = 180,
+            Height = 302,
             BorderStyle = BorderStyle.FixedSingle,
             Padding = new Padding(6),
             Tag = state
         };
 
         var sectionTitle = new Label { Text = title, AutoSize = true, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) };
-        var dropZone = new Label
-        {
-            Text = "Click to browse files",
-            AutoSize = false,
-            Width = 312,
-            Height = 40,
-            TextAlign = ContentAlignment.MiddleCenter,
-            BorderStyle = BorderStyle.FixedSingle,
-            Cursor = Cursors.Hand,
-            Top = 26,
-            Left = 6
-        };
 
         var uploadedLabel = new Label
         {
             Text = "Uploaded files:",
             AutoSize = true,
-            Top = 74,
+            Top = 88,
             Left = 6
         };
 
-        var uploadsList = new ListBox
-        {
-            Width = 312,
-            Height = 88,
-            Top = 92,
-            Left = 6,
-            Tag = state
-        };
-
-        void AddFiles(IEnumerable<string> files)
-        {
-            foreach (var file in files)
-            {
-                if (!File.Exists(file))
-                {
-                    continue;
-                }
-
-                state.Attachments.Add(new QuoteBlobAttachment
-                {
-                    BlobType = blobType,
-                    FileName = Path.GetFileName(file),
-                    ContentType = Path.GetExtension(file),
-                    BlobData = File.ReadAllBytes(file),
-                    UploadedUtc = DateTime.UtcNow
-                });
-                uploadsList.Items.Add(Path.GetFileName(file));
-            }
-        }
-
-        dropZone.Click += (_, _) =>
-        {
-            using var picker = new OpenFileDialog { Multiselect = true, Title = $"Upload {title}" };
-            if (picker.ShowDialog() != DialogResult.OK)
-            {
-                return;
-            }
-
-            AddFiles(picker.FileNames);
-        };
-
-        uploadsList.DoubleClick += (_, _) => OpenBlobAction(uploadsList);
+        dropZone.Click += async (_, _) => await BrowseAndQueueAsync(state);
+        dropZone.DragEnter += DropZoneOnDragEnter;
+        dropZone.DragDrop += async (_, e) => await DropZoneOnDragDropAsync(state, e);
+        uploadGrid.CellDoubleClick += (_, e) => OpenBlobAction(state, e.RowIndex);
+        uploadGrid.CellContentClick += async (_, e) => await RemoveBlobAsync(state, e);
 
         panel.Controls.Add(sectionTitle);
         panel.Controls.Add(dropZone);
         panel.Controls.Add(uploadedLabel);
-        panel.Controls.Add(uploadsList);
+        panel.Controls.Add(uploadGrid);
         return panel;
     }
 
-    private static void OpenBlobAction(ListBox uploadsList)
+    private async Task BrowseAndQueueAsync(BlobUploadSectionState state)
     {
-        if (uploadsList.Tag is not BlobUploadSectionState state || uploadsList.SelectedIndex < 0 || uploadsList.SelectedIndex >= state.Attachments.Count)
+        try
+        {
+            using var picker = new OpenFileDialog
+            {
+                Multiselect = true,
+                Title = $"Upload {state.Title}",
+                Filter = "PDF files (*.pdf)|*.pdf|STEP files (*.step;*.stp)|*.step;*.stp|IGES files (*.iges;*.igs)|*.iges;*.igs|All files (*.*)|*.*"
+            };
+
+            if (picker.ShowDialog(this) != DialogResult.OK)
+            {
+                return;
+            }
+
+            await EnqueueFilesForSectionAsync(state, picker.FileNames);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Unable to select files: {ex.Message}", "File Upload", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void DropZoneOnDragEnter(object? sender, DragEventArgs e)
+    {
+        if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true)
+        {
+            e.Effect = DragDropEffects.Copy;
+            return;
+        }
+
+        e.Effect = DragDropEffects.None;
+    }
+
+    private async Task DropZoneOnDragDropAsync(BlobUploadSectionState state, DragEventArgs e)
+    {
+        try
+        {
+            if (e.Data?.GetData(DataFormats.FileDrop) is not string[] files)
+            {
+                return;
+            }
+
+            await EnqueueFilesForSectionAsync(state, files);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Unable to import dropped files: {ex.Message}", "File Upload", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private async Task EnqueueFilesForSectionAsync(BlobUploadSectionState state, IEnumerable<string> filePaths)
+    {
+        var files = filePaths.Where(File.Exists).ToList();
+        if (files.Count == 0)
         {
             return;
         }
 
-        var blob = state.Attachments[uploadsList.SelectedIndex];
+        EnsureRowsForFiles(state, files);
+
+        var results = await _blobImportService.EnqueueFilesAsync(
+            quoteId: 0,
+            lineItemId: 0,
+            lifecycleId: _quoteLifecycleId.Text,
+            blobType: state.BlobType,
+            filePaths: files,
+            uploadedBy: _uploadedBy);
+
+        foreach (var result in results)
+        {
+            if (result.IsSuccess && result.Attachment is not null)
+            {
+                state.Attachments.Add(result.Attachment);
+            }
+            else if (!result.IsSuccess)
+            {
+                MessageBox.Show($"Failed to upload {result.FileName}: {result.ErrorMessage}", "File Upload", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+    }
+
+    private static void EnsureRowsForFiles(BlobUploadSectionState state, IEnumerable<string> files)
+    {
+        foreach (var file in files)
+        {
+            if (state.RowByFilePath.ContainsKey(file))
+            {
+                continue;
+            }
+
+            var rowIndex = state.UploadGrid.Rows.Add(Path.GetFileName(file), BlobUploadStatus.Queued.ToString());
+            state.RowByFilePath[file] = rowIndex;
+            state.UploadGrid.Rows[rowIndex].Tag = file;
+        }
+    }
+
+    private void OnBlobUploadProgressChanged(object? sender, BlobUploadProgressEventArgs e)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(() => OnBlobUploadProgressChanged(sender, e)));
+            return;
+        }
+
+        foreach (var state in _lineItemsPanel.Controls
+                     .OfType<GroupBox>()
+                     .SelectMany(group => group.Controls.OfType<TableLayoutPanel>())
+                     .SelectMany(table => table.Controls.OfType<FlowLayoutPanel>())
+                     .SelectMany(flow => flow.Controls.OfType<Panel>())
+                     .Select(panel => panel.Tag)
+                     .OfType<BlobUploadSectionState>())
+        {
+            if (!state.RowByFilePath.TryGetValue(e.FilePath, out var rowIndex) || rowIndex < 0 || rowIndex >= state.UploadGrid.Rows.Count)
+            {
+                continue;
+            }
+
+            state.UploadGrid.Rows[rowIndex].Cells[1].Value = e.Status.ToString();
+            if (e.Status == BlobUploadStatus.Failed && !string.IsNullOrWhiteSpace(e.ErrorMessage))
+            {
+                state.UploadGrid.Rows[rowIndex].Cells[1].Value = $"Failed";
+                state.UploadGrid.Rows[rowIndex].ErrorText = e.ErrorMessage;
+            }
+        }
+    }
+
+    private async Task RemoveBlobAsync(BlobUploadSectionState state, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex < 0)
+        {
+            return;
+        }
+
+        if (!string.Equals(state.UploadGrid.Columns[e.ColumnIndex].Name, "Remove", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (e.RowIndex >= state.UploadGrid.Rows.Count)
+        {
+            return;
+        }
+
+        var filePath = state.UploadGrid.Rows[e.RowIndex].Tag as string;
+        var fileName = state.UploadGrid.Rows[e.RowIndex].Cells[0].Value?.ToString() ?? string.Empty;
+        var attachment = state.Attachments.FirstOrDefault(item => string.Equals(item.FileName, fileName, StringComparison.OrdinalIgnoreCase));
+
+        if (attachment is not null && attachment.Id > 0)
+        {
+            try
+            {
+                await _quoteRepository.DeleteQuoteLineItemFileAsync(attachment.Id);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Unable to remove file: {ex.Message}", "File Upload", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+        }
+
+        if (filePath is not null)
+        {
+            state.RowByFilePath.Remove(filePath);
+        }
+
+        if (attachment is not null)
+        {
+            state.Attachments.Remove(attachment);
+        }
+
+        state.UploadGrid.Rows.RemoveAt(e.RowIndex);
+    }
+
+    private static void OpenBlobAction(BlobUploadSectionState state, int rowIndex)
+    {
+        if (rowIndex < 0 || rowIndex >= state.UploadGrid.Rows.Count || rowIndex >= state.Attachments.Count)
+        {
+            return;
+        }
+
+        var blob = state.Attachments[rowIndex];
         var isPdf = string.Equals(Path.GetExtension(blob.FileName), ".pdf", StringComparison.OrdinalIgnoreCase);
 
         if (isPdf)
@@ -332,8 +537,11 @@ public class QuoteDraftForm : Form
 
         foreach (GroupBox item in _lineItemsPanel.Controls.OfType<GroupBox>())
         {
-            var panel = item.Controls.OfType<FlowLayoutPanel>().First();
-            var textboxes = panel.Controls.OfType<TextBox>().ToList();
+            var table = item.Controls.OfType<TableLayoutPanel>().First();
+            var fields = table.Controls.OfType<FlowLayoutPanel>().First();
+            var uploadFlow = table.Controls.OfType<FlowLayoutPanel>().Skip(1).First();
+
+            var textboxes = fields.Controls.OfType<TextBox>().ToList();
             var description = textboxes.FirstOrDefault()?.Text;
             var priceText = textboxes.FirstOrDefault(t => t.Name == "UnitPrice")?.Text;
 
@@ -346,7 +554,7 @@ public class QuoteDraftForm : Form
                 Notes = $"Customer quote #: {_customerQuoteNumber.Text.Trim()}"
             };
 
-            line.BlobAttachments = panel.Controls.OfType<Panel>()
+            line.BlobAttachments = uploadFlow.Controls.OfType<Panel>()
                 .Select(control => control.Tag)
                 .OfType<BlobUploadSectionState>()
                 .SelectMany(section => section.Attachments)
@@ -355,8 +563,15 @@ public class QuoteDraftForm : Form
             quote.LineItems.Add(line);
         }
 
-        CreatedQuoteId = await _quoteRepository.SaveQuoteAsync(quote);
-        DialogResult = DialogResult.OK;
-        Close();
+        try
+        {
+            CreatedQuoteId = await _quoteRepository.SaveQuoteAsync(quote);
+            DialogResult = DialogResult.OK;
+            Close();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to save quote: {ex.Message}", "Quote", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 }

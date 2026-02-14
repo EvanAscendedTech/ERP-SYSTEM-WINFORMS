@@ -69,7 +69,7 @@ public class QuotesControl : UserControl
 
     private async Task CreateNewQuoteAsync()
     {
-        var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing));
+        var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing), _currentUser.Username);
         if (draft.ShowDialog(this) == DialogResult.OK)
         {
             _feedback.Text = $"Created quote {draft.CreatedQuoteId}.";
