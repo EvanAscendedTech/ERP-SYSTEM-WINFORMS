@@ -113,6 +113,51 @@ public class QualityControl : UserControl, IRealtimeDataControl
         _openSection(_flowService.GetCurrentModule(selected.JobNumber).ToString());
     }
 
+
+    public async Task<bool> OpenFromDashboardAsync(string jobNumber, bool openDetails)
+    {
+        await LoadJobsAsync();
+
+        var selectedJob = SelectJobRow(jobNumber);
+        if (selectedJob is null)
+        {
+            _feedback.Text = $"Job {jobNumber} is not currently in the Quality queue.";
+            return false;
+        }
+
+        if (openDetails)
+        {
+            ShowJobDetails(selectedJob, "Quality");
+        }
+
+        return true;
+    }
+
+    private ProductionJob? SelectJobRow(string jobNumber)
+    {
+        foreach (DataGridViewRow row in _jobsGrid.Rows)
+        {
+            if (row.DataBoundItem is ProductionJob job && string.Equals(job.JobNumber, jobNumber, StringComparison.OrdinalIgnoreCase))
+            {
+                row.Selected = true;
+                _jobsGrid.CurrentCell = row.Cells[0];
+                _jobsGrid.FirstDisplayedScrollingRowIndex = row.Index;
+                return job;
+            }
+        }
+
+        return null;
+    }
+
+    private void ShowJobDetails(ProductionJob job, string module)
+    {
+        MessageBox.Show(this,
+            $"{module} snapshot details\n\nJob: {job.JobNumber}\nProduct: {job.ProductName}\nStatus: {job.Status}",
+            $"{module} - {job.JobNumber}",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+    }
+
     public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => LoadJobsAsync();
 
 }

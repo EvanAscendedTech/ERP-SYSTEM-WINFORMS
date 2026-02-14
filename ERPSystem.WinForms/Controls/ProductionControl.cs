@@ -189,6 +189,42 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         }
     }
 
+
+    public async Task<bool> OpenFromDashboardAsync(string jobNumber, bool openDetails)
+    {
+        await LoadJobsAsync();
+
+        var selected = SelectJobRow(jobNumber);
+        if (!selected)
+        {
+            _feedback.Text = $"Job {jobNumber} is not currently in the Production queue.";
+            return false;
+        }
+
+        if (openDetails)
+        {
+            OpenSelectedProductionWindow();
+        }
+
+        return true;
+    }
+
+    private bool SelectJobRow(string jobNumber)
+    {
+        foreach (DataGridViewRow row in _jobsGrid.Rows)
+        {
+            if (row.DataBoundItem is ProductionJob job && string.Equals(job.JobNumber, jobNumber, StringComparison.OrdinalIgnoreCase))
+            {
+                row.Selected = true;
+                _jobsGrid.CurrentCell = row.Cells[0];
+                _jobsGrid.FirstDisplayedScrollingRowIndex = row.Index;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => LoadJobsAsync();
 
 }

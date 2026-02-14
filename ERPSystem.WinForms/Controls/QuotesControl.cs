@@ -214,6 +214,44 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         _openSection("Production");
     }
 
+
+    public async Task<bool> OpenFromDashboardAsync(int quoteId, bool openDetails)
+    {
+        await LoadActiveQuotesAsync();
+
+        var selected = SelectQuoteRow(quoteId);
+        if (!selected)
+        {
+            _feedback.Text = $"Quote {quoteId} is not currently in the active queue.";
+            return false;
+        }
+
+        if (!openDetails)
+        {
+            _feedback.Text = $"Quote {quoteId} selected from dashboard snapshot.";
+            return true;
+        }
+
+        await OpenSelectedQuotePacketAsync();
+        return true;
+    }
+
+    private bool SelectQuoteRow(int quoteId)
+    {
+        foreach (DataGridViewRow row in _quotesGrid.Rows)
+        {
+            if (row.DataBoundItem is Quote quote && quote.Id == quoteId)
+            {
+                row.Selected = true;
+                _quotesGrid.CurrentCell = row.Cells[0];
+                _quotesGrid.FirstDisplayedScrollingRowIndex = row.Index;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => LoadActiveQuotesAsync();
 
 }
