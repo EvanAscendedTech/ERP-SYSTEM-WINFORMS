@@ -1,3 +1,4 @@
+using ERPSystem.WinForms;
 using ERPSystem.WinForms.Controls;
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Services;
@@ -223,6 +224,47 @@ public partial class ERPMainForm : Form
         };
     }
 
+    private void OpenDashboardTarget(DashboardNavigationTarget target)
+    {
+        LoadSection(target.SectionKey);
+
+        if (!target.OpenDetails)
+        {
+            return;
+        }
+
+        BeginInvoke(async () => await OpenSectionDetailsAsync(target));
+    }
+
+    private async Task OpenSectionDetailsAsync(DashboardNavigationTarget target)
+    {
+        if (mainContentPanel.Controls.Count == 0)
+        {
+            return;
+        }
+
+        var activeControl = mainContentPanel.Controls[0];
+
+        switch (activeControl)
+        {
+            case Controls.QuotesControl quotesControl when target.QuoteId.HasValue:
+                await quotesControl.OpenFromDashboardAsync(target.QuoteId.Value, openDetails: true);
+                break;
+            case ProductionControl productionControl when !string.IsNullOrWhiteSpace(target.JobNumber):
+                await productionControl.OpenFromDashboardAsync(target.JobNumber, openDetails: true);
+                break;
+            case QualityControl qualityControl when !string.IsNullOrWhiteSpace(target.JobNumber):
+                await qualityControl.OpenFromDashboardAsync(target.JobNumber, openDetails: true);
+                break;
+            case InspectionControl inspectionControl when !string.IsNullOrWhiteSpace(target.JobNumber):
+                await inspectionControl.OpenFromDashboardAsync(target.JobNumber, openDetails: true);
+                break;
+            case ShippingControl shippingControl when !string.IsNullOrWhiteSpace(target.JobNumber):
+                await shippingControl.OpenFromDashboardAsync(target.JobNumber, openDetails: true);
+                break;
+        }
+    }
+
     private void LoadSection(string key)
     {
         var control = CreateControlForKey(key);
@@ -241,7 +283,7 @@ public partial class ERPMainForm : Form
     {
         return key switch
         {
-            "Dashboard" => new DashboardControl(_quoteRepo, _prodRepo, _jobFlow, LoadSection),
+            "Dashboard" => new DashboardControl(_quoteRepo, _prodRepo, _jobFlow, OpenDashboardTarget),
             "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, _currentUser, LoadSection),
             "Production" => new ProductionControl(_prodRepo, _jobFlow, _currentUser, LoadSection),
             "CRM" => new CRMControl(_quoteRepo),

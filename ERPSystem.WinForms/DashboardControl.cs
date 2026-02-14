@@ -4,6 +4,8 @@ using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms;
 
+public sealed record DashboardNavigationTarget(string SectionKey, int? QuoteId = null, string? JobNumber = null, bool OpenDetails = false);
+
 public sealed class DashboardControl : UserControl
 {
     private const int QuoteExpiryDays = 30;
@@ -13,7 +15,7 @@ public sealed class DashboardControl : UserControl
     private readonly QuoteRepository _quoteRepository;
     private readonly ProductionRepository _productionRepository;
     private readonly JobFlowService _jobFlowService;
-    private readonly Action<string> _openSection;
+    private readonly Action<DashboardNavigationTarget> _openTarget;
 
     private readonly FlowLayoutPanel _glanceCards = new()
     {
@@ -42,11 +44,16 @@ public sealed class DashboardControl : UserControl
     };
 
     public DashboardControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, JobFlowService jobFlowService, Action<string> openSection)
+        : this(quoteRepository, productionRepository, jobFlowService, target => openSection(target.SectionKey))
+    {
+    }
+
+    public DashboardControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, JobFlowService jobFlowService, Action<DashboardNavigationTarget> openTarget)
     {
         _quoteRepository = quoteRepository;
         _productionRepository = productionRepository;
         _jobFlowService = jobFlowService;
-        _openSection = openSection;
+        _openTarget = openTarget;
 
         DoubleBuffered = true;
         Dock = DockStyle.Fill;
@@ -139,8 +146,9 @@ public sealed class DashboardControl : UserControl
 
         var productionInProgress = jobs.Where(j => j.Status == ProductionJobStatus.InProgress).OrderBy(j => j.DueDateUtc).ToList();
         var productionNearDue = productionInProgress.Where(IsJobNearDueDate).ToList();
-        var qualityQueue = jobs.Where(j => j.Status == ProductionJobStatus.Completed && !_jobFlowService.IsQualityApproved(j.JobNumber)).OrderBy(j => j.JobNumber).ToList();
-        var inspectionQueue = jobs.Where(j => _jobFlowService.IsQualityApproved(j.JobNumber)).OrderBy(j => j.JobNumber).ToList();
+        var qualityQueue = jobs.Where(j => _jobFlowService.IsInModule(j.JobNumber, JobFlowService.WorkflowModule.Quality)).OrderBy(j => j.JobNumber).ToList();
+        var inspectionQueue = jobs.Where(j => _jobFlowService.IsInModule(j.JobNumber, JobFlowService.WorkflowModule.Inspection)).OrderBy(j => j.JobNumber).ToList();
+        var shippingQueue = jobs.Where(j => _jobFlowService.IsInModule(j.JobNumber, JobFlowService.WorkflowModule.Shipping)).OrderBy(j => j.JobNumber).ToList();
         _glanceCards.SuspendLayout();
         _glanceCards.Controls.Clear();
         _glanceCards.Controls.Add(CreateGlanceCard("Quotes in progress", inProgressQuotes.Count.ToString()));
@@ -149,15 +157,18 @@ public sealed class DashboardControl : UserControl
         _glanceCards.Controls.Add(CreateGlanceCard("Jobs near/over due", productionNearDue.Count.ToString()));
         _glanceCards.Controls.Add(CreateGlanceCard("Quality queue", qualityQueue.Count.ToString()));
         _glanceCards.Controls.Add(CreateGlanceCard("Inspection queue", inspectionQueue.Count.ToString()));
+        _glanceCards.Controls.Add(CreateGlanceCard("Shipping queue", shippingQueue.Count.ToString()));
         _glanceCards.ResumeLayout();
 
         _workQueues.SuspendLayout();
         _workQueues.Controls.Clear();
+        _workQueues.Controls.Add(CreateWorkSnapshotPanel(inProgressQuotes, productionInProgress, qualityQueue, inspectionQueue, shippingQueue));
         _workQueues.Controls.Add(CreateQuoteQueuePanel("In-progress quotes", inProgressQuotes, includeExpiryWarning: false));
         _workQueues.Controls.Add(CreateQuoteQueuePanel("Quotes about to expire", quoteExpiringSoon, includeExpiryWarning: true));
         _workQueues.Controls.Add(CreateProductionQueuePanel("In-progress production orders", productionInProgress));
         _workQueues.Controls.Add(CreateQualityQueuePanel("Quality queue", qualityQueue));
         _workQueues.Controls.Add(CreateInspectionQueuePanel("Inspection queue", inspectionQueue));
+        _workQueues.Controls.Add(CreateShippingQueuePanel("Shipping queue", shippingQueue));
         _workQueues.Controls.Add(CreateStatusBarPanel("Job status distribution", jobs));
         _workQueues.ResumeLayout();
 
@@ -205,6 +216,76 @@ public sealed class DashboardControl : UserControl
             .ToList();
 
         return CreateQueueCard(title, details, "Inspection", jobs.Count > 0);
+    }
+
+    private Panel CreateShippingQueuePanel(string title, IReadOnlyCollection<ProductionJob> jobs)
+    {
+        var details = jobs.Take(20)
+            .Select(job => $"{job.JobNumber} • {job.ProductName} • Ready to ship")
+            .ToList();
+
+        return CreateQueueCard(title, details, "Shipping", jobs.Count > 0);
+    }
+
+    private Panel CreateWorkSnapshotPanel(
+        IReadOnlyCollection<Quote> inProgressQuotes,
+        IReadOnlyCollection<ProductionJob> productionInProgress,
+        IReadOnlyCollection<ProductionJob> qualityQueue,
+        IReadOnlyCollection<ProductionJob> inspectionQueue,
+        IReadOnlyCollection<ProductionJob> shippingQueue)
+    {
+        var snapshotItems = new List<(string Text, DashboardNavigationTarget Target)>();
+
+        snapshotItems.AddRange(inProgressQuotes.Take(3).Select(quote =>
+            ($"QUOTES • Q{quote.Id} • {quote.CustomerName}", new DashboardNavigationTarget("Quotes", quote.Id, OpenDetails: true))));
+
+        snapshotItems.AddRange(productionInProgress.Take(3).Select(job =>
+            ($"PRODUCTION • {job.JobNumber} • {job.ProductName}", new DashboardNavigationTarget("Production", JobNumber: job.JobNumber, OpenDetails: true))));
+
+        snapshotItems.AddRange(qualityQueue.Take(3).Select(job =>
+            ($"QUALITY • {job.JobNumber} • {job.ProductName}", new DashboardNavigationTarget("Quality", JobNumber: job.JobNumber, OpenDetails: true))));
+
+        snapshotItems.AddRange(inspectionQueue.Take(3).Select(job =>
+            ($"INSPECTION • {job.JobNumber} • {job.ProductName}", new DashboardNavigationTarget("Inspection", JobNumber: job.JobNumber, OpenDetails: true))));
+
+        snapshotItems.AddRange(shippingQueue.Take(3).Select(job =>
+            ($"SHIPPING • {job.JobNumber} • {job.ProductName}", new DashboardNavigationTarget("Shipping", JobNumber: job.JobNumber, OpenDetails: true))));
+
+        var card = CreateBasePanel();
+        card.Height = 220;
+
+        var title = new Label
+        {
+            Text = "WIP Snapshot (Quotes / Production / Quality / Inspection / Shipping)",
+            Dock = DockStyle.Top,
+            Height = 28,
+            Font = new Font("Segoe UI", 10.5F, FontStyle.Bold)
+        };
+
+        var list = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false, HorizontalScrollbar = true };
+        if (snapshotItems.Count == 0)
+        {
+            list.Items.Add("No active work in progress.");
+        }
+        else
+        {
+            foreach (var item in snapshotItems)
+            {
+                list.Items.Add(new SnapshotListItem(item.Text, item.Target));
+            }
+        }
+
+        list.DisplayMember = nameof(SnapshotListItem.Text);
+        list.DoubleClick += (_, _) => OpenSnapshotItem(list);
+
+        var contextMenu = new ContextMenuStrip();
+        var openMenuItem = contextMenu.Items.Add("Open");
+        openMenuItem.Click += (_, _) => OpenSnapshotItem(list);
+        list.ContextMenuStrip = contextMenu;
+
+        card.Controls.Add(list);
+        card.Controls.Add(title);
+        return card;
     }
 
     private Panel CreateStatusBarPanel(string title, IReadOnlyCollection<ProductionJob> jobs)
@@ -307,7 +388,7 @@ public sealed class DashboardControl : UserControl
             AutoSize = true,
             LinkBehavior = LinkBehavior.HoverUnderline
         };
-        openButton.LinkClicked += (_, _) => _openSection(sectionKey);
+        openButton.LinkClicked += (_, _) => _openTarget(new DashboardNavigationTarget(sectionKey));
 
         titleRow.Controls.Add(titleLabel, 0, 0);
         titleRow.Controls.Add(openButton, 1, 0);
@@ -331,7 +412,7 @@ public sealed class DashboardControl : UserControl
             list.Items.Add("No items to show.");
         }
 
-        list.DoubleClick += (_, _) => _openSection(sectionKey);
+        list.DoubleClick += (_, _) => _openTarget(new DashboardNavigationTarget(sectionKey));
 
         panel.Controls.Add(list);
         panel.Controls.Add(titleRow);
@@ -388,5 +469,26 @@ public sealed class DashboardControl : UserControl
     {
         var remaining = job.DueDateUtc - DateTime.UtcNow;
         return remaining.TotalDays <= ProductionDueSoonDays;
+    }
+
+    private void OpenSnapshotItem(ListBox list)
+    {
+        if (list.SelectedItem is SnapshotListItem item)
+        {
+            _openTarget(item.Target);
+        }
+    }
+
+    private sealed class SnapshotListItem
+    {
+        public SnapshotListItem(string text, DashboardNavigationTarget target)
+        {
+            Text = text;
+            Target = target;
+        }
+
+        public string Text { get; }
+
+        public DashboardNavigationTarget Target { get; }
     }
 }
