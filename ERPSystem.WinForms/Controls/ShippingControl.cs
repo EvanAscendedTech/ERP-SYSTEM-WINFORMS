@@ -8,13 +8,18 @@ public class ShippingControl : UserControl
 {
     private readonly ProductionRepository _productionRepository;
     private readonly JobFlowService _flowService;
+    private readonly Action<string> _openSection;
+    private readonly bool _isAdmin;
     private readonly DataGridView _jobsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
 
-    public ShippingControl(ProductionRepository productionRepository, JobFlowService flowService)
+    public ShippingControl(ProductionRepository productionRepository, JobFlowService flowService, Models.UserAccount currentUser, Action<string> openSection)
     {
         _productionRepository = productionRepository;
         _flowService = flowService;
+        _openSection = openSection;
+        _isAdmin = currentUser.Roles.Any(r => string.Equals(r.Name, "Admin", StringComparison.OrdinalIgnoreCase)
+                                           || string.Equals(r.Name, "Administrator", StringComparison.OrdinalIgnoreCase));
         Dock = DockStyle.Fill;
 
         ConfigureGrid();
@@ -22,12 +27,15 @@ public class ShippingControl : UserControl
         var actions = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
         var refresh = new Button { Text = "Refresh", AutoSize = true };
         var markShipped = new Button { Text = "Mark Shipped", AutoSize = true };
+        var rewind = new Button { Text = "Admin: Push Backward", AutoSize = true, Visible = _isAdmin };
 
         refresh.Click += async (_, _) => await LoadJobsAsync();
         markShipped.Click += async (_, _) => await MarkSelectedShippedAsync();
+        rewind.Click += async (_, _) => await AdminMoveBackwardAsync();
 
         actions.Controls.Add(refresh);
         actions.Controls.Add(markShipped);
+        actions.Controls.Add(rewind);
 
         Controls.Add(_jobsGrid);
         Controls.Add(actions);
@@ -67,7 +75,7 @@ public class ShippingControl : UserControl
     private async Task LoadJobsAsync()
     {
         var jobs = await _productionRepository.GetJobsAsync();
-        _jobsGrid.DataSource = jobs.Where(x => _flowService.IsInspectionPassed(x.JobNumber)).OrderBy(x => x.JobNumber).ToList();
+        _jobsGrid.DataSource = jobs.Where(x => _flowService.IsInModule(x.JobNumber, JobFlowService.WorkflowModule.Shipping)).OrderBy(x => x.JobNumber).ToList();
         _feedback.Text = "Shipping queue refreshed.";
     }
 
@@ -82,5 +90,23 @@ public class ShippingControl : UserControl
         _flowService.TryMarkShipped(selected, out var message);
         _feedback.Text = message;
         await LoadJobsAsync();
+    }
+
+    private async Task AdminMoveBackwardAsync()
+    {
+        if (_jobsGrid.CurrentRow?.DataBoundItem is not ProductionJob selected)
+        {
+            _feedback.Text = "Select a job first.";
+            return;
+        }
+
+        var moved = _flowService.TryRewindModule(selected, out var message);
+        _feedback.Text = message;
+        await LoadJobsAsync();
+
+        if (moved)
+        {
+            _openSection(_flowService.GetCurrentModule(selected.JobNumber).ToString());
+        }
     }
 }

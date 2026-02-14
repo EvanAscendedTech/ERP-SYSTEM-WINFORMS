@@ -916,6 +916,23 @@ public class QuoteRepository
         };
     }
 
+    public async Task DeleteQuoteAsync(int quoteId)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM Quotes WHERE Id = $id AND Status = $inProgressStatus;";
+        command.Parameters.AddWithValue("$id", quoteId);
+        command.Parameters.AddWithValue("$inProgressStatus", (int)QuoteStatus.InProgress);
+
+        var affected = await command.ExecuteNonQueryAsync();
+        if (affected == 0)
+        {
+            throw new InvalidOperationException("Only in-process quotes can be deleted.");
+        }
+    }
+
     public async Task DeleteQuoteLineItemFileAsync(int fileId)
     {
         await using var connection = new SqliteConnection(_connectionString);

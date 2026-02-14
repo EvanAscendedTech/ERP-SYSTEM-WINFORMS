@@ -25,15 +25,18 @@ public class QuoteDraftForm : Form
     private readonly TextBox _quoteLifecycleId = new() { Width = 220, ReadOnly = true };
     private readonly NumericUpDown _lineCount = new() { Minimum = 1, Maximum = 20, Value = 1, Width = 100 };
     private readonly FlowLayoutPanel _lineItemsPanel = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
+    private readonly Quote? _editingQuote;
 
     public int CreatedQuoteId { get; private set; }
+    public bool WasDeleted { get; private set; }
 
-    public QuoteDraftForm(QuoteRepository quoteRepository, bool canViewPricing, string uploadedBy)
+    public QuoteDraftForm(QuoteRepository quoteRepository, bool canViewPricing, string uploadedBy, Quote? editingQuote = null)
     {
         _quoteRepository = quoteRepository;
         _canViewPricing = canViewPricing;
         _uploadedBy = uploadedBy;
-        _quoteLifecycleId.Text = GenerateLifecycleQuoteId();
+        _editingQuote = editingQuote;
+        _quoteLifecycleId.Text = string.IsNullOrWhiteSpace(editingQuote?.LifecycleQuoteId) ? GenerateLifecycleQuoteId() : editingQuote.LifecycleQuoteId;
 
         _blobImportService = new BlobImportService((quoteId, lineItemId, lifecycleId, blobType, fileName, extension, fileSizeBytes, sha256, uploadedByValue, uploadedUtc, blobData) =>
         {
@@ -55,7 +58,7 @@ public class QuoteDraftForm : Form
         });
         _blobImportService.UploadProgressChanged += OnBlobUploadProgressChanged;
 
-        Text = $"New Quote Draft - {_quoteLifecycleId.Text}";
+        Text = _editingQuote is null ? $"New Quote Draft - {_quoteLifecycleId.Text}" : $"Edit In-Process Quote #{_editingQuote.Id} - {_quoteLifecycleId.Text}";
         Width = 1200;
         Height = 760;
         WindowState = FormWindowState.Maximized;
@@ -87,6 +90,13 @@ public class QuoteDraftForm : Form
         saveButton.Click += async (_, _) => await SaveQuoteAsync();
         buttons.Controls.Add(saveButton);
 
+        if (_editingQuote is not null)
+        {
+            var deleteButton = new Button { Text = "Delete Quote", AutoSize = true, BackColor = Color.Firebrick, ForeColor = Color.White };
+            deleteButton.Click += async (_, _) => await DeleteQuoteAsync();
+            buttons.Controls.Add(deleteButton);
+        }
+
         root.Controls.Add(header, 0, 0);
         root.Controls.Add(_lineItemsPanel, 0, 1);
         root.Controls.Add(buttons, 0, 2);
@@ -116,6 +126,53 @@ public class QuoteDraftForm : Form
         _customerPicker.DataSource = customers.ToList();
         _customerPicker.DisplayMember = nameof(Customer.DisplayLabel);
         _customerPicker.ValueMember = nameof(Customer.Id);
+
+        if (_editingQuote is not null)
+        {
+            PopulateFromQuote(_editingQuote);
+        }
+    }
+
+    private void PopulateFromQuote(Quote quote)
+    {
+        _customerPicker.SelectedValue = quote.CustomerId;
+        _quoteLifecycleId.Text = quote.LifecycleQuoteId;
+        _lineCount.Value = Math.Max(1, Math.Min((int)_lineCount.Maximum, quote.LineItems.Count));
+        SyncLineItems((int)_lineCount.Value);
+
+        for (var index = 0; index < quote.LineItems.Count && index < _lineItemsPanel.Controls.Count; index++)
+        {
+            PopulateLineItem((GroupBox)_lineItemsPanel.Controls[index], quote.LineItems[index]);
+        }
+    }
+
+    private void PopulateLineItem(GroupBox group, QuoteLineItem line)
+    {
+        var table = group.Controls.OfType<TableLayoutPanel>().First();
+        var fields = table.Controls.OfType<FlowLayoutPanel>().First();
+        var uploadFlow = table.Controls.OfType<FlowLayoutPanel>().Skip(1).First();
+
+        var textboxes = fields.Controls.OfType<TextBox>().ToList();
+        if (textboxes.Count > 0) textboxes[0].Text = line.Description;
+        if (textboxes.Count > 1) textboxes[1].Text = line.LeadTimeDays.ToString();
+
+        var unitPrice = textboxes.FirstOrDefault(t => t.Name == "UnitPrice");
+        if (unitPrice is not null) unitPrice.Text = line.UnitPrice.ToString();
+
+        if (line.Notes.StartsWith("Customer quote #:", StringComparison.OrdinalIgnoreCase))
+        {
+            _customerQuoteNumber.Text = line.Notes[16..].Trim();
+        }
+
+        foreach (var section in uploadFlow.Controls.OfType<Panel>().Select(p => p.Tag).OfType<BlobUploadSectionState>())
+        {
+            foreach (var attachment in line.BlobAttachments.Where(a => a.BlobType == section.BlobType))
+            {
+                section.Attachments.Add(attachment);
+                var rowIndex = section.UploadGrid.Rows.Add(attachment.FileName, BlobUploadStatus.Completed.ToString());
+                section.UploadGrid.Rows[rowIndex].Tag = attachment.FileName;
+            }
+        }
     }
 
     private void OpenCustomerCreation()
@@ -531,6 +588,32 @@ public class QuoteDraftForm : Form
         previewForm.ShowDialog();
     }
 
+    private async Task DeleteQuoteAsync()
+    {
+        if (_editingQuote is null)
+        {
+            return;
+        }
+
+        var confirm = MessageBox.Show($"Delete in-process quote #{_editingQuote.Id}? This cannot be undone.", "Delete Quote", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            await _quoteRepository.DeleteQuoteAsync(_editingQuote.Id);
+            WasDeleted = true;
+            DialogResult = DialogResult.OK;
+            Close();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to delete quote: {ex.Message}", "Quote", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
     private async Task SaveQuoteAsync()
     {
         if (_customerPicker.SelectedItem is not Customer customer)
@@ -541,11 +624,12 @@ public class QuoteDraftForm : Form
 
         var quote = new Quote
         {
+            Id = _editingQuote?.Id ?? 0,
             CustomerId = customer.Id,
             CustomerName = customer.Name,
             LifecycleQuoteId = _quoteLifecycleId.Text,
-            Status = QuoteStatus.InProgress,
-            CreatedUtc = DateTime.UtcNow,
+            Status = _editingQuote?.Status ?? QuoteStatus.InProgress,
+            CreatedUtc = _editingQuote?.CreatedUtc ?? DateTime.UtcNow,
             LastUpdatedUtc = DateTime.UtcNow
         };
 

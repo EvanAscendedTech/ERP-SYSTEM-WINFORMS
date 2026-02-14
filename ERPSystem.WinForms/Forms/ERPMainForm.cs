@@ -92,11 +92,11 @@ public partial class ERPMainForm : Form
         {
             "Dashboard" => new DashboardControl(_quoteRepo, _prodRepo, _jobFlow, LoadSection),
             "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, _currentUser, LoadSection),
-            "Production" => new ProductionControl(_prodRepo, _jobFlow, LoadSection),
+            "Production" => new ProductionControl(_prodRepo, _jobFlow, _currentUser, LoadSection),
             "CRM" => new CRMControl(_quoteRepo),
-            "Quality" => new QualityControl(_prodRepo, _jobFlow, LoadSection),
-            "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, LoadSection),
-            "Shipping" => new ShippingControl(_prodRepo, _jobFlow),
+            "Quality" => new QualityControl(_prodRepo, _jobFlow, _currentUser, LoadSection),
+            "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, _currentUser, LoadSection),
+            "Shipping" => new ShippingControl(_prodRepo, _jobFlow, _currentUser, LoadSection),
             "Users" => new UsersControl(_userRepo, _currentUser, () => { }),
             "Settings" => new SettingsControl(_settings, canManageSettings: true, companyNameChanged: name => lblAppTitle.Text = $"{name} Command Center"),
             _ => BuildPlaceholder("Not Found", "The requested section is not available.")
