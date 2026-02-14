@@ -28,7 +28,9 @@ public class UserManagementRepository
                 DisplayName TEXT NOT NULL,
                 PasswordHash TEXT NOT NULL,
                 IsActive INTEGER NOT NULL,
-                IconPath TEXT NOT NULL DEFAULT ''
+                IconPath TEXT NOT NULL DEFAULT '',
+                IsOnline INTEGER NOT NULL DEFAULT 0,
+                LastActivityUtc TEXT
             );
 
             CREATE TABLE IF NOT EXISTS AccountRequests (
@@ -58,6 +60,8 @@ public class UserManagementRepository
         await command.ExecuteNonQueryAsync();
 
         await EnsureColumnExistsAsync(connection, "Users", "IconPath", "TEXT NOT NULL DEFAULT ''");
+        await EnsureColumnExistsAsync(connection, "Users", "IsOnline", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "Users", "LastActivityUtc", "TEXT");
     }
 
 
@@ -183,6 +187,7 @@ public class UserManagementRepository
         await using var command = connection.CreateCommand();
         command.CommandText = @"
             SELECT u.Id, u.Username, u.DisplayName, u.PasswordHash, u.IsActive, u.IconPath,
+                   u.IsOnline, u.LastActivityUtc,
                    r.Id, r.Name, r.Permissions
             FROM Users u
             LEFT JOIN UserRoles ur ON ur.UserId = u.Id
@@ -204,29 +209,33 @@ public class UserManagementRepository
                     DisplayName = reader.GetString(2),
                     PasswordHash = reader.GetString(3),
                     IsActive = reader.GetInt32(4) == 1,
-                    IconPath = reader.IsDBNull(5) ? string.Empty : reader.GetString(5)
+                    IconPath = reader.IsDBNull(5) ? string.Empty : reader.GetString(5),
+                    IsOnline = !reader.IsDBNull(6) && reader.GetInt32(6) == 1,
+                    LastActivityUtc = reader.IsDBNull(7)
+                        ? null
+                        : DateTime.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
                 };
                 map[userId] = user;
                 users.Add(user);
             }
 
-            if (reader.IsDBNull(6))
+            if (reader.IsDBNull(8))
             {
                 continue;
             }
 
-            var permissionsText = reader.GetString(8);
+            var permissionsText = reader.GetString(10);
             var permissions = string.IsNullOrWhiteSpace(permissionsText)
                 ? new List<UserPermission>()
                 : permissionsText.Split(',', StringSplitOptions.RemoveEmptyEntries)
                     .Select(int.Parse)
-                    .Select(i => (UserPermission)i)
-                    .ToList();
+                .Select(i => (UserPermission)i)
+                .ToList();
 
             user.Roles.Add(new RoleDefinition
             {
-                Id = reader.GetInt32(6),
-                Name = reader.GetString(7),
+                Id = reader.GetInt32(8),
+                Name = reader.GetString(9),
                 Permissions = permissions
             });
         }
@@ -249,9 +258,51 @@ public class UserManagementRepository
         await using var command = connection.CreateCommand();
         command.CommandText = @"
             UPDATE Users
-            SET IsActive = 1
+            SET IsOnline = $isOnline,
+                LastActivityUtc = $lastActivityUtc
             WHERE Id = $userId;";
+        command.Parameters.AddWithValue("$isOnline", isOnline ? 1 : 0);
+        command.Parameters.AddWithValue("$lastActivityUtc", DateTime.UtcNow.ToString("O"));
         command.Parameters.AddWithValue("$userId", userId);
+        await command.ExecuteNonQueryAsync();
+
+        if (_realtimeDataService is not null)
+        {
+            await _realtimeDataService.PublishChangeAsync("Users", isOnline ? "online" : "offline");
+        }
+    }
+
+    public async Task TouchUserActivityAsync(int userId)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE Users
+            SET IsOnline = 1,
+                LastActivityUtc = $lastActivityUtc
+            WHERE Id = $userId;";
+        command.Parameters.AddWithValue("$lastActivityUtc", DateTime.UtcNow.ToString("O"));
+        command.Parameters.AddWithValue("$userId", userId);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task MarkUsersOfflineByInactivityAsync(TimeSpan inactivityThreshold)
+    {
+        var cutoffUtc = DateTime.UtcNow - inactivityThreshold;
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE Users
+            SET IsOnline = 0
+            WHERE IsOnline = 1
+              AND LastActivityUtc IS NOT NULL
+              AND LastActivityUtc < $cutoffUtc;";
+        command.Parameters.AddWithValue("$cutoffUtc", cutoffUtc.ToString("O"));
         await command.ExecuteNonQueryAsync();
     }
 

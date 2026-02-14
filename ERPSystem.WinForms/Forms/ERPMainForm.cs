@@ -8,6 +8,7 @@ namespace ERPSystem.WinForms.Forms;
 public partial class ERPMainForm : Form
 {
     private static readonly TimeSpan FailSafeInterval = TimeSpan.FromMinutes(2.5);
+    private static readonly TimeSpan OnlineInactivityThreshold = TimeSpan.FromMinutes(5);
 
     private readonly QuoteRepository _quoteRepo;
     private readonly ProductionRepository _prodRepo;
@@ -26,6 +27,7 @@ public partial class ERPMainForm : Form
     private DateTime _lastAutosaveAt;
     private DateTime _lastRefreshAt;
     private DateTime _lastRealtimePollAt;
+    private DateTime _lastPresenceRefreshAt;
     private long _lastSeenRealtimeEventId;
     private bool _syncTickRunning;
     private bool _refreshRunning;
@@ -74,6 +76,7 @@ public partial class ERPMainForm : Form
         _lastAutosaveAt = now;
         _lastRefreshAt = now;
         _lastRealtimePollAt = now;
+        _lastPresenceRefreshAt = DateTime.MinValue;
 
         _ = InitializeRealtimeWatcherAsync();
 
@@ -100,6 +103,13 @@ public partial class ERPMainForm : Form
                     await PollRealtimeChangesAsync();
                 }
 
+                await _userRepo.TouchUserActivityAsync(_currentUser.Id);
+                if ((tickNow - _lastPresenceRefreshAt).TotalSeconds >= 10)
+                {
+                    await RefreshOnlineUsersAsync();
+                    _lastPresenceRefreshAt = tickNow;
+                }
+
                 UpdateSyncClockText(tickNow);
             }
             finally
@@ -110,8 +120,13 @@ public partial class ERPMainForm : Form
 
         UpdateSyncClockText(now);
         _syncClockTimer.Start();
+        _ = RefreshOnlineUsersAsync();
 
-        FormClosed += (_, _) => _syncClockTimer.Stop();
+        FormClosed += async (_, _) =>
+        {
+            _syncClockTimer.Stop();
+            await _userRepo.SetOnlineStatusAsync(_currentUser.Id, false);
+        };
     }
 
     private async Task InitializeRealtimeWatcherAsync()
@@ -203,6 +218,42 @@ public partial class ERPMainForm : Form
         var remaining = $"{countdown.Minutes:D2}:{countdown.Seconds:D2}";
         lblSyncClock.Text = $"Sync in {remaining}";
         lblSaveClock.Text = $"Save in {remaining} • Last sync {_lastRefreshAt:HH:mm:ss}";
+    }
+
+    private async Task RefreshOnlineUsersAsync()
+    {
+        await _userRepo.MarkUsersOfflineByInactivityAsync(OnlineInactivityThreshold);
+        var users = await _userRepo.GetUsersAsync();
+        var onlineUsers = users
+            .Where(user => user.IsOnline)
+            .OrderBy(user => user.DisplayName)
+            .Select(user => $"{user.DisplayName} ({FormatLastActivity(user.LastActivityUtc)})")
+            .ToList();
+
+        lblOnlineUsers.Text = onlineUsers.Count == 0
+            ? "Online: none"
+            : $"Online: {string.Join(" • ", onlineUsers)}";
+    }
+
+    private static string FormatLastActivity(DateTime? lastActivityUtc)
+    {
+        if (!lastActivityUtc.HasValue)
+        {
+            return "active now";
+        }
+
+        var ago = DateTime.UtcNow - lastActivityUtc.Value;
+        if (ago.TotalMinutes < 1)
+        {
+            return "active now";
+        }
+
+        if (ago.TotalHours < 1)
+        {
+            return $"{Math.Max(1, (int)ago.TotalMinutes)}m ago";
+        }
+
+        return $"{Math.Max(1, (int)ago.TotalHours)}h ago";
     }
 
     private void WireEvents()

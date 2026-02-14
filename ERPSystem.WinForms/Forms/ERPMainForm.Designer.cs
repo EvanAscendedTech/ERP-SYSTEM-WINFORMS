@@ -12,6 +12,7 @@ public partial class ERPMainForm
     private Label lblSyncClock = null!;
     private Label lblSaveClock = null!;
     private ModernButton btnThemeToggle = null!;
+    private Label lblOnlineUsers = null!;
 
     private FlowLayoutPanel navButtonsPanel = null!;
     private ModernButton btnDashboard = null!;
@@ -36,6 +37,7 @@ public partial class ERPMainForm
         lblSyncClock = new Label();
         lblSaveClock = new Label();
         btnThemeToggle = new ModernButton();
+        lblOnlineUsers = new Label();
 
         navButtonsPanel = new FlowLayoutPanel();
         btnDashboard = new ModernButton();
@@ -96,12 +98,20 @@ public partial class ERPMainForm
         btnThemeToggle.Location = new Point(660, 15);
         btnThemeToggle.CornerRadius = 8;
 
+        lblOnlineUsers.AutoSize = true;
+        lblOnlineUsers.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
+        lblOnlineUsers.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        lblOnlineUsers.Location = new Point(430, 48);
+        lblOnlineUsers.TextAlign = ContentAlignment.MiddleRight;
+        lblOnlineUsers.Text = "Online: none";
+
         headerPanel.Resize += (_, _) =>
         {
             btnThemeToggle.Left = headerPanel.Width - btnThemeToggle.Width - 20;
             lblSection.Left = btnThemeToggle.Left - lblSection.Width - 16;
             lblSyncClock.Left = lblSection.Left - Math.Max(lblSyncClock.Width, lblSaveClock.Width) - 20;
             lblSaveClock.Left = lblSyncClock.Left;
+            lblOnlineUsers.Left = lblSyncClock.Left;
         };
 
         headerPanel.Controls.Add(lblAppTitle);
@@ -109,6 +119,7 @@ public partial class ERPMainForm
         headerPanel.Controls.Add(lblSaveClock);
         headerPanel.Controls.Add(lblSection);
         headerPanel.Controls.Add(btnThemeToggle);
+        headerPanel.Controls.Add(lblOnlineUsers);
 
         tabStripPanel.Dock = DockStyle.Fill;
         tabStripPanel.Padding = new Padding(12, 10, 12, 10);
@@ -131,10 +142,10 @@ public partial class ERPMainForm
         navButtonsPanel.Controls.Add(btnDashboard);
         navButtonsPanel.Controls.Add(btnQuotes);
         navButtonsPanel.Controls.Add(btnProduction);
-        navButtonsPanel.Controls.Add(btnCRM);
         navButtonsPanel.Controls.Add(btnQuality);
         navButtonsPanel.Controls.Add(btnInspection);
         navButtonsPanel.Controls.Add(btnShipping);
+        navButtonsPanel.Controls.Add(btnCRM);
         navButtonsPanel.Controls.Add(btnUsers);
         navButtonsPanel.Controls.Add(btnSettings);
         tabStripPanel.Controls.Add(navButtonsPanel);

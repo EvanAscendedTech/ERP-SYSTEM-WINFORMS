@@ -28,6 +28,7 @@ public class UserAccount
     public bool IsActive { get; set; } = true;
     public string IconPath { get; set; } = string.Empty;
     public bool IsOnline { get; set; }
+    public DateTime? LastActivityUtc { get; set; }
     public List<RoleDefinition> Roles { get; set; } = new();
 }
 

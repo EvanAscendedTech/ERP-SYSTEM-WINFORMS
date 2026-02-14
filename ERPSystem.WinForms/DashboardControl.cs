@@ -1,3 +1,4 @@
+using ERPSystem.WinForms.Controls;
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
@@ -6,7 +7,7 @@ namespace ERPSystem.WinForms;
 
 public sealed record DashboardNavigationTarget(string SectionKey, int? QuoteId = null, string? JobNumber = null, bool OpenDetails = false);
 
-public sealed class DashboardControl : UserControl
+public sealed class DashboardControl : UserControl, IRealtimeDataControl
 {
     private const int QuoteExpiryDays = 30;
     private const int QuoteExpiringSoonDays = 7;
@@ -144,7 +145,10 @@ public sealed class DashboardControl : UserControl
         var inProgressQuotes = quotes.Where(q => q.Status == QuoteStatus.InProgress).OrderBy(q => q.LastUpdatedUtc).ToList();
         var quoteExpiringSoon = inProgressQuotes.Where(IsQuoteExpiringSoon).ToList();
 
-        var productionInProgress = jobs.Where(j => j.Status == ProductionJobStatus.InProgress).OrderBy(j => j.DueDateUtc).ToList();
+        var productionInProgress = jobs
+            .Where(j => _jobFlowService.IsInModule(j.JobNumber, JobFlowService.WorkflowModule.Production) && j.Status != ProductionJobStatus.Completed)
+            .OrderBy(j => j.DueDateUtc)
+            .ToList();
         var productionNearDue = productionInProgress.Where(IsJobNearDueDate).ToList();
         var qualityQueue = jobs.Where(j => _jobFlowService.IsInModule(j.JobNumber, JobFlowService.WorkflowModule.Quality)).OrderBy(j => j.JobNumber).ToList();
         var inspectionQueue = jobs.Where(j => _jobFlowService.IsInModule(j.JobNumber, JobFlowService.WorkflowModule.Inspection)).OrderBy(j => j.JobNumber).ToList();
@@ -165,6 +169,10 @@ public sealed class DashboardControl : UserControl
         _workQueues.Controls.Add(CreateOpenQuotesSnapshotPanel(inProgressQuotes));
         _workQueues.Controls.Add(CreateJobFlowSnapshotPanel(inProgressQuotes, productionInProgress, inspectionQueue, shippingQueue));
         _workQueues.Controls.Add(CreateWorkSnapshotPanel(inProgressQuotes, productionInProgress, qualityQueue, inspectionQueue, shippingQueue));
+        _workQueues.Controls.Add(CreateModuleSnapshotTable("Production in-progress snapshot", productionInProgress, "Working production orders currently in progress."));
+        _workQueues.Controls.Add(CreateModuleSnapshotTable("Quality in-progress snapshot", qualityQueue, "Orders waiting in quality review."));
+        _workQueues.Controls.Add(CreateModuleSnapshotTable("Inspection in-progress snapshot", inspectionQueue, "Orders currently in inspection.", showInspectionState: true));
+        _workQueues.Controls.Add(CreateModuleSnapshotTable("Shipping in-progress snapshot", shippingQueue, "Orders staged in shipping."));
         _workQueues.Controls.Add(CreateQuoteQueuePanel("In-progress quotes", inProgressQuotes, includeExpiryWarning: false));
         _workQueues.Controls.Add(CreateQuoteQueuePanel("Quotes about to expire", quoteExpiringSoon, includeExpiryWarning: true));
         _workQueues.Controls.Add(CreateProductionQueuePanel("In-progress production orders", productionInProgress));
@@ -321,6 +329,58 @@ public sealed class DashboardControl : UserControl
         }
 
         return $"{Math.Max(0, (int)duration.TotalMinutes)}m";
+    }
+
+
+    private Panel CreateModuleSnapshotTable(string titleText, IReadOnlyCollection<ProductionJob> jobs, string subtitleText, bool showInspectionState = false)
+    {
+        var panel = CreateBasePanel();
+        panel.Height = 220;
+
+        var title = new Label
+        {
+            Text = titleText,
+            Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+            Dock = DockStyle.Top,
+            Height = 28
+        };
+
+        var subtitle = new Label
+        {
+            Text = subtitleText,
+            Font = new Font("Segoe UI", 9F),
+            Dock = DockStyle.Top,
+            Height = 20,
+            Tag = "secondary"
+        };
+
+        var grid = CreateSnapshotGrid();
+        grid.Columns.Add("JobNumber", "Job");
+        grid.Columns.Add("Product", "Product");
+        grid.Columns.Add("DueDate", "Due");
+        grid.Columns.Add("Status", showInspectionState ? "Inspection" : "Status");
+        grid.Columns[0].Width = 120;
+        grid.Columns[1].Width = 240;
+        grid.Columns[2].Width = 150;
+        grid.Columns[3].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+
+        foreach (var job in jobs.Take(25))
+        {
+            var statusText = showInspectionState
+                ? (_jobFlowService.IsInspectionPassed(job.JobNumber) ? "Passed" : "Pending")
+                : job.Status.ToString();
+            grid.Rows.Add(job.JobNumber, job.ProductName, job.DueDateUtc.ToLocalTime().ToString("g"), statusText);
+        }
+
+        if (grid.Rows.Count == 0)
+        {
+            grid.Rows.Add("-", "No in-progress items", "-", "-");
+        }
+
+        panel.Controls.Add(grid);
+        panel.Controls.Add(subtitle);
+        panel.Controls.Add(title);
+        return panel;
     }
 
     private static string BuildJobExamplePreview(IReadOnlyCollection<ProductionJob> jobs)
@@ -652,6 +712,8 @@ public sealed class DashboardControl : UserControl
         var remaining = job.DueDateUtc - DateTime.UtcNow;
         return remaining.TotalDays <= ProductionDueSoonDays;
     }
+
+    public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => LoadDashboardAsync();
 
     private void OpenSnapshotItem(ListBox list)
     {
