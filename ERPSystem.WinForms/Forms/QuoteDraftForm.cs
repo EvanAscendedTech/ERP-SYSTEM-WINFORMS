@@ -104,21 +104,42 @@ public class QuoteDraftForm : Form
 
     private static Control BuildLineItemCard(int lineIndex, bool canViewPricing)
     {
-        var group = new GroupBox { Text = $"Line Item {lineIndex}", Width = 1100, Height = 300 };
-        var layout = new FlowLayoutPanel { Dock = DockStyle.Fill };
-        layout.Controls.Add(new TextBox { Width = 200, PlaceholderText = "Description", Name = "Description" });
-        layout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Lead time" });
+        var group = new GroupBox { Text = $"Line Item {lineIndex}", Width = 1100, Height = 390 };
+        var container = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(6)
+        };
+        container.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        container.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var fieldsLayout = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true };
+        fieldsLayout.Controls.Add(new TextBox { Width = 200, PlaceholderText = "Description", Name = "Description" });
+        fieldsLayout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Lead time" });
 
         var pricing = new TextBox { Width = 120, PlaceholderText = "Unit price", Name = "UnitPrice", Visible = canViewPricing };
-        layout.Controls.Add(pricing);
+        fieldsLayout.Controls.Add(pricing);
 
-        layout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Production hrs" });
-        layout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Setup hrs" });
+        fieldsLayout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Production hrs" });
+        fieldsLayout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Setup hrs" });
 
-        layout.Controls.Add(BuildBlobUploadSection("Technical BLOB", QuoteBlobType.Technical));
-        layout.Controls.Add(BuildBlobUploadSection("Material Pricing BLOB", QuoteBlobType.MaterialPricing));
-        layout.Controls.Add(BuildBlobUploadSection("Post-Op Pricing BLOB", QuoteBlobType.PostOpPricing));
-        group.Controls.Add(layout);
+        var uploadLayout = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            AutoScroll = true
+        };
+
+        uploadLayout.Controls.Add(BuildBlobUploadSection("Technical Files", QuoteBlobType.Technical));
+        uploadLayout.Controls.Add(BuildBlobUploadSection("Material Pricing", QuoteBlobType.MaterialPricing));
+        uploadLayout.Controls.Add(BuildBlobUploadSection("Post-Op Pricing", QuoteBlobType.PostOpPricing));
+
+        container.Controls.Add(fieldsLayout, 0, 0);
+        container.Controls.Add(uploadLayout, 0, 1);
+        group.Controls.Add(container);
         return group;
     }
 
@@ -142,13 +163,12 @@ public class QuoteDraftForm : Form
         var sectionTitle = new Label { Text = title, AutoSize = true, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) };
         var dropZone = new Label
         {
-            Text = "Drag and drop files here or click to browse",
+            Text = "Click to browse files",
             AutoSize = false,
             Width = 312,
             Height = 40,
             TextAlign = ContentAlignment.MiddleCenter,
             BorderStyle = BorderStyle.FixedSingle,
-            AllowDrop = true,
             Cursor = Cursors.Hand,
             Top = 26,
             Left = 6
@@ -201,19 +221,6 @@ public class QuoteDraftForm : Form
             }
 
             AddFiles(picker.FileNames);
-        };
-
-        dropZone.DragEnter += (_, e) =>
-        {
-            e.Effect = e.Data?.GetDataPresent(DataFormats.FileDrop) == true ? DragDropEffects.Copy : DragDropEffects.None;
-        };
-
-        dropZone.DragDrop += (_, e) =>
-        {
-            if (e.Data?.GetData(DataFormats.FileDrop) is string[] files)
-            {
-                AddFiles(files);
-            }
         };
 
         uploadsList.DoubleClick += (_, _) => OpenBlobAction(uploadsList);
