@@ -277,10 +277,27 @@ public sealed class DashboardControl : UserControl
 
         list.DisplayMember = nameof(SnapshotListItem.Text);
         list.DoubleClick += (_, _) => OpenSnapshotItem(list);
+        list.KeyDown += (_, args) =>
+        {
+            if (args.KeyCode != Keys.Enter)
+            {
+                return;
+            }
+
+            OpenSnapshotItem(list);
+            args.Handled = true;
+        };
+        list.MouseDown += (_, args) => SelectSnapshotItemFromMouse(list, args);
 
         var contextMenu = new ContextMenuStrip();
         var openMenuItem = contextMenu.Items.Add("Open");
         openMenuItem.Click += (_, _) => OpenSnapshotItem(list);
+        contextMenu.Opening += (_, args) =>
+        {
+            var hasItem = list.SelectedItem is SnapshotListItem;
+            openMenuItem.Enabled = hasItem;
+            args.Cancel = !hasItem;
+        };
         list.ContextMenuStrip = contextMenu;
 
         card.Controls.Add(list);
@@ -477,6 +494,22 @@ public sealed class DashboardControl : UserControl
         {
             _openTarget(item.Target);
         }
+    }
+
+    private static void SelectSnapshotItemFromMouse(ListBox list, MouseEventArgs args)
+    {
+        if (args.Button != MouseButtons.Right)
+        {
+            return;
+        }
+
+        var index = list.IndexFromPoint(args.Location);
+        if (index < 0)
+        {
+            return;
+        }
+
+        list.SelectedIndex = index;
     }
 
     private sealed class SnapshotListItem
