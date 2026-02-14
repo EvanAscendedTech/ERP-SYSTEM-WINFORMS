@@ -6,6 +6,55 @@ namespace ERPSystem.WinForms.Tests;
 
 public class QuoteRepositoryTests
 {
+
+    [Fact]
+    public async Task SaveQuoteAsync_PersistsLifecycleIdAndBlobAttachments()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-blob-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+
+        var quote = new Quote
+        {
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            LifecycleQuoteId = "Q-TEST-001",
+            Status = QuoteStatus.InProgress,
+            LineItems =
+            [
+                new QuoteLineItem
+                {
+                    Description = "Bracket",
+                    Quantity = 1,
+                    BlobAttachments =
+                    [
+                        new QuoteBlobAttachment
+                        {
+                            BlobType = QuoteBlobType.Technical,
+                            FileName = "spec.pdf",
+                            ContentType = ".pdf",
+                            BlobData = [1,2,3],
+                            UploadedUtc = DateTime.UtcNow
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var id = await repository.SaveQuoteAsync(quote);
+        var loaded = await repository.GetQuoteAsync(id);
+
+        Assert.NotNull(loaded);
+        Assert.Equal("Q-TEST-001", loaded!.LifecycleQuoteId);
+        var line = Assert.Single(loaded.LineItems);
+        var blob = Assert.Single(line.BlobAttachments);
+        Assert.Equal(QuoteBlobType.Technical, blob.BlobType);
+
+        File.Delete(dbPath);
+    }
+
     [Fact]
     public async Task SaveQuoteAsync_PersistsExtendedLineItemFields()
     {

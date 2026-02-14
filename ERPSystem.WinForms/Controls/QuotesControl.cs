@@ -1,6 +1,7 @@
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Forms;
 using ERPSystem.WinForms.Models;
+using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms.Controls;
 
@@ -9,14 +10,16 @@ public class QuotesControl : UserControl
     private readonly QuoteRepository _quoteRepository;
     private readonly ProductionRepository _productionRepository;
     private readonly Action<string> _openSection;
+    private readonly UserAccount _currentUser;
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
 
-    public QuotesControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, Action<string> openSection)
+    public QuotesControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, UserAccount currentUser, Action<string> openSection)
     {
         _quoteRepository = quoteRepository;
         _productionRepository = productionRepository;
         _openSection = openSection;
+        _currentUser = currentUser;
         Dock = DockStyle.Fill;
 
         ConfigureQuotesGrid();
@@ -66,7 +69,7 @@ public class QuotesControl : UserControl
 
     private async Task CreateNewQuoteAsync()
     {
-        var draft = new QuoteDraftForm(_quoteRepository);
+        var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing));
         if (draft.ShowDialog(this) == DialogResult.OK)
         {
             _feedback.Text = $"Created quote {draft.CreatedQuoteId}.";
@@ -139,6 +142,7 @@ public class QuotesControl : UserControl
         await _productionRepository.SaveJobAsync(new ProductionJob
         {
             JobNumber = $"JOB-{fullQuote.Id:0000}",
+            QuoteLifecycleId = fullQuote.LifecycleQuoteId,
             ProductName = firstLine?.Description ?? $"Quote {fullQuote.Id}",
             PlannedQuantity = (int)Math.Max(1, firstLine?.Quantity ?? 1),
             ProducedQuantity = 0,
@@ -147,6 +151,7 @@ public class QuotesControl : UserControl
             Status = ProductionJobStatus.Planned
         });
 
+        await _quoteRepository.ResetLastInteractionOnQuoteAsync(fullQuote.CustomerId);
         _feedback.Text = $"Quote {fullQuote.Id} passed to production and archived as won.";
         await LoadActiveQuotesAsync();
         _openSection("Production");

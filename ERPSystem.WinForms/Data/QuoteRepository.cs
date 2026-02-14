@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
 using Microsoft.Data.Sqlite;
@@ -27,13 +28,25 @@ public class QuoteRepository
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 Code TEXT NOT NULL,
                 Name TEXT NOT NULL,
-                IsActive INTEGER NOT NULL DEFAULT 1
+                IsActive INTEGER NOT NULL DEFAULT 1,
+                LastInteractionUtc TEXT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS CustomerContacts (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                CustomerId INTEGER NOT NULL,
+                Name TEXT NOT NULL,
+                Email TEXT NOT NULL DEFAULT '',
+                Phone TEXT NOT NULL DEFAULT '',
+                Notes TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY(CustomerId) REFERENCES Customers(Id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS Quotes (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 CustomerId INTEGER,
                 CustomerName TEXT NOT NULL,
+                LifecycleQuoteId TEXT NOT NULL DEFAULT '',
                 Status INTEGER NOT NULL,
                 CreatedUtc TEXT NOT NULL,
                 LastUpdatedUtc TEXT NOT NULL,
@@ -66,6 +79,19 @@ public class QuoteRepository
                 FOREIGN KEY(LineItemId) REFERENCES QuoteLineItems(Id) ON DELETE CASCADE
             );
 
+
+
+            CREATE TABLE IF NOT EXISTS QuoteBlobFiles (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                LineItemId INTEGER NOT NULL,
+                BlobType INTEGER NOT NULL,
+                FileName TEXT NOT NULL,
+                ContentType TEXT NOT NULL DEFAULT '',
+                BlobData BLOB NOT NULL,
+                UploadedUtc TEXT NOT NULL,
+                FOREIGN KEY(LineItemId) REFERENCES QuoteLineItems(Id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS QuoteAuditEvents (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 QuoteId INTEGER,
@@ -80,7 +106,9 @@ public class QuoteRepository
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync();
 
+        await EnsureColumnExistsAsync(connection, "Customers", "LastInteractionUtc", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "Quotes", "CustomerId", "INTEGER");
+        await EnsureColumnExistsAsync(connection, "Quotes", "LifecycleQuoteId", "TEXT NOT NULL DEFAULT ''");
         await EnsureColumnExistsAsync(connection, "Quotes", "WonUtc", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "Quotes", "WonByUserId", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "Quotes", "LostUtc", "TEXT NULL");
@@ -110,7 +138,7 @@ public class QuoteRepository
 
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            SELECT Id, Code, Name, IsActive
+            SELECT Id, Code, Name, IsActive, LastInteractionUtc
             FROM Customers
             WHERE $activeOnly = 0 OR IsActive = 1
             ORDER BY Name;";
@@ -124,11 +152,47 @@ public class QuoteRepository
                 Id = reader.GetInt32(0),
                 Code = reader.GetString(1),
                 Name = reader.GetString(2),
-                IsActive = reader.GetInt32(3) == 1
+                IsActive = reader.GetInt32(3) == 1,
+                LastInteractionUtc = reader.IsDBNull(4) ? null : DateTime.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                Contacts = new List<CustomerContact>()
             });
         }
 
+        foreach (var customer in customers)
+        {
+            customer.Contacts = await GetCustomerContactsAsync(connection, customer.Id);
+        }
+
         return customers;
+    }
+
+    private static async Task<List<CustomerContact>> GetCustomerContactsAsync(SqliteConnection connection, int customerId)
+    {
+        var contacts = new List<CustomerContact>();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT Id, CustomerId, Name, Email, Phone, Notes
+            FROM CustomerContacts
+            WHERE CustomerId = $customerId
+            ORDER BY Name;";
+        command.Parameters.AddWithValue("$customerId", customerId);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            contacts.Add(new CustomerContact
+            {
+                Id = reader.GetInt32(0),
+                CustomerId = reader.GetInt32(1),
+                Name = reader.GetString(2),
+                Email = reader.GetString(3),
+                Phone = reader.GetString(4),
+                Notes = reader.GetString(5)
+            });
+        }
+
+        return contacts;
     }
 
     public async Task<int> SaveQuoteAsync(Quote quote)
@@ -152,6 +216,7 @@ public class QuoteRepository
                     INSERT INTO Quotes (
                         CustomerId,
                         CustomerName,
+                        LifecycleQuoteId,
                         Status,
                         CreatedUtc,
                         LastUpdatedUtc,
@@ -164,6 +229,7 @@ public class QuoteRepository
                     VALUES (
                         $customerId,
                         $name,
+                        $lifecycleQuoteId,
                         $status,
                         $created,
                         $updated,
@@ -176,6 +242,7 @@ public class QuoteRepository
                     SELECT last_insert_rowid();";
                 insertQuote.Parameters.AddWithValue("$customerId", quote.CustomerId == 0 ? DBNull.Value : quote.CustomerId);
                 insertQuote.Parameters.AddWithValue("$name", quote.CustomerName);
+                insertQuote.Parameters.AddWithValue("$lifecycleQuoteId", quote.LifecycleQuoteId);
                 insertQuote.Parameters.AddWithValue("$status", (int)quote.Status);
                 insertQuote.Parameters.AddWithValue("$created", quote.CreatedUtc.ToString("O"));
                 insertQuote.Parameters.AddWithValue("$updated", quote.LastUpdatedUtc.ToString("O"));
@@ -202,6 +269,7 @@ public class QuoteRepository
                     UPDATE Quotes
                     SET CustomerId = $customerId,
                         CustomerName = $name,
+                        LifecycleQuoteId = $lifecycleQuoteId,
                         Status = $status,
                         LastUpdatedUtc = $updated,
                         WonUtc = $wonUtc,
@@ -214,6 +282,7 @@ public class QuoteRepository
                 updateQuote.Parameters.AddWithValue("$id", quote.Id);
                 updateQuote.Parameters.AddWithValue("$customerId", quote.CustomerId == 0 ? DBNull.Value : quote.CustomerId);
                 updateQuote.Parameters.AddWithValue("$name", quote.CustomerName);
+                updateQuote.Parameters.AddWithValue("$lifecycleQuoteId", quote.LifecycleQuoteId);
                 updateQuote.Parameters.AddWithValue("$status", (int)quote.Status);
                 updateQuote.Parameters.AddWithValue("$updated", quote.LastUpdatedUtc.ToString("O"));
                 AddNullableString(updateQuote, "$wonUtc", quote.WonUtc?.ToString("O"));
@@ -265,6 +334,22 @@ public class QuoteRepository
                     insertFile.Parameters.AddWithValue("$lineItemId", lineItem.Id);
                     insertFile.Parameters.AddWithValue("$filePath", filePath.Trim());
                     await insertFile.ExecuteNonQueryAsync();
+                }
+
+                foreach (var blob in lineItem.BlobAttachments)
+                {
+                    await using var insertBlob = connection.CreateCommand();
+                    insertBlob.Transaction = transaction;
+                    insertBlob.CommandText = @"
+                        INSERT INTO QuoteBlobFiles (LineItemId, BlobType, FileName, ContentType, BlobData, UploadedUtc)
+                        VALUES ($lineItemId, $blobType, $fileName, $contentType, $blobData, $uploadedUtc);";
+                    insertBlob.Parameters.AddWithValue("$lineItemId", lineItem.Id);
+                    insertBlob.Parameters.AddWithValue("$blobType", (int)blob.BlobType);
+                    insertBlob.Parameters.AddWithValue("$fileName", blob.FileName);
+                    insertBlob.Parameters.AddWithValue("$contentType", blob.ContentType);
+                    insertBlob.Parameters.AddWithValue("$blobData", blob.BlobData);
+                    insertBlob.Parameters.AddWithValue("$uploadedUtc", blob.UploadedUtc.ToString("O"));
+                    await insertBlob.ExecuteNonQueryAsync();
                 }
             }
 
@@ -514,6 +599,7 @@ public class QuoteRepository
             SELECT q.Id,
                    q.CustomerId,
                    q.CustomerName,
+                   q.LifecycleQuoteId,
                    q.Status,
                    q.CreatedUtc,
                    q.LastUpdatedUtc,
@@ -535,21 +621,22 @@ public class QuoteRepository
             return null;
         }
 
-        var customerName = reader.IsDBNull(12) ? reader.GetString(2) : reader.GetString(12);
+        var customerName = reader.IsDBNull(13) ? reader.GetString(2) : reader.GetString(13);
         return new Quote
         {
             Id = reader.GetInt32(0),
             CustomerId = reader.IsDBNull(1) ? 0 : reader.GetInt32(1),
             CustomerName = customerName,
-            Status = (QuoteStatus)reader.GetInt32(3),
-            CreatedUtc = DateTime.Parse(reader.GetString(4)),
-            LastUpdatedUtc = DateTime.Parse(reader.GetString(5)),
-            WonUtc = reader.IsDBNull(6) ? null : DateTime.Parse(reader.GetString(6)),
-            WonByUserId = reader.IsDBNull(7) ? null : reader.GetString(7),
-            LostUtc = reader.IsDBNull(8) ? null : DateTime.Parse(reader.GetString(8)),
-            LostByUserId = reader.IsDBNull(9) ? null : reader.GetString(9),
-            ExpiredUtc = reader.IsDBNull(10) ? null : DateTime.Parse(reader.GetString(10)),
-            ExpiredByUserId = reader.IsDBNull(11) ? null : reader.GetString(11)
+            LifecycleQuoteId = reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
+            Status = (QuoteStatus)reader.GetInt32(4),
+            CreatedUtc = DateTime.Parse(reader.GetString(5)),
+            LastUpdatedUtc = DateTime.Parse(reader.GetString(6)),
+            WonUtc = reader.IsDBNull(7) ? null : DateTime.Parse(reader.GetString(7)),
+            WonByUserId = reader.IsDBNull(8) ? null : reader.GetString(8),
+            LostUtc = reader.IsDBNull(9) ? null : DateTime.Parse(reader.GetString(9)),
+            LostByUserId = reader.IsDBNull(10) ? null : reader.GetString(10),
+            ExpiredUtc = reader.IsDBNull(11) ? null : DateTime.Parse(reader.GetString(11)),
+            ExpiredByUserId = reader.IsDBNull(12) ? null : reader.GetString(12)
         };
     }
 
@@ -611,7 +698,95 @@ public class QuoteRepository
             }
         }
 
+        foreach (var lineItem in lineItems)
+        {
+            lineItem.BlobAttachments = await ReadLineItemBlobFilesAsync(connection, lineItem.Id);
+        }
+
         return lineItems;
+    }
+
+    public async Task<int> SaveCustomerAsync(Customer customer)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO Customers (Code, Name, IsActive, LastInteractionUtc)
+            VALUES ($code, $name, $isActive, $lastInteractionUtc)
+            ON CONFLICT(Code) DO UPDATE SET
+                Name = excluded.Name,
+                IsActive = excluded.IsActive,
+                LastInteractionUtc = excluded.LastInteractionUtc;
+
+            SELECT Id FROM Customers WHERE Code = $code;";
+        command.Parameters.AddWithValue("$code", customer.Code);
+        command.Parameters.AddWithValue("$name", customer.Name);
+        command.Parameters.AddWithValue("$isActive", customer.IsActive ? 1 : 0);
+        command.Parameters.AddWithValue("$lastInteractionUtc", customer.LastInteractionUtc?.ToString("O") ?? (object)DBNull.Value);
+        var customerId = Convert.ToInt32(await command.ExecuteScalarAsync());
+
+        foreach (var contact in customer.Contacts)
+        {
+            await using var contactCommand = connection.CreateCommand();
+            contactCommand.CommandText = @"
+                INSERT INTO CustomerContacts (CustomerId, Name, Email, Phone, Notes)
+                VALUES ($customerId, $name, $email, $phone, $notes);";
+            contactCommand.Parameters.AddWithValue("$customerId", customerId);
+            contactCommand.Parameters.AddWithValue("$name", contact.Name);
+            contactCommand.Parameters.AddWithValue("$email", contact.Email);
+            contactCommand.Parameters.AddWithValue("$phone", contact.Phone);
+            contactCommand.Parameters.AddWithValue("$notes", contact.Notes);
+            await contactCommand.ExecuteNonQueryAsync();
+        }
+
+        return customerId;
+    }
+
+    public async Task ResetLastInteractionOnQuoteAsync(int customerId)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE Customers
+            SET LastInteractionUtc = $lastInteractionUtc
+            WHERE Id = $customerId;";
+        command.Parameters.AddWithValue("$customerId", customerId);
+        command.Parameters.AddWithValue("$lastInteractionUtc", DateTime.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<List<QuoteBlobAttachment>> ReadLineItemBlobFilesAsync(SqliteConnection connection, int lineItemId)
+    {
+        var blobs = new List<QuoteBlobAttachment>();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT Id, LineItemId, BlobType, FileName, ContentType, BlobData, UploadedUtc
+            FROM QuoteBlobFiles
+            WHERE LineItemId = $lineItemId
+            ORDER BY Id;";
+        command.Parameters.AddWithValue("$lineItemId", lineItemId);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            blobs.Add(new QuoteBlobAttachment
+            {
+                Id = reader.GetInt32(0),
+                LineItemId = reader.GetInt32(1),
+                BlobType = (QuoteBlobType)reader.GetInt32(2),
+                FileName = reader.GetString(3),
+                ContentType = reader.GetString(4),
+                BlobData = (byte[])reader[5],
+                UploadedUtc = DateTime.Parse(reader.GetString(6), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+            });
+        }
+
+        return blobs;
     }
 
     private static async Task EnsureColumnExistsAsync(SqliteConnection connection, string tableName, string columnName, string definition)
