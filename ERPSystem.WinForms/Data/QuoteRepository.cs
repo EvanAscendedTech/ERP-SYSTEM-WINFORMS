@@ -668,19 +668,29 @@ public class QuoteRepository
         await using var insertCustomers = connection.CreateCommand();
         insertCustomers.Transaction = transaction;
         insertCustomers.CommandText = @"
-            INSERT INTO Customers (Code, Name, IsActive)
-            SELECT
-                'LEG-' || printf('%05d', ROW_NUMBER() OVER (ORDER BY CustomerName)),
-                CustomerName,
-                1
-            FROM (
+            WITH MissingCustomers AS (
                 SELECT DISTINCT TRIM(CustomerName) AS CustomerName
                 FROM Quotes
-                WHERE CustomerName IS NOT NULL AND TRIM(CustomerName) <> ''
-            ) q
-            WHERE NOT EXISTS (
-                SELECT 1 FROM Customers c WHERE c.Name = q.CustomerName
-            );";
+                WHERE CustomerName IS NOT NULL
+                  AND TRIM(CustomerName) <> ''
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM Customers c
+                      WHERE c.Name = TRIM(Quotes.CustomerName)
+                  )
+            ),
+            LegacyCodeBase AS (
+                SELECT COALESCE(MAX(CAST(SUBSTR(Code, 5) AS INTEGER)), 0) AS CurrentMax
+                FROM Customers
+                WHERE Code LIKE 'LEG-%'
+            )
+            INSERT INTO Customers (Code, Name, IsActive)
+            SELECT
+                'LEG-' || printf('%05d', LegacyCodeBase.CurrentMax + ROW_NUMBER() OVER (ORDER BY MissingCustomers.CustomerName)),
+                MissingCustomers.CustomerName,
+                1
+            FROM MissingCustomers
+            CROSS JOIN LegacyCodeBase;";
         await insertCustomers.ExecuteNonQueryAsync();
 
         await using var updateQuotes = connection.CreateCommand();

@@ -252,4 +252,47 @@ public class QuoteRepositoryTests
 
         File.Delete(dbPath);
     }
+    [Fact]
+    public async Task InitializeDatabaseAsync_BackfillSkipsUsedLegacyCodes()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-backfill-codes-{Guid.NewGuid():N}.db");
+
+        await using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString()))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = @"
+                CREATE TABLE Customers (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    Code TEXT NOT NULL,
+                    Name TEXT NOT NULL,
+                    IsActive INTEGER NOT NULL DEFAULT 1
+                );
+
+                CREATE TABLE Quotes (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    CustomerName TEXT NOT NULL,
+                    Status INTEGER NOT NULL,
+                    CreatedUtc TEXT NOT NULL,
+                    LastUpdatedUtc TEXT NOT NULL
+                );
+
+                INSERT INTO Customers (Code, Name, IsActive)
+                VALUES ('LEG-00001', 'Existing Legacy Customer', 1);
+
+                INSERT INTO Quotes (CustomerName, Status, CreatedUtc, LastUpdatedUtc)
+                VALUES ('New Legacy Customer', 0, '2024-01-01T00:00:00.0000000Z', '2024-01-01T00:00:00.0000000Z');";
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customers = await repository.GetCustomersAsync(activeOnly: false);
+        var created = Assert.Single(customers.Where(c => c.Name == "New Legacy Customer"));
+        Assert.Equal("LEG-00002", created.Code);
+
+        File.Delete(dbPath);
+    }
+
 }
