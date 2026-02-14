@@ -7,6 +7,10 @@ namespace ERPSystem.WinForms.Forms;
 public class LoginForm : Form
 {
     private readonly UserManagementRepository _userRepository;
+    private readonly AppSettingsService _settingsService;
+    private readonly Label _heroTitle = new();
+    private readonly Label _heroSubtitle = new();
+    private readonly PictureBox _heroLogo = new();
     private readonly TextBox _username = new() { Width = 340, PlaceholderText = "Username" };
     private readonly TextBox _password = new() { Width = 340, PlaceholderText = "Password", UseSystemPasswordChar = true };
     private readonly TextBox _requestNote = new() { Width = 340, Height = 78, Multiline = true, PlaceholderText = "Request note for admin" };
@@ -14,11 +18,12 @@ public class LoginForm : Form
 
     public UserAccount? AuthenticatedUser { get; private set; }
 
-    public LoginForm(UserManagementRepository userRepository)
+    public LoginForm(UserManagementRepository userRepository, AppSettingsService settingsService)
     {
         _userRepository = userRepository;
+        _settingsService = settingsService;
 
-        Text = "ERP Login";
+        Text = "INGNITON";
         FormBorderStyle = FormBorderStyle.FixedSingle;
         StartPosition = FormStartPosition.CenterScreen;
         WindowState = FormWindowState.Maximized;
@@ -41,9 +46,11 @@ public class LoginForm : Form
         root.Controls.Add(heroPanel, 0, 0);
         root.Controls.Add(loginPanel, 1, 0);
         Controls.Add(root);
+
+        _ = LoadSettingsAsync();
     }
 
-    private static Control BuildHeroPanel()
+    private Control BuildHeroPanel()
     {
         var panel = new Panel
         {
@@ -52,29 +59,55 @@ public class LoginForm : Form
             BackColor = ColorTranslator.FromHtml("#111827")
         };
 
-        var title = new Label
+        var headerLayout = new FlowLayoutPanel
         {
-            Text = "ERP Command Center",
-            Font = new Font("Segoe UI", 30F, FontStyle.Bold),
-            ForeColor = Color.White,
-            AutoSize = true,
-            Dock = DockStyle.Top
-        };
-
-        var subtitle = new Label
-        {
-            Text = "A clean, full-screen workspace with responsive controls and tabbed workflows.",
-            Font = new Font("Segoe UI", 12F, FontStyle.Regular),
-            ForeColor = ColorTranslator.FromHtml("#CBD5E1"),
-            AutoSize = true,
-            MaximumSize = new Size(520, 0),
             Dock = DockStyle.Top,
-            Padding = new Padding(0, 14, 0, 0)
+            AutoSize = true,
+            WrapContents = false,
+            FlowDirection = FlowDirection.LeftToRight,
+            Margin = new Padding(0)
         };
 
-        panel.Controls.Add(subtitle);
-        panel.Controls.Add(title);
+        _heroLogo.Size = new Size(92, 92);
+        _heroLogo.SizeMode = PictureBoxSizeMode.Zoom;
+        _heroLogo.Margin = new Padding(0, 0, 16, 0);
+
+        var textLayout = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = new Padding(0) };
+        _heroTitle.Text = "ERP Command Center";
+        _heroTitle.Font = new Font("Segoe UI", 30F, FontStyle.Bold);
+        _heroTitle.ForeColor = Color.White;
+        _heroTitle.AutoSize = true;
+        _heroSubtitle.Text = "A clean work space with responsive tabs and work flows.";
+        _heroSubtitle.Font = new Font("Segoe UI", 12F, FontStyle.Regular);
+        _heroSubtitle.ForeColor = ColorTranslator.FromHtml("#CBD5E1");
+        _heroSubtitle.AutoSize = true;
+        _heroSubtitle.MaximumSize = new Size(520, 0);
+        _heroSubtitle.Padding = new Padding(0, 14, 0, 0);
+        textLayout.Controls.Add(_heroTitle);
+        textLayout.Controls.Add(_heroSubtitle);
+
+        headerLayout.Controls.Add(_heroLogo);
+        headerLayout.Controls.Add(textLayout);
+
+        panel.Controls.Add(headerLayout);
         return panel;
+    }
+
+    private async Task LoadSettingsAsync()
+    {
+        var settings = await _settingsService.LoadAsync();
+        var companyName = string.IsNullOrWhiteSpace(settings.CompanyName) ? "Company" : settings.CompanyName;
+        _heroTitle.Text = companyName;
+        _heroSubtitle.Text = companyName;
+
+        _heroLogo.Image?.Dispose();
+        _heroLogo.Image = null;
+        if (settings.CompanyLogo is { Length: > 0 })
+        {
+            using var stream = new MemoryStream(settings.CompanyLogo);
+            using var image = Image.FromStream(stream);
+            _heroLogo.Image = new Bitmap(image);
+        }
     }
 
     private Control BuildLoginPanel()

@@ -43,7 +43,7 @@ internal static class Program
             var appSettingsService = new AppSettingsService(settingsPath);
             _ = appSettingsService.LoadAsync().GetAwaiter().GetResult();
 
-            using var loginForm = new LoginForm(userRepository);
+            using var loginForm = new LoginForm(userRepository, appSettingsService);
             if (loginForm.ShowDialog() != DialogResult.OK || loginForm.AuthenticatedUser is null)
             {
                 return;
@@ -90,7 +90,7 @@ internal static class Program
     {
         MessageBox.Show(
             $"{title}.{Environment.NewLine}{Environment.NewLine}{ex}",
-            "ERP System Error",
+            "INGNITON Error",
             MessageBoxButtons.OK,
             MessageBoxIcon.Error);
     }

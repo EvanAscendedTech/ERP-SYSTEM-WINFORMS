@@ -52,11 +52,12 @@ public class UsersControl : UserControl, IRealtimeDataControl
 
     private void ConfigureUsersGrid()
     {
+        _usersGrid.RowTemplate.Height = 36;
         _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Id", DataPropertyName = nameof(UserAccount.Id), Width = 50 });
         _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Username", DataPropertyName = nameof(UserAccount.Username), Width = 180 });
         _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Display Name", DataPropertyName = nameof(UserAccount.DisplayName), Width = 200 });
         _usersGrid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Active", DataPropertyName = nameof(UserAccount.IsActive), Width = 70 });
-        _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Icon", DataPropertyName = nameof(UserAccount.IconPath), AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
+        _usersGrid.Columns.Add(new DataGridViewImageColumn { HeaderText = "Icon", DataPropertyName = nameof(UserAccount.IconBlob), Width = 52, ImageLayout = DataGridViewImageCellLayout.Zoom });
     }
 
     private void ConfigureRequestsGrid()
@@ -68,8 +69,28 @@ public class UsersControl : UserControl, IRealtimeDataControl
 
     private async Task ReloadAsync()
     {
-        _usersGrid.DataSource = (await _userRepository.GetUsersAsync()).ToList();
+        _usersGrid.DataSource = (await _userRepository.GetUsersAsync()).Select(ToGridUser).ToList();
         _requestsGrid.DataSource = (await _userRepository.GetAccountRequestsAsync()).ToList();
+    }
+
+    private static object ToGridUser(UserAccount user)
+    {
+        Image? icon = null;
+        if (user.IconBlob is { Length: > 0 })
+        {
+            using var stream = new MemoryStream(user.IconBlob);
+            using var image = Image.FromStream(stream);
+            icon = new Bitmap(image);
+        }
+
+        return new
+        {
+            user.Id,
+            user.Username,
+            user.DisplayName,
+            user.IsActive,
+            IconBlob = icon
+        };
     }
 
     private async Task CreateUserAsync()
@@ -103,7 +124,20 @@ public class UsersControl : UserControl, IRealtimeDataControl
 
     private async Task DeactivateSelectedAsync()
     {
-        if (_usersGrid.CurrentRow?.DataBoundItem is not UserAccount selected)
+        if (_usersGrid.CurrentRow?.DataBoundItem is null)
+        {
+            return;
+        }
+
+        var username = _usersGrid.CurrentRow.Cells[1].Value?.ToString();
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return;
+        }
+
+        var users = await _userRepository.GetUsersAsync();
+        var selected = users.FirstOrDefault(u => string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase));
+        if (selected is null)
         {
             return;
         }
@@ -122,7 +156,8 @@ public class UsersControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        _currentUser.IconPath = picker.FileName;
+        _currentUser.IconPath = string.Empty;
+        _currentUser.IconBlob = File.ReadAllBytes(picker.FileName);
         await _userRepository.SaveUserAsync(_currentUser);
         _onUsersChanged();
         await ReloadAsync();
@@ -177,5 +212,4 @@ public class UsersControl : UserControl, IRealtimeDataControl
     }
 
     public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => ReloadAsync();
-
 }
