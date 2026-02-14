@@ -17,6 +17,9 @@ public partial class ERPMainForm : Form
     private readonly Models.UserAccount _currentUser;
 
     private readonly Dictionary<string, ModernButton> _navButtons;
+    private readonly System.Windows.Forms.Timer _syncClockTimer = new();
+    private DateTime _lastAutosaveAt;
+    private DateTime _lastRefreshAt;
 
     public ERPMainForm(QuoteRepository quoteRepo, ProductionRepository prodRepo, UserManagementRepository userRepo,
                AppSettingsService settings, InspectionService inspection, ArchiveService archive, Models.UserAccount currentUser)
@@ -48,9 +51,44 @@ public partial class ERPMainForm : Form
         _themeManager.ThemeChanged += (_, _) => ApplyTheme();
         btnUsers.Visible = _currentUser.Roles.Any(r => string.Equals(r.Name, "Admin", StringComparison.OrdinalIgnoreCase) || string.Equals(r.Name, "Administrator", StringComparison.OrdinalIgnoreCase));
         WireEvents();
+        InitializeSyncClock();
 
         LoadSection("Dashboard");
         ApplyTheme();
+    }
+
+
+    private void InitializeSyncClock()
+    {
+        _lastAutosaveAt = DateTime.Now;
+        _lastRefreshAt = DateTime.Now;
+
+        _syncClockTimer.Interval = 1000;
+        _syncClockTimer.Tick += (_, _) =>
+        {
+            var now = DateTime.Now;
+            if ((now - _lastAutosaveAt).TotalSeconds >= 30)
+            {
+                _lastAutosaveAt = now;
+            }
+
+            if ((now - _lastRefreshAt).TotalSeconds >= 15)
+            {
+                _lastRefreshAt = now;
+            }
+
+            UpdateSyncClockText(now);
+        };
+
+        UpdateSyncClockText(DateTime.Now);
+        _syncClockTimer.Start();
+
+        FormClosed += (_, _) => _syncClockTimer.Stop();
+    }
+
+    private void UpdateSyncClockText(DateTime now)
+    {
+        lblSyncClock.Text = $"Sync {now:HH:mm:ss} • Save {_lastAutosaveAt:HH:mm:ss} • Refresh {_lastRefreshAt:HH:mm:ss}";
     }
 
     private void WireEvents()
@@ -157,6 +195,7 @@ public partial class ERPMainForm : Form
         headerPanel.BackColor = palette.Panel;
         tabStripPanel.BackColor = palette.Panel;
         mainContentPanel.BackColor = palette.Background;
+        lblSyncClock.ForeColor = palette.TextSecondary;
 
         foreach (var button in _navButtons.Values)
         {
