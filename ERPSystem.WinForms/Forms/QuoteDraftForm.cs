@@ -5,6 +5,13 @@ namespace ERPSystem.WinForms.Forms;
 
 public class QuoteDraftForm : Form
 {
+    private sealed class BlobUploadSectionState
+    {
+        public required QuoteBlobType BlobType { get; init; }
+        public required string Title { get; init; }
+        public List<QuoteBlobAttachment> Attachments { get; } = new();
+    }
+
     private readonly QuoteRepository _quoteRepository;
     private readonly bool _canViewPricing;
     private readonly ComboBox _customerPicker = new() { Width = 320, DropDownStyle = ComboBoxStyle.DropDownList };
@@ -97,7 +104,7 @@ public class QuoteDraftForm : Form
 
     private static Control BuildLineItemCard(int lineIndex, bool canViewPricing)
     {
-        var group = new GroupBox { Text = $"Line Item {lineIndex}", Width = 1000, Height = 200 };
+        var group = new GroupBox { Text = $"Line Item {lineIndex}", Width = 1100, Height = 300 };
         var layout = new FlowLayoutPanel { Dock = DockStyle.Fill };
         layout.Controls.Add(new TextBox { Width = 200, PlaceholderText = "Description", Name = "Description" });
         layout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Lead time" });
@@ -108,28 +115,72 @@ public class QuoteDraftForm : Form
         layout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Production hrs" });
         layout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Setup hrs" });
 
-        layout.Controls.Add(BuildBlobUploadButton("Upload technical", QuoteBlobType.Technical));
-        layout.Controls.Add(BuildBlobUploadButton("Upload material pricing", QuoteBlobType.MaterialPricing));
-        layout.Controls.Add(BuildBlobUploadButton("Upload post op pricing", QuoteBlobType.PostOpPricing));
+        layout.Controls.Add(BuildBlobUploadSection("Technical BLOB", QuoteBlobType.Technical));
+        layout.Controls.Add(BuildBlobUploadSection("Material Pricing BLOB", QuoteBlobType.MaterialPricing));
+        layout.Controls.Add(BuildBlobUploadSection("Post-Op Pricing BLOB", QuoteBlobType.PostOpPricing));
         group.Controls.Add(layout);
         return group;
     }
 
-    private static Button BuildBlobUploadButton(string text, QuoteBlobType blobType)
+    private static Control BuildBlobUploadSection(string title, QuoteBlobType blobType)
     {
-        var button = new Button { Text = text, AutoSize = true, Tag = new List<QuoteBlobAttachment>() };
-        button.Click += (_, _) =>
+        var state = new BlobUploadSectionState
         {
-            using var picker = new OpenFileDialog { Multiselect = true, Title = text };
-            if (picker.ShowDialog() != DialogResult.OK)
-            {
-                return;
-            }
+            BlobType = blobType,
+            Title = title
+        };
 
-            var blobs = (List<QuoteBlobAttachment>)button.Tag;
-            foreach (var file in picker.FileNames)
+        var panel = new Panel
+        {
+            Width = 330,
+            Height = 180,
+            BorderStyle = BorderStyle.FixedSingle,
+            Padding = new Padding(6),
+            Tag = state
+        };
+
+        var sectionTitle = new Label { Text = title, AutoSize = true, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) };
+        var dropZone = new Label
+        {
+            Text = "Drag and drop files here or click to browse",
+            AutoSize = false,
+            Width = 312,
+            Height = 40,
+            TextAlign = ContentAlignment.MiddleCenter,
+            BorderStyle = BorderStyle.FixedSingle,
+            AllowDrop = true,
+            Cursor = Cursors.Hand,
+            Top = 26,
+            Left = 6
+        };
+
+        var uploadedLabel = new Label
+        {
+            Text = "Uploaded files:",
+            AutoSize = true,
+            Top = 74,
+            Left = 6
+        };
+
+        var uploadsList = new ListBox
+        {
+            Width = 312,
+            Height = 88,
+            Top = 92,
+            Left = 6,
+            Tag = state
+        };
+
+        void AddFiles(IEnumerable<string> files)
+        {
+            foreach (var file in files)
             {
-                blobs.Add(new QuoteBlobAttachment
+                if (!File.Exists(file))
+                {
+                    continue;
+                }
+
+                state.Attachments.Add(new QuoteBlobAttachment
                 {
                     BlobType = blobType,
                     FileName = Path.GetFileName(file),
@@ -137,9 +188,121 @@ public class QuoteDraftForm : Form
                     BlobData = File.ReadAllBytes(file),
                     UploadedUtc = DateTime.UtcNow
                 });
+                uploadsList.Items.Add(Path.GetFileName(file));
+            }
+        }
+
+        dropZone.Click += (_, _) =>
+        {
+            using var picker = new OpenFileDialog { Multiselect = true, Title = $"Upload {title}" };
+            if (picker.ShowDialog() != DialogResult.OK)
+            {
+                return;
+            }
+
+            AddFiles(picker.FileNames);
+        };
+
+        dropZone.DragEnter += (_, e) =>
+        {
+            e.Effect = e.Data?.GetDataPresent(DataFormats.FileDrop) == true ? DragDropEffects.Copy : DragDropEffects.None;
+        };
+
+        dropZone.DragDrop += (_, e) =>
+        {
+            if (e.Data?.GetData(DataFormats.FileDrop) is string[] files)
+            {
+                AddFiles(files);
             }
         };
-        return button;
+
+        uploadsList.DoubleClick += (_, _) => OpenBlobAction(uploadsList);
+
+        panel.Controls.Add(sectionTitle);
+        panel.Controls.Add(dropZone);
+        panel.Controls.Add(uploadedLabel);
+        panel.Controls.Add(uploadsList);
+        return panel;
+    }
+
+    private static void OpenBlobAction(ListBox uploadsList)
+    {
+        if (uploadsList.Tag is not BlobUploadSectionState state || uploadsList.SelectedIndex < 0 || uploadsList.SelectedIndex >= state.Attachments.Count)
+        {
+            return;
+        }
+
+        var blob = state.Attachments[uploadsList.SelectedIndex];
+        var isPdf = string.Equals(Path.GetExtension(blob.FileName), ".pdf", StringComparison.OrdinalIgnoreCase);
+
+        if (isPdf)
+        {
+            var previewResult = MessageBox.Show(
+                "Select Yes to preview this PDF in the system. Select No to download it.",
+                "PDF Attachment",
+                MessageBoxButtons.YesNoCancel,
+                MessageBoxIcon.Question);
+
+            if (previewResult == DialogResult.Yes)
+            {
+                ShowPdfPreview(blob);
+                return;
+            }
+
+            if (previewResult == DialogResult.Cancel)
+            {
+                return;
+            }
+        }
+
+        using var saver = new SaveFileDialog
+        {
+            FileName = blob.FileName,
+            Filter = "All files (*.*)|*.*"
+        };
+
+        if (saver.ShowDialog() == DialogResult.OK)
+        {
+            File.WriteAllBytes(saver.FileName, blob.BlobData);
+        }
+    }
+
+    private static void ShowPdfPreview(QuoteBlobAttachment blob)
+    {
+        var tempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}_{blob.FileName}");
+        File.WriteAllBytes(tempPath, blob.BlobData);
+
+        var previewForm = new Form
+        {
+            Text = $"PDF Preview - {blob.FileName}",
+            Width = 900,
+            Height = 700,
+            StartPosition = FormStartPosition.CenterParent
+        };
+
+        var browser = new WebBrowser
+        {
+            Dock = DockStyle.Fill,
+            Url = new Uri(tempPath)
+        };
+
+        previewForm.FormClosed += (_, _) =>
+        {
+            try
+            {
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                }
+            }
+            catch
+            {
+                // Best effort cleanup.
+            }
+        };
+
+        previewForm.Controls.Add(browser);
+        previewForm.ShowDialog();
     }
 
     private async Task SaveQuoteAsync()
@@ -176,9 +339,10 @@ public class QuoteDraftForm : Form
                 Notes = $"Customer quote #: {_customerQuoteNumber.Text.Trim()}"
             };
 
-            line.BlobAttachments = panel.Controls.OfType<Button>()
-                .Where(btn => btn.Tag is List<QuoteBlobAttachment>)
-                .SelectMany(btn => (List<QuoteBlobAttachment>)btn.Tag)
+            line.BlobAttachments = panel.Controls.OfType<Panel>()
+                .Select(control => control.Tag)
+                .OfType<BlobUploadSectionState>()
+                .SelectMany(section => section.Attachments)
                 .ToList();
 
             quote.LineItems.Add(line);
