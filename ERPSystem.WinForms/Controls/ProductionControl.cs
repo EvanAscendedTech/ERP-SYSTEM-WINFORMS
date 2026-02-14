@@ -4,7 +4,7 @@ using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms.Controls;
 
-public class ProductionControl : UserControl
+public class ProductionControl : UserControl, IRealtimeDataControl
 {
     private readonly ProductionRepository _productionRepository;
     private readonly JobFlowService _flowService;
@@ -188,4 +188,7 @@ public class ProductionControl : UserControl
             _openSection(currentModule.ToString());
         }
     }
+
+    public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => LoadJobsAsync();
+
 }

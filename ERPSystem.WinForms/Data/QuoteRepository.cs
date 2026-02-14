@@ -9,13 +9,15 @@ namespace ERPSystem.WinForms.Data;
 public class QuoteRepository
 {
     private readonly string _connectionString;
+    private readonly RealtimeDataService? _realtimeDataService;
 
-    public QuoteRepository(string databasePath)
+    public QuoteRepository(string databasePath, RealtimeDataService? realtimeDataService = null)
     {
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath
         }.ToString();
+        _realtimeDataService = realtimeDataService;
     }
 
     public async Task InitializeDatabaseAsync()
@@ -406,6 +408,11 @@ public class QuoteRepository
                 details: $"status={(int)quote.Status}");
 
             await transaction.CommitAsync();
+
+            if (_realtimeDataService is not null)
+            {
+                await _realtimeDataService.PublishChangeAsync("Quotes", operationMode);
+            }
 
             Trace.WriteLine($"[QuoteRepository.SaveQuoteAsync] success quoteId={quote.Id}, requestedQuoteId={requestedId}, mode={operationMode}, lineItemCount={lineItemCount}");
             return quote.Id;
@@ -930,6 +937,11 @@ public class QuoteRepository
         if (affected == 0)
         {
             throw new InvalidOperationException("Only in-process quotes can be deleted.");
+        }
+
+        if (_realtimeDataService is not null)
+        {
+            await _realtimeDataService.PublishChangeAsync("Quotes", "delete");
         }
     }
 

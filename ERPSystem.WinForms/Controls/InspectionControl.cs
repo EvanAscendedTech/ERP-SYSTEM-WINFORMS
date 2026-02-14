@@ -4,7 +4,7 @@ using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms.Controls;
 
-public class InspectionControl : UserControl
+public class InspectionControl : UserControl, IRealtimeDataControl
 {
     private readonly ProductionRepository _productionRepository;
     private readonly JobFlowService _flowService;
@@ -131,4 +131,7 @@ public class InspectionControl : UserControl
 
         _openSection(_flowService.GetCurrentModule(selected.JobNumber).ToString());
     }
+
+    public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => LoadJobsAsync();
+
 }
