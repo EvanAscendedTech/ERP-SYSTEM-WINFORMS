@@ -3,7 +3,7 @@ using ERPSystem.WinForms.Models;
 
 namespace ERPSystem.WinForms.Controls;
 
-public class CRMControl : UserControl
+public class CRMControl : UserControl, IRealtimeDataControl
 {
     private readonly QuoteRepository _quoteRepository;
     private readonly DataGridView _customersGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true };
@@ -102,4 +102,7 @@ public class CRMControl : UserControl
             return form.ShowDialog() == DialogResult.OK ? box.Text : string.Empty;
         }
     }
+
+    public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => LoadCustomersAsync();
+
 }

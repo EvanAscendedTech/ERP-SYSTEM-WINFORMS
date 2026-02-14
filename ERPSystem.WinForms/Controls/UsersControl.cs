@@ -4,7 +4,7 @@ using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms.Controls;
 
-public class UsersControl : UserControl
+public class UsersControl : UserControl, IRealtimeDataControl
 {
     private readonly UserManagementRepository _userRepository;
     private readonly UserAccount _currentUser;
@@ -175,4 +175,7 @@ public class UsersControl : UserControl
             return form.ShowDialog() == DialogResult.OK ? box.Text : string.Empty;
         }
     }
+
+    public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => ReloadAsync();
+
 }

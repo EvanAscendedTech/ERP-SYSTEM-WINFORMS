@@ -10,6 +10,7 @@ public partial class ERPMainForm
     private Label lblAppTitle = null!;
     private Label lblSection = null!;
     private Label lblSyncClock = null!;
+    private Label lblSaveClock = null!;
     private ModernButton btnThemeToggle = null!;
 
     private FlowLayoutPanel navButtonsPanel = null!;
@@ -33,6 +34,7 @@ public partial class ERPMainForm
         lblAppTitle = new Label();
         lblSection = new Label();
         lblSyncClock = new Label();
+        lblSaveClock = new Label();
         btnThemeToggle = new ModernButton();
 
         navButtonsPanel = new FlowLayoutPanel();
@@ -79,8 +81,14 @@ public partial class ERPMainForm
         lblSyncClock.AutoSize = true;
         lblSyncClock.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
         lblSyncClock.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        lblSyncClock.Location = new Point(430, 12);
+        lblSyncClock.Location = new Point(430, 8);
         lblSyncClock.TextAlign = ContentAlignment.MiddleRight;
+
+        lblSaveClock.AutoSize = true;
+        lblSaveClock.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
+        lblSaveClock.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        lblSaveClock.Location = new Point(430, 28);
+        lblSaveClock.TextAlign = ContentAlignment.MiddleRight;
 
         btnThemeToggle.Text = "☾ Dark";
         btnThemeToggle.Size = new Size(108, 36);
@@ -92,11 +100,13 @@ public partial class ERPMainForm
         {
             btnThemeToggle.Left = headerPanel.Width - btnThemeToggle.Width - 20;
             lblSection.Left = btnThemeToggle.Left - lblSection.Width - 16;
-            lblSyncClock.Left = lblSection.Left - lblSyncClock.Width - 20;
+            lblSyncClock.Left = lblSection.Left - Math.Max(lblSyncClock.Width, lblSaveClock.Width) - 20;
+            lblSaveClock.Left = lblSyncClock.Left;
         };
 
         headerPanel.Controls.Add(lblAppTitle);
         headerPanel.Controls.Add(lblSyncClock);
+        headerPanel.Controls.Add(lblSaveClock);
         headerPanel.Controls.Add(lblSection);
         headerPanel.Controls.Add(btnThemeToggle);
 

@@ -27,13 +27,16 @@ internal static class Program
             var dbPath = Path.Combine(appDataFolder, "erp_system.db");
             var settingsPath = Path.Combine(appDataFolder, "appsettings.json");
 
-            var quoteRepository = new QuoteRepository(dbPath);
+            var realtimeDataService = new RealtimeDataService(dbPath);
+            realtimeDataService.InitializeDatabaseAsync().GetAwaiter().GetResult();
+
+            var quoteRepository = new QuoteRepository(dbPath, realtimeDataService);
             quoteRepository.InitializeDatabaseAsync().GetAwaiter().GetResult();
 
-            var productionRepository = new ProductionRepository(dbPath);
+            var productionRepository = new ProductionRepository(dbPath, realtimeDataService);
             productionRepository.InitializeDatabaseAsync().GetAwaiter().GetResult();
 
-            var userRepository = new UserManagementRepository(dbPath);
+            var userRepository = new UserManagementRepository(dbPath, realtimeDataService);
             userRepository.InitializeDatabaseAsync().GetAwaiter().GetResult();
             EnsureDefaultAdminAsync(userRepository).GetAwaiter().GetResult();
 
@@ -56,6 +59,7 @@ internal static class Program
                 appSettingsService,
                 inspectionService,
                 archiveService,
+                realtimeDataService,
                 loginForm.AuthenticatedUser));
         }
         catch (Exception ex)

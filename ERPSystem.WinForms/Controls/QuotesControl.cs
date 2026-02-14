@@ -5,7 +5,7 @@ using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms.Controls;
 
-public class QuotesControl : UserControl
+public class QuotesControl : UserControl, IRealtimeDataControl
 {
     private readonly QuoteRepository _quoteRepository;
     private readonly ProductionRepository _productionRepository;
@@ -213,4 +213,7 @@ public class QuotesControl : UserControl
         await LoadActiveQuotesAsync();
         _openSection("Production");
     }
+
+    public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => LoadActiveQuotesAsync();
+
 }

@@ -6,23 +6,31 @@ namespace ERPSystem.WinForms.Forms;
 
 public partial class ERPMainForm : Form
 {
+    private static readonly TimeSpan FailSafeInterval = TimeSpan.FromMinutes(2.5);
+
     private readonly QuoteRepository _quoteRepo;
     private readonly ProductionRepository _prodRepo;
     private readonly UserManagementRepository _userRepo;
     private readonly AppSettingsService _settings;
     private readonly InspectionService _inspection;
     private readonly ArchiveService _archive;
+    private readonly RealtimeDataService _realtimeData;
     private readonly JobFlowService _jobFlow = new();
     private readonly ThemeManager _themeManager = new();
     private readonly Models.UserAccount _currentUser;
 
     private readonly Dictionary<string, ModernButton> _navButtons;
     private readonly System.Windows.Forms.Timer _syncClockTimer = new();
+    private DateTime _nextFailSafeAt;
     private DateTime _lastAutosaveAt;
     private DateTime _lastRefreshAt;
+    private DateTime _lastRealtimePollAt;
+    private long _lastSeenRealtimeEventId;
+    private bool _syncTickRunning;
+    private bool _refreshRunning;
 
     public ERPMainForm(QuoteRepository quoteRepo, ProductionRepository prodRepo, UserManagementRepository userRepo,
-               AppSettingsService settings, InspectionService inspection, ArchiveService archive, Models.UserAccount currentUser)
+               AppSettingsService settings, InspectionService inspection, ArchiveService archive, RealtimeDataService realtimeData, Models.UserAccount currentUser)
     {
         _quoteRepo = quoteRepo;
         _prodRepo = prodRepo;
@@ -30,6 +38,7 @@ public partial class ERPMainForm : Form
         _settings = settings;
         _inspection = inspection;
         _archive = archive;
+        _realtimeData = realtimeData;
         _currentUser = currentUser;
 
         InitializeComponent();
@@ -57,38 +66,142 @@ public partial class ERPMainForm : Form
         ApplyTheme();
     }
 
-
     private void InitializeSyncClock()
     {
-        _lastAutosaveAt = DateTime.Now;
-        _lastRefreshAt = DateTime.Now;
+        var now = DateTime.Now;
+        _nextFailSafeAt = now.Add(FailSafeInterval);
+        _lastAutosaveAt = now;
+        _lastRefreshAt = now;
+        _lastRealtimePollAt = now;
+
+        _ = InitializeRealtimeWatcherAsync();
 
         _syncClockTimer.Interval = 1000;
-        _syncClockTimer.Tick += (_, _) =>
+        _syncClockTimer.Tick += async (_, _) =>
         {
-            var now = DateTime.Now;
-            if ((now - _lastAutosaveAt).TotalSeconds >= 30)
+            if (_syncTickRunning)
             {
-                _lastAutosaveAt = now;
+                return;
             }
 
-            if ((now - _lastRefreshAt).TotalSeconds >= 15)
+            _syncTickRunning = true;
+            try
             {
-                _lastRefreshAt = now;
-            }
+                var tickNow = DateTime.Now;
+                if (tickNow >= _nextFailSafeAt)
+                {
+                    await ExecuteFailSafeCheckpointAsync();
+                    tickNow = DateTime.Now;
+                }
 
-            UpdateSyncClockText(now);
+                if ((tickNow - _lastRealtimePollAt).TotalSeconds >= 2)
+                {
+                    await PollRealtimeChangesAsync();
+                }
+
+                UpdateSyncClockText(tickNow);
+            }
+            finally
+            {
+                _syncTickRunning = false;
+            }
         };
 
-        UpdateSyncClockText(DateTime.Now);
+        UpdateSyncClockText(now);
         _syncClockTimer.Start();
 
         FormClosed += (_, _) => _syncClockTimer.Stop();
     }
 
+    private async Task InitializeRealtimeWatcherAsync()
+    {
+        await _realtimeData.InitializeDatabaseAsync();
+        _lastSeenRealtimeEventId = await _realtimeData.GetLatestEventIdAsync();
+    }
+
+    private async Task ExecuteFailSafeCheckpointAsync()
+    {
+        CommitActiveInputs();
+        await RefreshActiveSectionAsync(fromFailSafeCheckpoint: true);
+
+        var now = DateTime.Now;
+        _lastAutosaveAt = now;
+        _lastRefreshAt = now;
+        _nextFailSafeAt = now.Add(FailSafeInterval);
+    }
+
+    private async Task PollRealtimeChangesAsync()
+    {
+        _lastRealtimePollAt = DateTime.Now;
+        var latestEventId = await _realtimeData.GetLatestEventIdAsync();
+        if (latestEventId <= _lastSeenRealtimeEventId)
+        {
+            return;
+        }
+
+        _lastSeenRealtimeEventId = latestEventId;
+        await RefreshActiveSectionAsync(fromFailSafeCheckpoint: false);
+        _lastRefreshAt = DateTime.Now;
+    }
+
+    private async Task RefreshActiveSectionAsync(bool fromFailSafeCheckpoint)
+    {
+        if (_refreshRunning)
+        {
+            return;
+        }
+
+        if (mainContentPanel.Controls.Count == 0 || mainContentPanel.Controls[0] is not IRealtimeDataControl refreshableControl)
+        {
+            return;
+        }
+
+        _refreshRunning = true;
+        try
+        {
+            await refreshableControl.RefreshDataAsync(fromFailSafeCheckpoint);
+        }
+        finally
+        {
+            _refreshRunning = false;
+        }
+    }
+
+    private void CommitActiveInputs()
+    {
+        ValidateChildren();
+        FlushBindingsRecursive(this);
+    }
+
+    private static void FlushBindingsRecursive(Control control)
+    {
+        foreach (Binding binding in control.DataBindings)
+        {
+            binding.WriteValue();
+        }
+
+        if (control is DataGridView grid && grid.IsCurrentCellInEditMode)
+        {
+            grid.EndEdit();
+        }
+
+        foreach (Control child in control.Controls)
+        {
+            FlushBindingsRecursive(child);
+        }
+    }
+
     private void UpdateSyncClockText(DateTime now)
     {
-        lblSyncClock.Text = $"Sync {now:HH:mm:ss} • Save {_lastAutosaveAt:HH:mm:ss} • Refresh {_lastRefreshAt:HH:mm:ss}";
+        var countdown = _nextFailSafeAt - now;
+        if (countdown < TimeSpan.Zero)
+        {
+            countdown = TimeSpan.Zero;
+        }
+
+        var remaining = $"{countdown.Minutes:D2}:{countdown.Seconds:D2}";
+        lblSyncClock.Text = $"Sync in {remaining}";
+        lblSaveClock.Text = $"Save in {remaining} • Last sync { _lastRefreshAt:HH:mm:ss }";
     }
 
     private void WireEvents()
@@ -196,6 +309,7 @@ public partial class ERPMainForm : Form
         tabStripPanel.BackColor = palette.Panel;
         mainContentPanel.BackColor = palette.Background;
         lblSyncClock.ForeColor = palette.TextSecondary;
+        lblSaveClock.ForeColor = palette.TextSecondary;
 
         foreach (var button in _navButtons.Values)
         {

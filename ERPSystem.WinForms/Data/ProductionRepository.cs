@@ -7,10 +7,12 @@ namespace ERPSystem.WinForms.Data;
 public class ProductionRepository
 {
     private readonly string _connectionString;
+    private readonly RealtimeDataService? _realtimeDataService;
 
-    public ProductionRepository(string dbPath)
+    public ProductionRepository(string dbPath, RealtimeDataService? realtimeDataService = null)
     {
         _connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+        _realtimeDataService = realtimeDataService;
     }
 
     public async Task InitializeDatabaseAsync()
@@ -101,7 +103,14 @@ public class ProductionRepository
         command.Parameters.AddWithValue("$completedUtc", job.CompletedUtc?.ToString("O") ?? (object)DBNull.Value);
         command.Parameters.AddWithValue("$completedByUserId", job.CompletedByUserId ?? (object)DBNull.Value);
 
-        return Convert.ToInt32(await command.ExecuteScalarAsync());
+        var id = Convert.ToInt32(await command.ExecuteScalarAsync());
+
+        if (_realtimeDataService is not null)
+        {
+            await _realtimeDataService.PublishChangeAsync("ProductionJobs", "save");
+        }
+
+        return id;
     }
 
     public async Task<IReadOnlyList<ProductionJob>> GetJobsAsync()

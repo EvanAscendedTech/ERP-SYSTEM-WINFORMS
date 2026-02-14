@@ -1,4 +1,5 @@
 using ERPSystem.WinForms.Models;
+using ERPSystem.WinForms.Services;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 
@@ -7,10 +8,12 @@ namespace ERPSystem.WinForms.Data;
 public class UserManagementRepository
 {
     private readonly string _connectionString;
+    private readonly RealtimeDataService? _realtimeDataService;
 
-    public UserManagementRepository(string dbPath)
+    public UserManagementRepository(string dbPath, RealtimeDataService? realtimeDataService = null)
     {
         _connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+        _realtimeDataService = realtimeDataService;
     }
 
     public async Task InitializeDatabaseAsync()
@@ -92,7 +95,14 @@ public class UserManagementRepository
         command.Parameters.AddWithValue("$name", role.Name);
         command.Parameters.AddWithValue("$permissions", string.Join(',', role.Permissions.Distinct().Select(p => (int)p)));
 
-        return Convert.ToInt32(await command.ExecuteScalarAsync());
+        var roleId = Convert.ToInt32(await command.ExecuteScalarAsync());
+
+        if (_realtimeDataService is not null)
+        {
+            await _realtimeDataService.PublishChangeAsync("Users", "save-role");
+        }
+
+        return roleId;
     }
 
     public async Task<int> SaveUserAsync(UserAccount user)
@@ -139,6 +149,12 @@ public class UserManagementRepository
         }
 
         await transaction.CommitAsync();
+
+        if (_realtimeDataService is not null)
+        {
+            await _realtimeDataService.PublishChangeAsync("Users", "save-user");
+        }
+
         return userId;
     }
 

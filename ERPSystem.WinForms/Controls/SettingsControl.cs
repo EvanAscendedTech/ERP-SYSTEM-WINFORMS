@@ -3,7 +3,7 @@ using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms.Controls;
 
-public class SettingsControl : UserControl
+public class SettingsControl : UserControl, IRealtimeDataControl
 {
     private readonly AppSettingsService _settingsService;
     private readonly bool _canManageSettings;
@@ -86,4 +86,7 @@ public class SettingsControl : UserControl
         _companyNameChanged?.Invoke(_settings.CompanyName);
         _feedback.Text = "Settings saved.";
     }
+
+    public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => LoadSettingsAsync();
+
 }
