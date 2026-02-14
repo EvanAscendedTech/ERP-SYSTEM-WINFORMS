@@ -18,8 +18,9 @@ public class QuoteDraftForm : Form
         _quoteRepository = quoteRepository;
 
         Text = $"New Quote Draft - {GenerateQuoteFileNumber()}";
-        Width = 1000;
-        Height = 700;
+        Width = 1200;
+        Height = 760;
+        WindowState = FormWindowState.Maximized;
         StartPosition = FormStartPosition.CenterParent;
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(10) };

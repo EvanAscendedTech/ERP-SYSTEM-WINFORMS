@@ -12,8 +12,9 @@ public class QuotePacketForm : Form
         _quote = quote;
 
         Text = $"Quote Packet - Quote #{quote.Id}";
-        Width = 980;
-        Height = 680;
+        Width = 1200;
+        Height = 760;
+        WindowState = FormWindowState.Maximized;
         StartPosition = FormStartPosition.CenterParent;
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };

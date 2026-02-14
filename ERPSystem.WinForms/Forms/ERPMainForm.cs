@@ -149,12 +149,13 @@ public partial class ERPMainForm : Form
         var palette = _themeManager.CurrentPalette;
 
         headerPanel.BackColor = palette.Panel;
-        navPanel.BackColor = palette.Panel;
+        tabStripPanel.BackColor = palette.Panel;
         mainContentPanel.BackColor = palette.Background;
 
         foreach (var button in _navButtons.Values)
         {
             var active = Equals(button.Tag, "active");
+            button.IsActive = active;
             button.OverrideBaseColor = active ? palette.Accent : palette.Panel;
             button.OverrideBorderColor = active ? palette.Accent : palette.Border;
             button.ForeColor = active ? Color.White : palette.TextPrimary;
