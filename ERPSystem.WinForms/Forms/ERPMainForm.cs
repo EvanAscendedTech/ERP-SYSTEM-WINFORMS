@@ -201,7 +201,7 @@ public partial class ERPMainForm : Form
 
         var remaining = $"{countdown.Minutes:D2}:{countdown.Seconds:D2}";
         lblSyncClock.Text = $"Sync in {remaining}";
-        lblSaveClock.Text = $"Save in {remaining} • Last sync { _lastRefreshAt:HH:mm:ss }";
+        lblSaveClock.Text = $"Save in {remaining} • Last sync {_lastRefreshAt:HH:mm:ss}";
     }
 
     private void WireEvents()
