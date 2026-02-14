@@ -29,6 +29,7 @@ public class UserManagementRepository
                 PasswordHash TEXT NOT NULL,
                 IsActive INTEGER NOT NULL,
                 IconPath TEXT NOT NULL DEFAULT '',
+                IconBlob BLOB,
                 IsOnline INTEGER NOT NULL DEFAULT 0,
                 LastActivityUtc TEXT
             );
@@ -60,6 +61,7 @@ public class UserManagementRepository
         await command.ExecuteNonQueryAsync();
 
         await EnsureColumnExistsAsync(connection, "Users", "IconPath", "TEXT NOT NULL DEFAULT ''");
+        await EnsureColumnExistsAsync(connection, "Users", "IconBlob", "BLOB");
         await EnsureColumnExistsAsync(connection, "Users", "IsOnline", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "Users", "LastActivityUtc", "TEXT");
     }
@@ -118,13 +120,14 @@ public class UserManagementRepository
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = @"
-            INSERT INTO Users (Username, DisplayName, PasswordHash, IsActive, IconPath)
-            VALUES ($username, $displayName, $passwordHash, $isActive, $iconPath)
+            INSERT INTO Users (Username, DisplayName, PasswordHash, IsActive, IconPath, IconBlob)
+            VALUES ($username, $displayName, $passwordHash, $isActive, $iconPath, $iconBlob)
             ON CONFLICT(Username) DO UPDATE SET
                 DisplayName = excluded.DisplayName,
                 PasswordHash = excluded.PasswordHash,
                 IsActive = excluded.IsActive,
-                IconPath = excluded.IconPath;
+                IconPath = excluded.IconPath,
+                IconBlob = excluded.IconBlob;
 
             SELECT Id FROM Users WHERE Username = $username;";
 
@@ -133,6 +136,7 @@ public class UserManagementRepository
         command.Parameters.AddWithValue("$passwordHash", user.PasswordHash);
         command.Parameters.AddWithValue("$isActive", user.IsActive ? 1 : 0);
         command.Parameters.AddWithValue("$iconPath", user.IconPath ?? string.Empty);
+        command.Parameters.AddWithValue("$iconBlob", (object?)user.IconBlob ?? DBNull.Value);
         var userId = Convert.ToInt32(await command.ExecuteScalarAsync());
 
         await using var deleteUserRoles = connection.CreateCommand();
@@ -187,7 +191,7 @@ public class UserManagementRepository
         await using var command = connection.CreateCommand();
         command.CommandText = @"
             SELECT u.Id, u.Username, u.DisplayName, u.PasswordHash, u.IsActive, u.IconPath,
-                   u.IsOnline, u.LastActivityUtc,
+                   u.IconBlob, u.IsOnline, u.LastActivityUtc,
                    r.Id, r.Name, r.Permissions
             FROM Users u
             LEFT JOIN UserRoles ur ON ur.UserId = u.Id
@@ -210,21 +214,22 @@ public class UserManagementRepository
                     PasswordHash = reader.GetString(3),
                     IsActive = reader.GetInt32(4) == 1,
                     IconPath = reader.IsDBNull(5) ? string.Empty : reader.GetString(5),
-                    IsOnline = !reader.IsDBNull(6) && reader.GetInt32(6) == 1,
-                    LastActivityUtc = reader.IsDBNull(7)
+                    IconBlob = reader.IsDBNull(6) ? null : (byte[])reader[6],
+                    IsOnline = !reader.IsDBNull(7) && reader.GetInt32(7) == 1,
+                    LastActivityUtc = reader.IsDBNull(8)
                         ? null
-                        : DateTime.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+                        : DateTime.Parse(reader.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
                 };
                 map[userId] = user;
                 users.Add(user);
             }
 
-            if (reader.IsDBNull(8))
+            if (reader.IsDBNull(9))
             {
                 continue;
             }
 
-            var permissionsText = reader.GetString(10);
+            var permissionsText = reader.GetString(11);
             var permissions = string.IsNullOrWhiteSpace(permissionsText)
                 ? new List<UserPermission>()
                 : permissionsText.Split(',', StringSplitOptions.RemoveEmptyEntries)
@@ -234,8 +239,8 @@ public class UserManagementRepository
 
             user.Roles.Add(new RoleDefinition
             {
-                Id = reader.GetInt32(8),
-                Name = reader.GetString(9),
+                Id = reader.GetInt32(9),
+                Name = reader.GetString(10),
                 Permissions = permissions
             });
         }
