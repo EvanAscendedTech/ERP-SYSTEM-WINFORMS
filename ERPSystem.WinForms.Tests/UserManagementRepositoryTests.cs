@@ -70,4 +70,35 @@ public class UserManagementRepositoryTests
 
         File.Delete(dbPath);
     }
+
+    [Fact]
+    public async Task SetOnlineStatusAsync_TracksOnlineAndLastActivity()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-online-{Guid.NewGuid():N}.db");
+        var repository = new UserManagementRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        await repository.SaveUserAsync(new UserAccount
+        {
+            Username = "presence-user",
+            DisplayName = "Presence User",
+            PasswordHash = "hash",
+            IsActive = true
+        });
+
+        var user = Assert.Single(await repository.GetUsersAsync());
+        await repository.SetOnlineStatusAsync(user.Id, true);
+
+        var onlineUser = Assert.Single(await repository.GetUsersAsync());
+        Assert.True(onlineUser.IsOnline);
+        Assert.True(onlineUser.LastActivityUtc.HasValue);
+
+        await repository.MarkUsersOfflineByInactivityAsync(TimeSpan.Zero);
+
+        var offlineUser = Assert.Single(await repository.GetUsersAsync());
+        Assert.False(offlineUser.IsOnline);
+
+        File.Delete(dbPath);
+    }
+
 }

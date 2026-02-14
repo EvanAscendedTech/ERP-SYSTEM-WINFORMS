@@ -189,6 +189,8 @@ public class LoginForm : Form
         }
 
         user.IsOnline = true;
+        user.LastActivityUtc = DateTime.UtcNow;
+        await _userRepository.SetOnlineStatusAsync(user.Id, true);
         AuthenticatedUser = user;
         DialogResult = DialogResult.OK;
         Close();
