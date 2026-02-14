@@ -8,7 +8,8 @@ public enum UserPermission
     ManageInspection = 3,
     ViewArchive = 4,
     ManageUsers = 5,
-    ManageSettings = 6
+    ManageSettings = 6,
+    ViewPricing = 7
 }
 
 public class RoleDefinition
@@ -46,4 +47,19 @@ public class EmployeeRecord
     public string FullName { get; set; } = string.Empty;
     public string Department { get; set; } = string.Empty;
     public int? LinkedUserId { get; set; }
+}
+
+
+public static class RoleCatalog
+{
+    public static readonly string[] AccountLevels =
+    [
+        "Operator",
+        "Foreman",
+        "Purchasing",
+        "Inspection",
+        "Shipping and Receiving",
+        "Admin",
+        "Quoting"
+    ];
 }

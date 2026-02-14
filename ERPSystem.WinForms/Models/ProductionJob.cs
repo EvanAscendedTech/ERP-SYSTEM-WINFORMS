@@ -18,6 +18,7 @@ public class ProductionJob
     public DateTime DueDateUtc { get; set; } = DateTime.UtcNow.AddDays(1);
     public ProductionJobStatus Status { get; set; } = ProductionJobStatus.Planned;
     public int? SourceQuoteId { get; set; }
+    public string QuoteLifecycleId { get; set; } = string.Empty;
     public DateTime? StartedUtc { get; set; }
     public string? StartedByUserId { get; set; }
     public DateTime? CompletedUtc { get; set; }

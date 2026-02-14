@@ -28,6 +28,7 @@ public class ProductionRepository
                 DueDateUtc TEXT NOT NULL,
                 Status INTEGER NOT NULL,
                 SourceQuoteId INTEGER NULL,
+                QuoteLifecycleId TEXT NOT NULL DEFAULT '',
                 StartedUtc TEXT NULL,
                 StartedByUserId TEXT NULL,
                 CompletedUtc TEXT NULL,
@@ -57,6 +58,7 @@ public class ProductionRepository
         await command.ExecuteNonQueryAsync();
 
         await EnsureColumnExistsAsync(connection, "ProductionJobs", "SourceQuoteId", "INTEGER NULL");
+        await EnsureColumnExistsAsync(connection, "ProductionJobs", "QuoteLifecycleId", "TEXT NOT NULL DEFAULT ''");
         await EnsureColumnExistsAsync(connection, "ProductionJobs", "StartedUtc", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "ProductionJobs", "StartedByUserId", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "ProductionJobs", "CompletedUtc", "TEXT NULL");
@@ -70,8 +72,8 @@ public class ProductionRepository
 
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            INSERT INTO ProductionJobs (JobNumber, ProductName, PlannedQuantity, ProducedQuantity, DueDateUtc, Status, SourceQuoteId, StartedUtc, StartedByUserId, CompletedUtc, CompletedByUserId)
-            VALUES ($jobNumber, $productName, $plannedQty, $producedQty, $dueDateUtc, $status, $sourceQuoteId, $startedUtc, $startedByUserId, $completedUtc, $completedByUserId)
+            INSERT INTO ProductionJobs (JobNumber, ProductName, PlannedQuantity, ProducedQuantity, DueDateUtc, Status, SourceQuoteId, QuoteLifecycleId, StartedUtc, StartedByUserId, CompletedUtc, CompletedByUserId)
+            VALUES ($jobNumber, $productName, $plannedQty, $producedQty, $dueDateUtc, $status, $sourceQuoteId, $quoteLifecycleId, $startedUtc, $startedByUserId, $completedUtc, $completedByUserId)
             ON CONFLICT(JobNumber) DO UPDATE SET
                 ProductName = excluded.ProductName,
                 PlannedQuantity = excluded.PlannedQuantity,
@@ -79,6 +81,7 @@ public class ProductionRepository
                 DueDateUtc = excluded.DueDateUtc,
                 Status = excluded.Status,
                 SourceQuoteId = excluded.SourceQuoteId,
+                QuoteLifecycleId = excluded.QuoteLifecycleId,
                 StartedUtc = excluded.StartedUtc,
                 StartedByUserId = excluded.StartedByUserId,
                 CompletedUtc = excluded.CompletedUtc,
@@ -92,6 +95,7 @@ public class ProductionRepository
         command.Parameters.AddWithValue("$dueDateUtc", job.DueDateUtc.ToString("O"));
         command.Parameters.AddWithValue("$status", (int)job.Status);
         command.Parameters.AddWithValue("$sourceQuoteId", job.SourceQuoteId ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$quoteLifecycleId", job.QuoteLifecycleId);
         command.Parameters.AddWithValue("$startedUtc", job.StartedUtc?.ToString("O") ?? (object)DBNull.Value);
         command.Parameters.AddWithValue("$startedByUserId", job.StartedByUserId ?? (object)DBNull.Value);
         command.Parameters.AddWithValue("$completedUtc", job.CompletedUtc?.ToString("O") ?? (object)DBNull.Value);
@@ -109,7 +113,7 @@ public class ProductionRepository
 
         await using var command = connection.CreateCommand();
         command.CommandText = @"SELECT Id, JobNumber, ProductName, PlannedQuantity, ProducedQuantity, DueDateUtc, Status,
-                                       SourceQuoteId, StartedUtc, StartedByUserId, CompletedUtc, CompletedByUserId
+                                       SourceQuoteId, QuoteLifecycleId, StartedUtc, StartedByUserId, CompletedUtc, CompletedByUserId
                                 FROM ProductionJobs ORDER BY DueDateUtc";
 
         await using var reader = await command.ExecuteReaderAsync();
@@ -125,10 +129,11 @@ public class ProductionRepository
                 DueDateUtc = DateTime.Parse(reader.GetString(5)),
                 Status = (ProductionJobStatus)reader.GetInt32(6),
                 SourceQuoteId = reader.IsDBNull(7) ? null : reader.GetInt32(7),
-                StartedUtc = reader.IsDBNull(8) ? null : DateTime.Parse(reader.GetString(8)),
-                StartedByUserId = reader.IsDBNull(9) ? null : reader.GetString(9),
-                CompletedUtc = reader.IsDBNull(10) ? null : DateTime.Parse(reader.GetString(10)),
-                CompletedByUserId = reader.IsDBNull(11) ? null : reader.GetString(11)
+                QuoteLifecycleId = reader.IsDBNull(8) ? string.Empty : reader.GetString(8),
+                StartedUtc = reader.IsDBNull(9) ? null : DateTime.Parse(reader.GetString(9)),
+                StartedByUserId = reader.IsDBNull(10) ? null : reader.GetString(10),
+                CompletedUtc = reader.IsDBNull(11) ? null : DateTime.Parse(reader.GetString(11)),
+                CompletedByUserId = reader.IsDBNull(12) ? null : reader.GetString(12)
             });
         }
 

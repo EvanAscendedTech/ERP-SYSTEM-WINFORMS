@@ -6,18 +6,22 @@ namespace ERPSystem.WinForms.Forms;
 public class QuoteDraftForm : Form
 {
     private readonly QuoteRepository _quoteRepository;
-    private readonly TextBox _customerName = new() { Width = 320, PlaceholderText = "Customer name" };
-    private readonly TextBox _customerQuoteNumber = new() { Width = 320, PlaceholderText = "Customer quote number" };
+    private readonly bool _canViewPricing;
+    private readonly ComboBox _customerPicker = new() { Width = 320, DropDownStyle = ComboBoxStyle.DropDownList };
+    private readonly TextBox _customerQuoteNumber = new() { Width = 220, PlaceholderText = "Customer quote number" };
+    private readonly TextBox _quoteLifecycleId = new() { Width = 220, ReadOnly = true };
     private readonly NumericUpDown _lineCount = new() { Minimum = 1, Maximum = 20, Value = 1, Width = 100 };
     private readonly FlowLayoutPanel _lineItemsPanel = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
 
     public int CreatedQuoteId { get; private set; }
 
-    public QuoteDraftForm(QuoteRepository quoteRepository)
+    public QuoteDraftForm(QuoteRepository quoteRepository, bool canViewPricing)
     {
         _quoteRepository = quoteRepository;
+        _canViewPricing = canViewPricing;
+        _quoteLifecycleId.Text = GenerateLifecycleQuoteId();
 
-        Text = $"New Quote Draft - {GenerateQuoteFileNumber()}";
+        Text = $"New Quote Draft - {_quoteLifecycleId.Text}";
         Width = 1200;
         Height = 760;
         WindowState = FormWindowState.Maximized;
@@ -32,8 +36,11 @@ public class QuoteDraftForm : Form
         var createCustomerButton = new Button { Text = "Create New Customer", AutoSize = true };
         createCustomerButton.Click += (_, _) => OpenCustomerCreation();
 
-        header.Controls.Add(_customerName);
+        header.Controls.Add(new Label { Text = "Customer:", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
+        header.Controls.Add(_customerPicker);
         header.Controls.Add(_customerQuoteNumber);
+        header.Controls.Add(new Label { Text = "Lifecycle ID", AutoSize = true, Margin = new Padding(10, 8, 0, 0) });
+        header.Controls.Add(_quoteLifecycleId);
         header.Controls.Add(new Label { Text = "Line items:", AutoSize = true, Margin = new Padding(8, 8, 0, 0) });
         header.Controls.Add(_lineCount);
         header.Controls.Add(createCustomerButton);
@@ -51,13 +58,20 @@ public class QuoteDraftForm : Form
         root.Controls.Add(buttons, 0, 2);
 
         Controls.Add(root);
+        _ = LoadCustomersAsync();
     }
 
-    private static string GenerateQuoteFileNumber()
+    private static string GenerateLifecycleQuoteId()
     {
-        const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        var random = new Random();
-        return $"QF-{new string(Enumerable.Range(0, 6).Select(_ => chars[random.Next(chars.Length)]).ToArray())}";
+        return $"Q-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()}";
+    }
+
+    private async Task LoadCustomersAsync()
+    {
+        var customers = await _quoteRepository.GetCustomersAsync();
+        _customerPicker.DataSource = customers.ToList();
+        _customerPicker.DisplayMember = nameof(Customer.DisplayLabel);
+        _customerPicker.ValueMember = nameof(Customer.Id);
     }
 
     private void OpenCustomerCreation()
@@ -67,7 +81,7 @@ public class QuoteDraftForm : Form
         {
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleCenter,
-            Text = "CRM customer creation form placeholder:\naddress, payment terms, contacts, NDA and legal documents can be collected here."
+            Text = "Use the CRM section to create customers and load multiple contacts."
         });
         customerForm.ShowDialog(this);
     }
@@ -77,29 +91,60 @@ public class QuoteDraftForm : Form
         _lineItemsPanel.Controls.Clear();
         for (var i = 1; i <= count; i++)
         {
-            _lineItemsPanel.Controls.Add(BuildLineItemCard(i));
+            _lineItemsPanel.Controls.Add(BuildLineItemCard(i, _canViewPricing));
         }
     }
 
-    private static Control BuildLineItemCard(int lineIndex)
+    private static Control BuildLineItemCard(int lineIndex, bool canViewPricing)
     {
-        var group = new GroupBox { Text = $"Line Item {lineIndex}", Width = 900, Height = 160 };
+        var group = new GroupBox { Text = $"Line Item {lineIndex}", Width = 1000, Height = 200 };
         var layout = new FlowLayoutPanel { Dock = DockStyle.Fill };
         layout.Controls.Add(new TextBox { Width = 200, PlaceholderText = "Description", Name = "Description" });
         layout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Lead time" });
+
+        var pricing = new TextBox { Width = 120, PlaceholderText = "Unit price", Name = "UnitPrice", Visible = canViewPricing };
+        layout.Controls.Add(pricing);
+
         layout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Production hrs" });
         layout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Setup hrs" });
-        layout.Controls.Add(new TextBox { Width = 160, PlaceholderText = "Assigned machine" });
-        layout.Controls.Add(new Button { Text = "Upload Technical info", AutoSize = true });
-        layout.Controls.Add(new Button { Text = "Upload Material pricing", AutoSize = true });
-        layout.Controls.Add(new Button { Text = "Upload Post-op pricing", AutoSize = true });
+
+        layout.Controls.Add(BuildBlobUploadButton("Upload technical", QuoteBlobType.Technical));
+        layout.Controls.Add(BuildBlobUploadButton("Upload material pricing", QuoteBlobType.MaterialPricing));
+        layout.Controls.Add(BuildBlobUploadButton("Upload post op pricing", QuoteBlobType.PostOpPricing));
         group.Controls.Add(layout);
         return group;
     }
 
+    private static Button BuildBlobUploadButton(string text, QuoteBlobType blobType)
+    {
+        var button = new Button { Text = text, AutoSize = true, Tag = new List<QuoteBlobAttachment>() };
+        button.Click += (_, _) =>
+        {
+            using var picker = new OpenFileDialog { Multiselect = true, Title = text };
+            if (picker.ShowDialog() != DialogResult.OK)
+            {
+                return;
+            }
+
+            var blobs = (List<QuoteBlobAttachment>)button.Tag;
+            foreach (var file in picker.FileNames)
+            {
+                blobs.Add(new QuoteBlobAttachment
+                {
+                    BlobType = blobType,
+                    FileName = Path.GetFileName(file),
+                    ContentType = Path.GetExtension(file),
+                    BlobData = File.ReadAllBytes(file),
+                    UploadedUtc = DateTime.UtcNow
+                });
+            }
+        };
+        return button;
+    }
+
     private async Task SaveQuoteAsync()
     {
-        if (string.IsNullOrWhiteSpace(_customerName.Text))
+        if (_customerPicker.SelectedItem is not Customer customer)
         {
             MessageBox.Show("Customer is required.", "Quote", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
@@ -107,7 +152,9 @@ public class QuoteDraftForm : Form
 
         var quote = new Quote
         {
-            CustomerName = _customerName.Text.Trim(),
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            LifecycleQuoteId = _quoteLifecycleId.Text,
             Status = QuoteStatus.InProgress,
             CreatedUtc = DateTime.UtcNow,
             LastUpdatedUtc = DateTime.UtcNow
@@ -115,15 +162,26 @@ public class QuoteDraftForm : Form
 
         foreach (GroupBox item in _lineItemsPanel.Controls.OfType<GroupBox>())
         {
-            var description = item.Controls.OfType<FlowLayoutPanel>().SelectMany(panel => panel.Controls.OfType<TextBox>()).FirstOrDefault()?.Text;
-            quote.LineItems.Add(new QuoteLineItem
+            var panel = item.Controls.OfType<FlowLayoutPanel>().First();
+            var textboxes = panel.Controls.OfType<TextBox>().ToList();
+            var description = textboxes.FirstOrDefault()?.Text;
+            var priceText = textboxes.FirstOrDefault(t => t.Name == "UnitPrice")?.Text;
+
+            var line = new QuoteLineItem
             {
                 Description = string.IsNullOrWhiteSpace(description) ? $"Line {quote.LineItems.Count + 1}" : description,
                 Quantity = 1,
-                UnitPrice = 0,
+                UnitPrice = decimal.TryParse(priceText, out var unitPrice) ? unitPrice : 0,
                 LeadTimeDays = 7,
                 Notes = $"Customer quote #: {_customerQuoteNumber.Text.Trim()}"
-            });
+            };
+
+            line.BlobAttachments = panel.Controls.OfType<Button>()
+                .Where(btn => btn.Tag is List<QuoteBlobAttachment>)
+                .SelectMany(btn => (List<QuoteBlobAttachment>)btn.Tag)
+                .ToList();
+
+            quote.LineItems.Add(line);
         }
 
         CreatedQuoteId = await _quoteRepository.SaveQuoteAsync(quote);

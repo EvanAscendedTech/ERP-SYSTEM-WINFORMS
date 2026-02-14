@@ -14,11 +14,12 @@ public partial class ERPMainForm : Form
     private readonly ArchiveService _archive;
     private readonly JobFlowService _jobFlow = new();
     private readonly ThemeManager _themeManager = new();
+    private readonly Models.UserAccount _currentUser;
 
     private readonly Dictionary<string, ModernButton> _navButtons;
 
     public ERPMainForm(QuoteRepository quoteRepo, ProductionRepository prodRepo, UserManagementRepository userRepo,
-               AppSettingsService settings, InspectionService inspection, ArchiveService archive)
+               AppSettingsService settings, InspectionService inspection, ArchiveService archive, Models.UserAccount currentUser)
     {
         _quoteRepo = quoteRepo;
         _prodRepo = prodRepo;
@@ -26,6 +27,7 @@ public partial class ERPMainForm : Form
         _settings = settings;
         _inspection = inspection;
         _archive = archive;
+        _currentUser = currentUser;
 
         InitializeComponent();
         DoubleBuffered = true;
@@ -35,6 +37,7 @@ public partial class ERPMainForm : Form
             ["Dashboard"] = btnDashboard,
             ["Quotes"] = btnQuotes,
             ["Production"] = btnProduction,
+            ["CRM"] = btnCRM,
             ["Quality"] = btnQuality,
             ["Inspection"] = btnInspection,
             ["Shipping"] = btnShipping,
@@ -43,6 +46,7 @@ public partial class ERPMainForm : Form
         };
 
         _themeManager.ThemeChanged += (_, _) => ApplyTheme();
+        btnUsers.Visible = _currentUser.Roles.Any(r => string.Equals(r.Name, "Admin", StringComparison.OrdinalIgnoreCase) || string.Equals(r.Name, "Administrator", StringComparison.OrdinalIgnoreCase));
         WireEvents();
 
         LoadSection("Dashboard");
@@ -54,6 +58,7 @@ public partial class ERPMainForm : Form
         btnDashboard.Click += (_, _) => LoadSection("Dashboard");
         btnQuotes.Click += (_, _) => LoadSection("Quotes");
         btnProduction.Click += (_, _) => LoadSection("Production");
+        btnCRM.Click += (_, _) => LoadSection("CRM");
         btnQuality.Click += (_, _) => LoadSection("Quality");
         btnInspection.Click += (_, _) => LoadSection("Inspection");
         btnShipping.Click += (_, _) => LoadSection("Shipping");
@@ -86,12 +91,13 @@ public partial class ERPMainForm : Form
         return key switch
         {
             "Dashboard" => new DashboardControl(_quoteRepo, _prodRepo, _jobFlow, LoadSection),
-            "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, LoadSection),
+            "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, _currentUser, LoadSection),
             "Production" => new ProductionControl(_prodRepo, _jobFlow, LoadSection),
+            "CRM" => new CRMControl(_quoteRepo),
             "Quality" => new QualityControl(_prodRepo, _jobFlow, LoadSection),
             "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, LoadSection),
             "Shipping" => new ShippingControl(_prodRepo, _jobFlow),
-            "Users" => BuildPlaceholder("Users", "User administration can be restored here with the authenticated context."),
+            "Users" => new UsersControl(_userRepo, _currentUser, () => { }),
             "Settings" => new SettingsControl(_settings, canManageSettings: true, companyNameChanged: name => lblAppTitle.Text = $"{name} Command Center"),
             _ => BuildPlaceholder("Not Found", "The requested section is not available.")
         };

@@ -3,6 +3,7 @@ namespace ERPSystem.WinForms.Models;
 public class Quote
 {
     public int Id { get; set; }
+    public string LifecycleQuoteId { get; set; } = string.Empty;
     public int CustomerId { get; set; }
     public string CustomerName { get; set; } = string.Empty;
     public QuoteStatus Status { get; set; } = QuoteStatus.InProgress;

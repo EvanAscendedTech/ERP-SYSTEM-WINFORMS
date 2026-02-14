@@ -55,7 +55,8 @@ internal static class Program
                 userRepository,
                 appSettingsService,
                 inspectionService,
-                archiveService));
+                archiveService,
+                loginForm.AuthenticatedUser));
         }
         catch (Exception ex)
         {

@@ -86,7 +86,7 @@ public class UsersControl : UserControl
             return;
         }
 
-        var role = Prompt.Show("Role name (e.g. Operator)");
+        var roleInput = Prompt.Show("Roles (comma separated: Operator, Foreman, Purchasing, Inspection, Shipping and Receiving, Admin, Quoting)");
 
         await _userRepository.SaveUserAsync(new UserAccount
         {
@@ -94,14 +94,7 @@ public class UsersControl : UserControl
             DisplayName = username.Trim(),
             PasswordHash = AuthorizationService.HashPassword(password),
             IsActive = true,
-            Roles =
-            [
-                new RoleDefinition
-                {
-                    Name = string.IsNullOrWhiteSpace(role) ? "Operator" : role,
-                    Permissions = [UserPermission.ViewProduction, UserPermission.ViewInspection]
-                }
-            ]
+            Roles = BuildRoles(roleInput)
         });
 
         await ReloadAsync();
@@ -133,6 +126,40 @@ public class UsersControl : UserControl
         await _userRepository.SaveUserAsync(_currentUser);
         _onUsersChanged();
         await ReloadAsync();
+    }
+
+    private static List<RoleDefinition> BuildRoles(string roleInput)
+    {
+        var entries = string.IsNullOrWhiteSpace(roleInput)
+            ? new[] { "Operator" }
+            : roleInput.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var roles = new List<RoleDefinition>();
+        foreach (var name in entries.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var permissions = new List<UserPermission>();
+            if (name.Equals("Admin", StringComparison.OrdinalIgnoreCase))
+            {
+                permissions.AddRange(Enum.GetValues<UserPermission>());
+            }
+            else
+            {
+                permissions.Add(UserPermission.ViewProduction);
+                permissions.Add(UserPermission.ViewInspection);
+                if (name.Equals("Purchasing", StringComparison.OrdinalIgnoreCase) || name.Equals("Quoting", StringComparison.OrdinalIgnoreCase))
+                {
+                    permissions.Add(UserPermission.ViewPricing);
+                }
+            }
+
+            roles.Add(new RoleDefinition
+            {
+                Name = name,
+                Permissions = permissions.Distinct().ToList()
+            });
+        }
+
+        return roles;
     }
 
     private static class Prompt
