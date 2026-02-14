@@ -169,7 +169,7 @@ public class QuoteDraftForm : Form
             foreach (var attachment in line.BlobAttachments.Where(a => a.BlobType == section.BlobType))
             {
                 section.Attachments.Add(attachment);
-                var rowIndex = section.UploadGrid.Rows.Add(attachment.FileName, BlobUploadStatus.Completed.ToString());
+                var rowIndex = section.UploadGrid.Rows.Add(attachment.FileName, BlobUploadStatus.Done.ToString());
                 section.UploadGrid.Rows[rowIndex].Tag = attachment.FileName;
             }
         }
