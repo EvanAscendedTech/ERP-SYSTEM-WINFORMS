@@ -9,6 +9,7 @@ public partial class ERPMainForm
 
     private Label lblAppTitle = null!;
     private Label lblSection = null!;
+    private Label lblSyncClock = null!;
     private ModernButton btnThemeToggle = null!;
 
     private FlowLayoutPanel navButtonsPanel = null!;
@@ -31,6 +32,7 @@ public partial class ERPMainForm
 
         lblAppTitle = new Label();
         lblSection = new Label();
+        lblSyncClock = new Label();
         btnThemeToggle = new ModernButton();
 
         navButtonsPanel = new FlowLayoutPanel();
@@ -74,6 +76,12 @@ public partial class ERPMainForm
         lblSection.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         lblSection.Location = new Point(540, 22);
 
+        lblSyncClock.AutoSize = true;
+        lblSyncClock.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
+        lblSyncClock.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        lblSyncClock.Location = new Point(430, 12);
+        lblSyncClock.TextAlign = ContentAlignment.MiddleRight;
+
         btnThemeToggle.Text = "☾ Dark";
         btnThemeToggle.Size = new Size(108, 36);
         btnThemeToggle.Anchor = AnchorStyles.Top | AnchorStyles.Right;
@@ -84,9 +92,11 @@ public partial class ERPMainForm
         {
             btnThemeToggle.Left = headerPanel.Width - btnThemeToggle.Width - 20;
             lblSection.Left = btnThemeToggle.Left - lblSection.Width - 16;
+            lblSyncClock.Left = lblSection.Left - lblSyncClock.Width - 20;
         };
 
         headerPanel.Controls.Add(lblAppTitle);
+        headerPanel.Controls.Add(lblSyncClock);
         headerPanel.Controls.Add(lblSection);
         headerPanel.Controls.Add(btnThemeToggle);
 
