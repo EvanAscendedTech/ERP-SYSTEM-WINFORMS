@@ -79,8 +79,8 @@ public class QuoteDraftForm : Form
         header.Controls.Add(_lineCount);
         header.Controls.Add(createCustomerButton);
 
-        _lineCount.ValueChanged += (_, _) => RenderLineItems((int)_lineCount.Value);
-        RenderLineItems((int)_lineCount.Value);
+        _lineCount.ValueChanged += (_, _) => SyncLineItems((int)_lineCount.Value);
+        SyncLineItems((int)_lineCount.Value);
 
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, AutoSize = true };
         var saveButton = new Button { Text = "Save Quote", AutoSize = true };
@@ -130,12 +130,26 @@ public class QuoteDraftForm : Form
         customerForm.ShowDialog(this);
     }
 
-    private void RenderLineItems(int count)
+    private void SyncLineItems(int targetCount)
     {
-        _lineItemsPanel.Controls.Clear();
-        for (var i = 1; i <= count; i++)
+        var currentCount = _lineItemsPanel.Controls.Count;
+
+        if (targetCount > currentCount)
         {
-            _lineItemsPanel.Controls.Add(BuildLineItemCard(i, _canViewPricing));
+            for (var i = currentCount + 1; i <= targetCount; i++)
+            {
+                _lineItemsPanel.Controls.Add(BuildLineItemCard(i, _canViewPricing));
+            }
+
+            return;
+        }
+
+        if (targetCount < currentCount)
+        {
+            for (var i = currentCount - 1; i >= targetCount; i--)
+            {
+                _lineItemsPanel.Controls.RemoveAt(i);
+            }
         }
     }
 
