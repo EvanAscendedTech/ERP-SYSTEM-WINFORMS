@@ -162,6 +162,8 @@ public sealed class DashboardControl : UserControl
 
         _workQueues.SuspendLayout();
         _workQueues.Controls.Clear();
+        _workQueues.Controls.Add(CreateOpenQuotesSnapshotPanel(inProgressQuotes));
+        _workQueues.Controls.Add(CreateJobFlowSnapshotPanel(inProgressQuotes, productionInProgress, inspectionQueue, shippingQueue));
         _workQueues.Controls.Add(CreateWorkSnapshotPanel(inProgressQuotes, productionInProgress, qualityQueue, inspectionQueue, shippingQueue));
         _workQueues.Controls.Add(CreateQuoteQueuePanel("In-progress quotes", inProgressQuotes, includeExpiryWarning: false));
         _workQueues.Controls.Add(CreateQuoteQueuePanel("Quotes about to expire", quoteExpiringSoon, includeExpiryWarning: true));
@@ -173,6 +175,169 @@ public sealed class DashboardControl : UserControl
         _workQueues.ResumeLayout();
 
         _lastUpdatedLabel.Text = $"Updated {DateTime.Now:g}";
+    }
+
+    private Panel CreateOpenQuotesSnapshotPanel(IReadOnlyCollection<Quote> inProgressQuotes)
+    {
+        var panel = CreateBasePanel();
+        panel.Height = 235;
+
+        var title = new Label
+        {
+            Text = "Open quote snapshot",
+            Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+            Dock = DockStyle.Top,
+            Height = 28
+        };
+
+        var subtitle = new Label
+        {
+            Text = "Shows only active quotes (completed / won / lost / expired quotes are hidden).",
+            Font = new Font("Segoe UI", 9F),
+            Dock = DockStyle.Top,
+            Height = 22,
+            Tag = "secondary"
+        };
+
+        var grid = CreateSnapshotGrid();
+        grid.Columns.Add("QuoteId", "Quote");
+        grid.Columns.Add("Customer", "Customer");
+        grid.Columns.Add("Progress", "Quote progress");
+        grid.Columns.Add("Age", "Time since start");
+        grid.Columns[0].Width = 90;
+        grid.Columns[1].Width = 220;
+        grid.Columns[2].Width = 140;
+        grid.Columns[3].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+
+        foreach (var quote in inProgressQuotes.OrderByDescending(q => q.CreatedUtc).Take(25))
+        {
+            var progress = BuildQuoteProgressText(quote);
+            var startedAgo = BuildDurationText(DateTime.UtcNow - quote.CreatedUtc);
+            grid.Rows.Add($"Q{quote.Id}", quote.CustomerName, progress, startedAgo);
+        }
+
+        if (grid.Rows.Count == 0)
+        {
+            grid.Rows.Add("-", "No active quotes", "-", "-");
+        }
+
+        panel.Controls.Add(grid);
+        panel.Controls.Add(subtitle);
+        panel.Controls.Add(title);
+        return panel;
+    }
+
+    private Panel CreateJobFlowSnapshotPanel(
+        IReadOnlyCollection<Quote> inProgressQuotes,
+        IReadOnlyCollection<ProductionJob> productionInProgress,
+        IReadOnlyCollection<ProductionJob> inspectionQueue,
+        IReadOnlyCollection<ProductionJob> shippingQueue)
+    {
+        var panel = CreateBasePanel();
+        panel.Height = 235;
+
+        var title = new Label
+        {
+            Text = "Operations flow snapshot",
+            Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+            Dock = DockStyle.Top,
+            Height = 28
+        };
+
+        var subtitle = new Label
+        {
+            Text = "Current jobs categorized by operational stage: Quote / Production / Inspection / Shipping.",
+            Font = new Font("Segoe UI", 9F),
+            Dock = DockStyle.Top,
+            Height = 22,
+            Tag = "secondary"
+        };
+
+        var grid = CreateSnapshotGrid();
+        grid.Columns.Add("Operation", "Operation");
+        grid.Columns.Add("Count", "Active jobs");
+        grid.Columns.Add("Examples", "Snapshot");
+        grid.Columns[0].Width = 140;
+        grid.Columns[1].Width = 100;
+        grid.Columns[2].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+
+        grid.Rows.Add("Quote", inProgressQuotes.Count, BuildQuoteExamplePreview(inProgressQuotes));
+        grid.Rows.Add("Production", productionInProgress.Count, BuildJobExamplePreview(productionInProgress));
+        grid.Rows.Add("Inspection", inspectionQueue.Count, BuildJobExamplePreview(inspectionQueue));
+        grid.Rows.Add("Shipping", shippingQueue.Count, BuildJobExamplePreview(shippingQueue));
+
+        panel.Controls.Add(grid);
+        panel.Controls.Add(subtitle);
+        panel.Controls.Add(title);
+        return panel;
+    }
+
+    private static DataGridView CreateSnapshotGrid()
+    {
+        return new DataGridView
+        {
+            Dock = DockStyle.Fill,
+            ReadOnly = true,
+            AllowUserToAddRows = false,
+            AllowUserToDeleteRows = false,
+            AllowUserToResizeRows = false,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            RowHeadersVisible = false,
+            MultiSelect = false,
+            BackgroundColor = SystemColors.Window,
+            BorderStyle = BorderStyle.None,
+            AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells,
+            DefaultCellStyle = new DataGridViewCellStyle
+            {
+                WrapMode = DataGridViewTriState.True,
+                Padding = new Padding(2)
+            }
+        };
+    }
+
+    private static string BuildQuoteProgressText(Quote quote)
+    {
+        if (quote.LineItems.Count == 0)
+        {
+            return "Draft";
+        }
+
+        var incompleteItems = quote.LineItems.Count(line => line.Quantity <= 0 || line.UnitPrice <= 0m);
+        return incompleteItems == 0
+            ? $"{quote.LineItems.Count}/{quote.LineItems.Count} priced"
+            : $"{quote.LineItems.Count - incompleteItems}/{quote.LineItems.Count} priced";
+    }
+
+    private static string BuildDurationText(TimeSpan duration)
+    {
+        if (duration.TotalDays >= 1)
+        {
+            return $"{(int)duration.TotalDays}d {duration.Hours}h";
+        }
+
+        if (duration.TotalHours >= 1)
+        {
+            return $"{(int)duration.TotalHours}h {duration.Minutes}m";
+        }
+
+        return $"{Math.Max(0, (int)duration.TotalMinutes)}m";
+    }
+
+    private static string BuildJobExamplePreview(IReadOnlyCollection<ProductionJob> jobs)
+    {
+        var examples = jobs.Take(3).Select(job => $"{job.JobNumber} ({job.ProductName})").ToList();
+        return examples.Count == 0 ? "No active jobs" : string.Join(" • ", examples);
+    }
+
+    private static string BuildQuoteExamplePreview(IReadOnlyCollection<Quote> quotes)
+    {
+        var examples = quotes
+            .OrderByDescending(q => q.CreatedUtc)
+            .Take(3)
+            .Select(q => $"Q{q.Id} ({q.CustomerName})")
+            .ToList();
+
+        return examples.Count == 0 ? "No active quotes" : string.Join(" • ", examples);
     }
 
     private Panel CreateQuoteQueuePanel(string title, IReadOnlyCollection<Quote> quotes, bool includeExpiryWarning)
