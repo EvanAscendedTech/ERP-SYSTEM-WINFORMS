@@ -83,10 +83,16 @@ public class QuoteRepository
 
             CREATE TABLE IF NOT EXISTS QuoteBlobFiles (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                QuoteId INTEGER NOT NULL DEFAULT 0,
                 LineItemId INTEGER NOT NULL,
+                LifecycleId TEXT NOT NULL DEFAULT '',
                 BlobType INTEGER NOT NULL,
                 FileName TEXT NOT NULL,
+                Extension TEXT NOT NULL DEFAULT '',
                 ContentType TEXT NOT NULL DEFAULT '',
+                FileSizeBytes INTEGER NOT NULL DEFAULT 0,
+                Sha256 BLOB NOT NULL DEFAULT X'',
+                UploadedBy TEXT NOT NULL DEFAULT '',
                 BlobData BLOB NOT NULL,
                 UploadedUtc TEXT NOT NULL,
                 FOREIGN KEY(LineItemId) REFERENCES QuoteLineItems(Id) ON DELETE CASCADE
@@ -122,6 +128,13 @@ public class QuoteRepository
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresSecondaryProcessing", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresPlating", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "Notes", "TEXT NOT NULL DEFAULT ''");
+
+        await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "QuoteId", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "LifecycleId", "TEXT NOT NULL DEFAULT ''");
+        await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "Extension", "TEXT NOT NULL DEFAULT ''");
+        await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "FileSizeBytes", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "Sha256", "BLOB NOT NULL DEFAULT X''");
+        await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "UploadedBy", "TEXT NOT NULL DEFAULT ''");
 
         await EnsureCustomerIndexesAsync(connection);
         await EnsureQuoteIndexesAsync(connection);
@@ -341,12 +354,42 @@ public class QuoteRepository
                     await using var insertBlob = connection.CreateCommand();
                     insertBlob.Transaction = transaction;
                     insertBlob.CommandText = @"
-                        INSERT INTO QuoteBlobFiles (LineItemId, BlobType, FileName, ContentType, BlobData, UploadedUtc)
-                        VALUES ($lineItemId, $blobType, $fileName, $contentType, $blobData, $uploadedUtc);";
+                        INSERT INTO QuoteBlobFiles (
+                            QuoteId,
+                            LineItemId,
+                            LifecycleId,
+                            BlobType,
+                            FileName,
+                            Extension,
+                            ContentType,
+                            FileSizeBytes,
+                            Sha256,
+                            UploadedBy,
+                            BlobData,
+                            UploadedUtc)
+                        VALUES (
+                            $quoteId,
+                            $lineItemId,
+                            $lifecycleId,
+                            $blobType,
+                            $fileName,
+                            $extension,
+                            $contentType,
+                            $fileSizeBytes,
+                            $sha256,
+                            $uploadedBy,
+                            $blobData,
+                            $uploadedUtc);";
+                    insertBlob.Parameters.AddWithValue("$quoteId", quote.Id);
                     insertBlob.Parameters.AddWithValue("$lineItemId", lineItem.Id);
+                    insertBlob.Parameters.AddWithValue("$lifecycleId", quote.LifecycleQuoteId);
                     insertBlob.Parameters.AddWithValue("$blobType", (int)blob.BlobType);
                     insertBlob.Parameters.AddWithValue("$fileName", blob.FileName);
+                    insertBlob.Parameters.AddWithValue("$extension", blob.Extension);
                     insertBlob.Parameters.AddWithValue("$contentType", blob.ContentType);
+                    insertBlob.Parameters.AddWithValue("$fileSizeBytes", blob.FileSizeBytes);
+                    insertBlob.Parameters.AddWithValue("$sha256", blob.Sha256);
+                    insertBlob.Parameters.AddWithValue("$uploadedBy", blob.UploadedBy);
                     insertBlob.Parameters.AddWithValue("$blobData", blob.BlobData);
                     insertBlob.Parameters.AddWithValue("$uploadedUtc", blob.UploadedUtc.ToString("O"));
                     await insertBlob.ExecuteNonQueryAsync();
@@ -765,7 +808,7 @@ public class QuoteRepository
 
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            SELECT Id, LineItemId, BlobType, FileName, ContentType, BlobData, UploadedUtc
+            SELECT Id, QuoteId, LineItemId, LifecycleId, BlobType, FileName, Extension, ContentType, FileSizeBytes, Sha256, UploadedBy, BlobData, UploadedUtc
             FROM QuoteBlobFiles
             WHERE LineItemId = $lineItemId
             ORDER BY Id;";
@@ -777,16 +820,111 @@ public class QuoteRepository
             blobs.Add(new QuoteBlobAttachment
             {
                 Id = reader.GetInt32(0),
-                LineItemId = reader.GetInt32(1),
-                BlobType = (QuoteBlobType)reader.GetInt32(2),
-                FileName = reader.GetString(3),
-                ContentType = reader.GetString(4),
-                BlobData = (byte[])reader[5],
-                UploadedUtc = DateTime.Parse(reader.GetString(6), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+                QuoteId = reader.GetInt32(1),
+                LineItemId = reader.GetInt32(2),
+                LifecycleId = reader.GetString(3),
+                BlobType = (QuoteBlobType)reader.GetInt32(4),
+                FileName = reader.GetString(5),
+                Extension = reader.GetString(6),
+                ContentType = reader.GetString(7),
+                FileSizeBytes = reader.GetInt64(8),
+                Sha256 = reader.IsDBNull(9) ? Array.Empty<byte>() : (byte[])reader[9],
+                UploadedBy = reader.IsDBNull(10) ? string.Empty : reader.GetString(10),
+                BlobData = (byte[])reader[11],
+                UploadedUtc = DateTime.Parse(reader.GetString(12), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
             });
         }
 
         return blobs;
+    }
+
+    public async Task<QuoteBlobAttachment> InsertQuoteLineItemFileAsync(
+        int quoteId,
+        int lineItemId,
+        string lifecycleId,
+        QuoteBlobType blobType,
+        string fileName,
+        string extension,
+        long fileSizeBytes,
+        byte[] sha256,
+        string uploadedBy,
+        DateTime uploadedUtc,
+        byte[] blobData)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO QuoteBlobFiles (
+                QuoteId,
+                LineItemId,
+                LifecycleId,
+                BlobType,
+                FileName,
+                Extension,
+                ContentType,
+                FileSizeBytes,
+                Sha256,
+                UploadedBy,
+                BlobData,
+                UploadedUtc)
+            VALUES (
+                $quoteId,
+                $lineItemId,
+                $lifecycleId,
+                $blobType,
+                $fileName,
+                $extension,
+                $contentType,
+                $fileSizeBytes,
+                $sha256,
+                $uploadedBy,
+                $blobData,
+                $uploadedUtc);
+            SELECT last_insert_rowid();";
+        command.Parameters.AddWithValue("$quoteId", quoteId);
+        command.Parameters.AddWithValue("$lineItemId", lineItemId);
+        command.Parameters.AddWithValue("$lifecycleId", lifecycleId);
+        command.Parameters.AddWithValue("$blobType", (int)blobType);
+        command.Parameters.AddWithValue("$fileName", fileName);
+        command.Parameters.AddWithValue("$extension", extension);
+        command.Parameters.AddWithValue("$contentType", extension);
+        command.Parameters.AddWithValue("$fileSizeBytes", fileSizeBytes);
+        command.Parameters.AddWithValue("$sha256", sha256);
+        command.Parameters.AddWithValue("$uploadedBy", uploadedBy);
+        command.Parameters.AddWithValue("$blobData", blobData);
+        command.Parameters.AddWithValue("$uploadedUtc", uploadedUtc.ToString("O"));
+
+        var id = Convert.ToInt32(await command.ExecuteScalarAsync());
+
+        return new QuoteBlobAttachment
+        {
+            Id = id,
+            QuoteId = quoteId,
+            LineItemId = lineItemId,
+            LifecycleId = lifecycleId,
+            BlobType = blobType,
+            FileName = fileName,
+            Extension = extension,
+            ContentType = extension,
+            FileSizeBytes = fileSizeBytes,
+            Sha256 = sha256,
+            UploadedBy = uploadedBy,
+            BlobData = blobData,
+            UploadedUtc = uploadedUtc
+        };
+    }
+
+    public async Task DeleteQuoteLineItemFileAsync(int fileId)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM QuoteBlobFiles WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", fileId);
+        await command.ExecuteNonQueryAsync();
     }
 
     private static async Task EnsureColumnExistsAsync(SqliteConnection connection, string tableName, string columnName, string definition)
@@ -822,7 +960,8 @@ public class QuoteRepository
         await using var command = connection.CreateCommand();
         command.CommandText = @"
             CREATE INDEX IF NOT EXISTS IX_Quotes_CustomerId ON Quotes(CustomerId);
-            CREATE INDEX IF NOT EXISTS IX_QuoteLineItems_QuoteId ON QuoteLineItems(QuoteId);";
+            CREATE INDEX IF NOT EXISTS IX_QuoteLineItems_QuoteId ON QuoteLineItems(QuoteId);
+            CREATE INDEX IF NOT EXISTS IX_QuoteBlobFiles_QuoteId_LineItemId ON QuoteBlobFiles(QuoteId, LineItemId);";
         await command.ExecuteNonQueryAsync();
     }
 

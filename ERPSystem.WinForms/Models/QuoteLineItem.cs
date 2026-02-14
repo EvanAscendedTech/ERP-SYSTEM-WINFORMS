@@ -11,9 +11,15 @@ public class QuoteBlobAttachment
 {
     public int Id { get; set; }
     public int LineItemId { get; set; }
+    public int QuoteId { get; set; }
+    public string LifecycleId { get; set; } = string.Empty;
     public QuoteBlobType BlobType { get; set; }
     public string FileName { get; set; } = string.Empty;
+    public string Extension { get; set; } = string.Empty;
     public string ContentType { get; set; } = string.Empty;
+    public long FileSizeBytes { get; set; }
+    public byte[] Sha256 { get; set; } = Array.Empty<byte>();
+    public string UploadedBy { get; set; } = string.Empty;
     public byte[] BlobData { get; set; } = Array.Empty<byte>();
     public DateTime UploadedUtc { get; set; } = DateTime.UtcNow;
 }
