@@ -8,7 +8,7 @@ namespace ERPSystem.WinForms;
 internal static class Program
 {
     [STAThread]
-    private static async Task Main()
+    private static void Main()
     {
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         AppDomain.CurrentDomain.UnhandledException += OnCurrentDomainUnhandledException;
@@ -28,17 +28,17 @@ internal static class Program
             var settingsPath = Path.Combine(appDataFolder, "appsettings.json");
 
             var quoteRepository = new QuoteRepository(dbPath);
-            await quoteRepository.InitializeDatabaseAsync();
+            quoteRepository.InitializeDatabaseAsync().GetAwaiter().GetResult();
 
             var productionRepository = new ProductionRepository(dbPath);
-            await productionRepository.InitializeDatabaseAsync();
+            productionRepository.InitializeDatabaseAsync().GetAwaiter().GetResult();
 
             var userRepository = new UserManagementRepository(dbPath);
-            await userRepository.InitializeDatabaseAsync();
-            await EnsureDefaultAdminAsync(userRepository);
+            userRepository.InitializeDatabaseAsync().GetAwaiter().GetResult();
+            EnsureDefaultAdminAsync(userRepository).GetAwaiter().GetResult();
 
             var appSettingsService = new AppSettingsService(settingsPath);
-            _ = await appSettingsService.LoadAsync();
+            _ = appSettingsService.LoadAsync().GetAwaiter().GetResult();
 
             using var loginForm = new LoginForm(userRepository);
             if (loginForm.ShowDialog() != DialogResult.OK || loginForm.AuthenticatedUser is null)
