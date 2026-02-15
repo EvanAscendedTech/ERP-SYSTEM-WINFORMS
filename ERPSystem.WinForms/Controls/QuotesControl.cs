@@ -14,12 +14,14 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private readonly ProductionRepository _productionRepository;
     private readonly Action<string> _openSection;
     private readonly UserAccount _currentUser;
+    private readonly FlowLayoutPanel _customerCardsPanel = new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(8, 4, 8, 8) };
+    private readonly Label _customerHubLabel = new() { Dock = DockStyle.Top, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold), Padding = new Padding(8, 0, 0, 0) };
+    private readonly Button _backToHubButton = new() { Text = "← Back to Customers", AutoSize = true, Visible = false };
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _expiredQuotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
-    private readonly HashSet<string> _expandedCustomers = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<int> _expandedQuotes = new();
-    private readonly Dictionary<int, Quote> _expandedQuoteCache = new();
+    private List<Quote> _activeQuotesCache = new();
+    private string? _selectedCustomer;
 
     public QuotesControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, UserAccount currentUser, Action<string> openSection)
     {
@@ -46,10 +48,12 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         editQuoteButton.Click += async (_, _) => await EditSelectedQuoteAsync();
         deleteQuoteButton.Click += async (_, _) => await DeleteSelectedQuoteAsync();
         passToProductionButton.Click += async (_, _) => await PassSelectedToProductionAsync();
+        _backToHubButton.Click += (_, _) =>
+        {
+            _selectedCustomer = null;
+            RefreshActiveQuotesView();
+        };
         _quotesGrid.CellDoubleClick += async (_, _) => await EditSelectedQuoteAsync();
-        _quotesGrid.CellContentClick += async (_, e) => await HandleQuotesGridContentClickAsync(e);
-        _quotesGrid.CellBeginEdit += HandleQuotesGridCellBeginEdit;
-        _quotesGrid.CellEndEdit += HandleQuotesGridCellEndEdit;
 
         actionsPanel.Controls.Add(refreshButton);
         actionsPanel.Controls.Add(newQuoteButton);
@@ -57,9 +61,20 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         actionsPanel.Controls.Add(editQuoteButton);
         actionsPanel.Controls.Add(deleteQuoteButton);
         actionsPanel.Controls.Add(passToProductionButton);
+        actionsPanel.Controls.Add(_backToHubButton);
 
         var topContent = new Panel { Dock = DockStyle.Fill };
         topContent.Controls.Add(_quotesGrid);
+        topContent.Controls.Add(new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 164,
+            Controls =
+            {
+                _customerCardsPanel,
+                _customerHubLabel
+            }
+        });
         topContent.Controls.Add(actionsPanel);
 
         var archivePanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 8, 0, 0) };
@@ -93,37 +108,20 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private void ConfigureQuotesGrid(DataGridView grid, bool includeLifecycleColumn)
     {
         grid.DefaultCellStyle.Font = new Font(grid.Font, FontStyle.Bold);
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Expander", HeaderText = "", DataPropertyName = nameof(QuoteGridRow.ExpanderDisplay), Width = 40, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuoteId", HeaderText = "Quote #", DataPropertyName = nameof(QuoteGridRow.QuoteIdDisplay), Width = 80 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Customer", HeaderText = "Customer", DataPropertyName = nameof(QuoteGridRow.CustomerDisplay), Width = 280 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Status", DataPropertyName = nameof(QuoteGridRow.StatusDisplay), Width = 120 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuoteId", HeaderText = "Quote #", DataPropertyName = nameof(QuoteGridRow.QuoteIdDisplay), Width = 90, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Customer", HeaderText = "Customer", DataPropertyName = nameof(QuoteGridRow.CustomerDisplay), Width = 240, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Status", DataPropertyName = nameof(QuoteGridRow.StatusDisplay), Width = 110, ReadOnly = true });
         if (includeLifecycleColumn)
         {
-            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Lifecycle", HeaderText = "Lifecycle Stage", DataPropertyName = nameof(QuoteGridRow.LifecycleStageDisplay), Width = 180 });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Lifecycle", HeaderText = "Lifecycle Stage", DataPropertyName = nameof(QuoteGridRow.LifecycleStageDisplay), Width = 190, ReadOnly = true });
         }
 
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuotedAt", HeaderText = "Quoted", DataPropertyName = nameof(QuoteGridRow.QuotedAtDisplay), Width = 180 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "TimeSinceQuoted", HeaderText = "Timeframe Since Quoted", DataPropertyName = nameof(QuoteGridRow.TimeSinceQuotedDisplay), Width = 220 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuotedAt", HeaderText = "Quoted", DataPropertyName = nameof(QuoteGridRow.QuotedAtDisplay), Width = 180, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "TimeSinceQuoted", HeaderText = "Timeframe Since Quoted", DataPropertyName = nameof(QuoteGridRow.TimeSinceQuotedDisplay), Width = 220, ReadOnly = true });
         grid.RowPrePaint += (_, e) =>
         {
             if (e.RowIndex < 0 || grid.Rows[e.RowIndex].DataBoundItem is not QuoteGridRow row)
             {
-                return;
-            }
-
-            if (row.IsCustomerHeader)
-            {
-                grid.Rows[e.RowIndex].DefaultCellStyle.BackColor = Color.FromArgb(226, 230, 236);
-                grid.Rows[e.RowIndex].DefaultCellStyle.ForeColor = Color.Black;
-                grid.Rows[e.RowIndex].DefaultCellStyle.Font = new Font(grid.Font, FontStyle.Bold);
-                return;
-            }
-
-            if (row.RowType == QuoteGridRowType.QuoteDetail)
-            {
-                grid.Rows[e.RowIndex].DefaultCellStyle.BackColor = Color.FromArgb(214, 236, 255);
-                grid.Rows[e.RowIndex].DefaultCellStyle.ForeColor = Color.Black;
-                grid.Rows[e.RowIndex].DefaultCellStyle.Font = new Font(grid.Font, FontStyle.Bold);
                 return;
             }
 
@@ -155,17 +153,15 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             await AutoArchiveExpiredQuotesAsync();
 
             var allQuotes = await _quoteRepository.GetQuotesAsync();
-            var topQuotes = allQuotes.Where(q => q.Status != QuoteStatus.Expired).ToList();
+            _activeQuotesCache = allQuotes.Where(q => q.Status != QuoteStatus.Expired).ToList();
             var expiredQuotes = allQuotes.Where(q => q.Status == QuoteStatus.Expired)
                 .OrderByDescending(q => q.ExpiredUtc ?? q.LastUpdatedUtc)
                 .Select(CreateQuoteRow)
                 .ToList();
 
-            await SavePendingExpandedQuoteChangesAsync();
-
-            _quotesGrid.DataSource = BuildActiveViewRows(topQuotes);
+            RefreshActiveQuotesView();
             _expiredQuotesGrid.DataSource = expiredQuotes;
-            _feedback.Text = $"Loaded {topQuotes.Count} active/finished quotes and {expiredQuotes.Count} archived quotes.";
+            _feedback.Text = $"Loaded {_activeQuotesCache.Count} active/finished quotes and {expiredQuotes.Count} archived quotes.";
         }
         catch (Exception ex)
         {
@@ -314,6 +310,13 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
     private bool SelectQuoteRow(int quoteId)
     {
+        var quote = _activeQuotesCache.FirstOrDefault(q => q.Id == quoteId);
+        if (quote is not null)
+        {
+            _selectedCustomer = NormalizeCustomerName(quote.CustomerName);
+            RefreshActiveQuotesView();
+        }
+
         foreach (DataGridViewRow row in _quotesGrid.Rows)
         {
             if (row.DataBoundItem is QuoteGridRow quoteRow && quoteRow.QuoteId == quoteId)
@@ -343,41 +346,10 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
     private List<QuoteGridRow> BuildActiveViewRows(IReadOnlyCollection<Quote> quotes)
     {
-        var rows = new List<QuoteGridRow>();
-        var quotesByCustomer = quotes
-            .GroupBy(q => string.IsNullOrWhiteSpace(q.CustomerName) ? "Unknown Customer" : q.CustomerName)
-            .OrderBy(g => g.Key);
-
-        foreach (var customerGroup in quotesByCustomer)
-        {
-            var openQuoteCount = customerGroup.Count(q => q.Status == QuoteStatus.InProgress);
-            var totalQuoteCount = customerGroup.Count();
-
-            rows.Add(new QuoteGridRow
-            {
-                IsCustomerHeader = true,
-                RowType = QuoteGridRowType.CustomerHeader,
-                CustomerGroupKey = customerGroup.Key,
-                ExpanderDisplay = _expandedCustomers.Contains(customerGroup.Key) ? "▾" : "▸",
-                CustomerDisplay = customerGroup.Key.ToUpperInvariant(),
-                StatusDisplay = $"OPEN: {openQuoteCount} / TOTAL: {totalQuoteCount}",
-                LifecycleStageDisplay = "ACCOUNT SOCKET"
-            });
-
-            if (_expandedCustomers.Contains(customerGroup.Key))
-            {
-                rows.AddRange(BuildQuoteRows(customerGroup
-                    .OrderByDescending(q => q.CreatedUtc)
-                    .Select(CreateQuoteRow)
-                    .Select(row =>
-                    {
-                        row.CustomerDisplay = $"   ↳ {row.CustomerDisplay}";
-                        return row;
-                    })));
-            }
-        }
-
-        return rows;
+        return quotes
+            .OrderByDescending(q => q.CreatedUtc)
+            .Select(CreateQuoteRow)
+            .ToList();
     }
 
     private static QuoteGridRow CreateQuoteRow(Quote quote)
@@ -387,7 +359,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         {
             QuoteId = quote.Id,
             RowType = QuoteGridRowType.QuoteSummary,
-            ExpanderDisplay = "▸",
             QuoteIdDisplay = quote.Id.ToString(),
             CustomerDisplay = quote.CustomerName.ToUpperInvariant(),
             Status = quote.Status,
@@ -406,151 +377,80 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         };
     }
 
-    private IEnumerable<QuoteGridRow> BuildQuoteRows(IEnumerable<QuoteGridRow> quoteRows)
+    private void RefreshActiveQuotesView()
     {
-        foreach (var row in quoteRows)
-        {
-            row.ExpanderDisplay = row.QuoteId.HasValue && _expandedQuotes.Contains(row.QuoteId.Value) ? "▾" : "▸";
-            yield return row;
+        BuildCustomerCards();
 
-            if (row.QuoteId is int quoteId && _expandedQuotes.Contains(quoteId))
-            {
-                yield return BuildQuoteDetailRow(quoteId);
-            }
-        }
+        var filteredQuotes = string.IsNullOrWhiteSpace(_selectedCustomer)
+            ? Array.Empty<Quote>()
+            : _activeQuotesCache.Where(q => string.Equals(NormalizeCustomerName(q.CustomerName), _selectedCustomer, StringComparison.OrdinalIgnoreCase)).ToArray();
+
+        _quotesGrid.DataSource = BuildActiveViewRows(filteredQuotes);
+        _backToHubButton.Visible = !string.IsNullOrWhiteSpace(_selectedCustomer);
+        _customerHubLabel.Text = string.IsNullOrWhiteSpace(_selectedCustomer)
+            ? "Customer Hub — pick a customer card to drill into quote details"
+            : $"Customer Hub / {_selectedCustomer}";
     }
 
-    private QuoteGridRow BuildQuoteDetailRow(int quoteId)
+    private void BuildCustomerCards()
     {
-        _expandedQuoteCache.TryGetValue(quoteId, out var quote);
-        quote ??= new Quote();
+        _customerCardsPanel.SuspendLayout();
+        _customerCardsPanel.Controls.Clear();
 
-        return new QuoteGridRow
+        var customerGroups = _activeQuotesCache
+            .GroupBy(q => NormalizeCustomerName(q.CustomerName))
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        foreach (var customerGroup in customerGroups)
         {
-            RowType = QuoteGridRowType.QuoteDetail,
-            QuoteId = quoteId,
-            ExpanderDisplay = string.Empty,
-            QuoteIdDisplay = $"DETAILS: {quoteId}",
-            CustomerDisplay = quote.CustomerName.ToUpperInvariant(),
-            StatusDisplay = quote.Status.ToString().ToUpperInvariant(),
-            LifecycleStageDisplay = quote.LifecycleQuoteId.ToUpperInvariant(),
-            QuotedAtDisplay = quote.CreatedUtc == default ? string.Empty : quote.CreatedUtc.ToLocalTime().ToString("g").ToUpperInvariant(),
-            TimeSinceQuotedDisplay = "EDIT CUSTOMER / STATUS / LIFECYCLE HERE"
+            _customerCardsPanel.Controls.Add(CreateCustomerCard(customerGroup.Key, customerGroup.ToList()));
+        }
+
+        _customerCardsPanel.ResumeLayout();
+    }
+
+    private Control CreateCustomerCard(string customerName, IReadOnlyCollection<Quote> quotes)
+    {
+        var card = new Panel
+        {
+            Width = 250,
+            Height = 116,
+            Margin = new Padding(0, 0, 12, 0),
+            BackColor = string.Equals(_selectedCustomer, customerName, StringComparison.OrdinalIgnoreCase)
+                ? Color.FromArgb(214, 236, 255)
+                : Color.FromArgb(236, 240, 245),
+            Cursor = Cursors.Hand
         };
+
+        var openCount = quotes.Count(q => q.Status == QuoteStatus.InProgress);
+        var wonCount = quotes.Count(q => q.Status == QuoteStatus.Won);
+
+        var nameLabel = new Label { Text = customerName, Dock = DockStyle.Top, Height = 44, Padding = new Padding(10, 12, 10, 4), Font = new Font(Font, FontStyle.Bold) };
+        var summaryLabel = new Label
+        {
+            Text = $"Open: {openCount}    Total: {quotes.Count}    Won: {wonCount}",
+            Dock = DockStyle.Fill,
+            Padding = new Padding(10, 4, 10, 8),
+            Font = new Font(Font.FontFamily, 9f, FontStyle.Regular)
+        };
+
+        void selectCustomer(object? _, EventArgs __)
+        {
+            _selectedCustomer = customerName;
+            RefreshActiveQuotesView();
+        }
+
+        card.Click += selectCustomer;
+        nameLabel.Click += selectCustomer;
+        summaryLabel.Click += selectCustomer;
+        card.Controls.Add(summaryLabel);
+        card.Controls.Add(nameLabel);
+        return card;
     }
 
-    private async Task HandleQuotesGridContentClickAsync(DataGridViewCellEventArgs e)
-    {
-        if (e.RowIndex < 0 || e.ColumnIndex < 0)
-        {
-            return;
-        }
-
-        if (_quotesGrid.Columns[e.ColumnIndex].Name != "Expander" || _quotesGrid.Rows[e.RowIndex].DataBoundItem is not QuoteGridRow row)
-        {
-            return;
-        }
-
-        if (row.RowType == QuoteGridRowType.CustomerHeader && !string.IsNullOrWhiteSpace(row.CustomerGroupKey))
-        {
-            if (!_expandedCustomers.Add(row.CustomerGroupKey))
-            {
-                _expandedCustomers.Remove(row.CustomerGroupKey);
-            }
-
-            await LoadActiveQuotesAsync();
-            return;
-        }
-
-        if (row.RowType != QuoteGridRowType.QuoteSummary || row.QuoteId is not int quoteId)
-        {
-            return;
-        }
-
-        if (_expandedQuotes.Contains(quoteId))
-        {
-            await SaveExpandedQuoteChangesAsync(quoteId);
-            _expandedQuotes.Remove(quoteId);
-        }
-        else
-        {
-            var quote = await _quoteRepository.GetQuoteAsync(quoteId);
-            if (quote is null)
-            {
-                _feedback.Text = $"QUOTE {quoteId} COULD NOT BE LOADED.";
-                return;
-            }
-
-            _expandedQuoteCache[quoteId] = quote;
-            _expandedQuotes.Add(quoteId);
-        }
-
-        await LoadActiveQuotesAsync();
-    }
-
-    private void HandleQuotesGridCellBeginEdit(object? sender, DataGridViewCellCancelEventArgs e)
-    {
-        if (e.RowIndex < 0 || _quotesGrid.Rows[e.RowIndex].DataBoundItem is not QuoteGridRow row)
-        {
-            e.Cancel = true;
-            return;
-        }
-
-        e.Cancel = row.RowType != QuoteGridRowType.QuoteDetail || !IsEditableDetailColumn(_quotesGrid.Columns[e.ColumnIndex].Name);
-    }
-
-    private void HandleQuotesGridCellEndEdit(object? sender, DataGridViewCellEventArgs e)
-    {
-        if (e.RowIndex < 0 || _quotesGrid.Rows[e.RowIndex].DataBoundItem is not QuoteGridRow row || row.QuoteId is not int quoteId)
-        {
-            return;
-        }
-
-        if (!_expandedQuoteCache.TryGetValue(quoteId, out var quote))
-        {
-            return;
-        }
-
-        var columnName = _quotesGrid.Columns[e.ColumnIndex].Name;
-        var value = _quotesGrid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value?.ToString()?.Trim() ?? string.Empty;
-        switch (columnName)
-        {
-            case "Customer":
-                quote.CustomerName = value;
-                break;
-            case "Status":
-                if (Enum.TryParse<QuoteStatus>(value, true, out var status))
-                {
-                    quote.Status = status;
-                }
-                break;
-            case "Lifecycle":
-                quote.LifecycleQuoteId = value;
-                break;
-        }
-    }
-
-    private static bool IsEditableDetailColumn(string? columnName)
-        => columnName is "Customer" or "Status" or "Lifecycle";
-
-    private async Task SaveExpandedQuoteChangesAsync(int quoteId)
-    {
-        if (!_expandedQuoteCache.TryGetValue(quoteId, out var quote))
-        {
-            return;
-        }
-
-        quote.LastUpdatedUtc = DateTime.UtcNow;
-        await _quoteRepository.SaveQuoteAsync(quote);
-    }
-
-    private async Task SavePendingExpandedQuoteChangesAsync()
-    {
-        foreach (var quoteId in _expandedQuotes.ToList())
-        {
-            await SaveExpandedQuoteChangesAsync(quoteId);
-        }
-    }
+    private static string NormalizeCustomerName(string? customerName)
+        => string.IsNullOrWhiteSpace(customerName) ? "Unknown Customer" : customerName.Trim();
 
     private int? TryGetSelectedQuoteId()
     {
@@ -566,8 +466,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     {
         public QuoteGridRowType RowType { get; init; }
         public int? QuoteId { get; init; }
-        public string CustomerGroupKey { get; init; } = string.Empty;
-        public string ExpanderDisplay { get; set; } = string.Empty;
         public string QuoteIdDisplay { get; init; } = string.Empty;
         public string CustomerDisplay { get; set; } = string.Empty;
         public QuoteStatus Status { get; init; }
@@ -581,9 +479,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
     private enum QuoteGridRowType
     {
-        QuoteSummary,
-        QuoteDetail,
-        CustomerHeader
+        QuoteSummary
     }
 
 }
