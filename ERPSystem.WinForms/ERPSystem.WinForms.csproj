@@ -6,6 +6,8 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <CopyRetryCount>20</CopyRetryCount>
+    <CopyRetryDelayMilliseconds>250</CopyRetryDelayMilliseconds>
   </PropertyGroup>
 
   <ItemGroup>
