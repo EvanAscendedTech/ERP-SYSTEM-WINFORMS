@@ -49,6 +49,17 @@ public class ProductionRepositoryTests
             Status = ProductionJobStatus.Planned
         });
 
+        await using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}"))
+        {
+            await connection.OpenAsync();
+            await using var addInventory = connection.CreateCommand();
+            addInventory.CommandText = @"INSERT INTO InventoryItems (Sku, Description, QuantityOnHand, ReorderThreshold, UnitOfMeasure)
+                                        VALUES ('RM-001', 'Raw Material', 100, 10, 'EA');";
+            await addInventory.ExecuteNonQueryAsync();
+        }
+
+        await repository.SaveJobMaterialRequirementsAsync("JOB-200", new Dictionary<string, decimal> { ["RM-001"] = 2m });
+
         var denied = await repository.StartJobAsync("JOB-200", QuoteStatus.InProgress, 17, "planner.user");
         Assert.False(denied.Success);
 
@@ -99,4 +110,52 @@ public class ProductionRepositoryTests
 
         File.Delete(dbPath);
     }
+
+
+    [Fact]
+    public async Task SaveJobAsync_RequiresMaterialsBeforeMovingBeyondPlanned()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-prod-materials-{Guid.NewGuid():N}.db");
+        var repository = new ProductionRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.SaveJobAsync(new ProductionJob
+        {
+            JobNumber = "JOB-400",
+            ProductName = "Gear",
+            PlannedQuantity = 5,
+            ProducedQuantity = 0,
+            DueDateUtc = DateTime.UtcNow.AddDays(1),
+            Status = ProductionJobStatus.InProgress
+        }));
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task RunReferentialIntegrityBatchAsync_ReturnsSuccessForHealthyData()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-prod-integrity-{Guid.NewGuid():N}.db");
+        var repository = new ProductionRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        await repository.SaveMachineAsync(new Machine { MachineCode = "MC-INT", Description = "Integrity", DailyCapacityHours = 8 });
+        await repository.SaveJobAsync(new ProductionJob
+        {
+            JobNumber = "JOB-401",
+            ProductName = "Block",
+            PlannedQuantity = 5,
+            ProducedQuantity = 0,
+            DueDateUtc = DateTime.UtcNow.AddDays(2),
+            Status = ProductionJobStatus.Planned
+        });
+
+        var report = await repository.RunReferentialIntegrityBatchAsync();
+
+        Assert.True(report.Success);
+        Assert.Empty(report.Issues);
+
+        File.Delete(dbPath);
+    }
+
 }
