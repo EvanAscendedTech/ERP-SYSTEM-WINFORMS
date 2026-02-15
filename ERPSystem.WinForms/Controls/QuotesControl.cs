@@ -10,6 +10,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 {
     private const int QuoteExpiryDays = 60;
     private const int NearExpiryThresholdDays = 2;
+    private const string MoveToWonColumnName = "MoveToWon";
 
     private readonly QuoteRepository _quoteRepository;
     private readonly ProductionRepository _productionRepository;
@@ -20,6 +21,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _expiredQuotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
+    private readonly Button _passToPurchasingButton;
     private List<Quote> _activeQuotesCache = new();
     private string? _selectedCustomer;
 
@@ -39,14 +41,16 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         var newQuoteButton = new Button { Text = "Create New Quote", AutoSize = true };
         var deleteQuoteButton = new Button { Text = "Delete Quote", AutoSize = true };
         var markCompletedButton = new Button { Text = "Mark Completed", AutoSize = true };
-        var passToPurchasingButton = new Button { Text = "Pass to Purchasing", AutoSize = true };
+        _passToPurchasingButton = new Button { Text = "Pass to Purchasing", AutoSize = true, Enabled = false };
         var archivedQuotesButton = new Button { Text = "Archived Quotes", AutoSize = true };
 
         refreshButton.Click += async (_, _) => await LoadActiveQuotesAsync();
         newQuoteButton.Click += async (_, _) => await CreateNewQuoteAsync();
         deleteQuoteButton.Click += async (_, _) => await DeleteSelectedQuoteAsync();
         markCompletedButton.Click += async (_, _) => await MarkSelectedCompletedAsync();
-        passToPurchasingButton.Click += async (_, _) => await PassSelectedToPurchasingAsync();
+        _passToPurchasingButton.Click += async (_, _) => await PassSelectedToPurchasingAsync();
+        _quotesGrid.SelectionChanged += (_, _) => RefreshActionStateForSelection();
+        _quotesGrid.CellContentClick += async (_, e) => await HandleQuotesGridCellContentClickAsync(e.RowIndex, e.ColumnIndex);
         archivedQuotesButton.Click += (_, _) => OpenArchivedQuotesWindow();
         _quotesGrid.CellDoubleClick += async (_, _) => await OpenSelectedQuoteDetailsAsync();
 
@@ -54,7 +58,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         actionsPanel.Controls.Add(newQuoteButton);
         actionsPanel.Controls.Add(deleteQuoteButton);
         actionsPanel.Controls.Add(markCompletedButton);
-        actionsPanel.Controls.Add(passToPurchasingButton);
+        actionsPanel.Controls.Add(_passToPurchasingButton);
 
         var bottomRightPanel = new FlowLayoutPanel
         {
@@ -127,6 +131,36 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuotedAt", HeaderText = "Quoted", DataPropertyName = nameof(QuoteGridRow.QuotedAtDisplay), Width = 180, ReadOnly = true });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "TimeSinceQuoted", HeaderText = "Timeframe Since Quoted", DataPropertyName = nameof(QuoteGridRow.TimeSinceQuotedDisplay), Width = 220, ReadOnly = true });
+        if (includeLifecycleColumn)
+        {
+            grid.Columns.Add(new DataGridViewButtonColumn
+            {
+                Name = MoveToWonColumnName,
+                HeaderText = "Actions",
+                Text = "Move to Won",
+                UseColumnTextForButtonValue = false,
+                Width = 120,
+                ReadOnly = true
+            });
+
+            grid.CellFormatting += (_, e) =>
+            {
+                if (e.RowIndex < 0 || grid.Columns[e.ColumnIndex].Name != MoveToWonColumnName)
+                {
+                    return;
+                }
+
+                if (grid.Rows[e.RowIndex].DataBoundItem is not QuoteGridRow row)
+                {
+                    e.Value = string.Empty;
+                    e.FormattingApplied = true;
+                    return;
+                }
+
+                e.Value = row.Status == QuoteStatus.Completed ? "Move to Won" : string.Empty;
+                e.FormattingApplied = true;
+            };
+        }
         grid.RowPrePaint += (_, e) =>
         {
             if (e.RowIndex < 0 || grid.Rows[e.RowIndex].DataBoundItem is not QuoteGridRow row)
@@ -173,6 +207,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
             RefreshActiveQuotesView();
             _expiredQuotesGrid.DataSource = expiredQuotes;
+            RefreshActionStateForSelection();
             _feedback.Text = $"Loaded {_activeQuotesCache.Count} active/finished quotes and {expiredQuotes.Count} archived quotes.";
         }
         catch (Exception ex)
@@ -285,6 +320,37 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         await LoadActiveQuotesAsync();
     }
 
+    private async Task MarkSelectedWonAsync()
+    {
+        if (TryGetSelectedQuoteId() is not int selectedId)
+        {
+            _feedback.Text = "Select a quote first.";
+            return;
+        }
+
+        var fullQuote = await _quoteRepository.GetQuoteAsync(selectedId);
+        if (fullQuote is null)
+        {
+            _feedback.Text = "Quote could not be loaded.";
+            return;
+        }
+
+        if (fullQuote.Status != QuoteStatus.Completed)
+        {
+            _feedback.Text = $"Only Completed quotes can be moved to Won. Current status: {fullQuote.Status}.";
+            return;
+        }
+
+        var result = await _quoteRepository.UpdateStatusAsync(selectedId, QuoteStatus.Won, _currentUser.Username);
+        _feedback.Text = result.Success
+            ? $"Quote {selectedId} moved to Won and can now be passed to Purchasing."
+            : result.Message;
+
+        await LoadActiveQuotesAsync();
+        SelectQuoteRow(selectedId);
+        RefreshActionStateForSelection();
+    }
+
     private async Task PassSelectedToPurchasingAsync()
     {
         if (TryGetSelectedQuoteId() is not int selectedId)
@@ -359,6 +425,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
                 row.Selected = true;
                 _quotesGrid.CurrentCell = row.Cells[0];
                 _quotesGrid.FirstDisplayedScrollingRowIndex = row.Index;
+                RefreshActionStateForSelection();
                 return true;
             }
         }
@@ -444,9 +511,38 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             : _activeQuotesCache.Where(q => string.Equals(NormalizeCustomerName(q.CustomerName), _selectedCustomer, StringComparison.OrdinalIgnoreCase)).ToArray();
 
         _quotesGrid.DataSource = BuildActiveViewRows(filteredQuotes);
+        RefreshActionStateForSelection();
         _customerHubLabel.Text = string.IsNullOrWhiteSpace(_selectedCustomer)
             ? "Customer Hub — pick a customer card to drill into quote details"
             : $"Customer Hub / {_selectedCustomer}";
+    }
+
+    private async Task HandleQuotesGridCellContentClickAsync(int rowIndex, int columnIndex)
+    {
+        if (rowIndex < 0 || columnIndex < 0 || _quotesGrid.Columns[columnIndex].Name != MoveToWonColumnName)
+        {
+            return;
+        }
+
+        if (_quotesGrid.Rows[rowIndex].DataBoundItem is not QuoteGridRow row || row.Status != QuoteStatus.Completed || row.QuoteId is not int quoteId)
+        {
+            return;
+        }
+
+        _quotesGrid.CurrentCell = _quotesGrid.Rows[rowIndex].Cells[0];
+        await MarkSelectedWonAsync();
+        SelectQuoteRow(quoteId);
+    }
+
+    private void RefreshActionStateForSelection()
+    {
+        if (_quotesGrid.CurrentRow?.DataBoundItem is not QuoteGridRow row)
+        {
+            _passToPurchasingButton.Enabled = false;
+            return;
+        }
+
+        _passToPurchasingButton.Enabled = row.Status == QuoteStatus.Won && row.QuoteId.HasValue;
     }
 
     private void BuildCustomerCards()

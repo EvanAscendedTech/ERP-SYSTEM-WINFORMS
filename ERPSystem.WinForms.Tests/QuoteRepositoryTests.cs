@@ -270,6 +270,96 @@ public class QuoteRepositoryTests
     }
 
     [Fact]
+    public async Task UpdateStatusAsync_AllowsCompletedToWonTransitionAndPersistsAuditFields()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-completed-won-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+        var quote = new Quote
+        {
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            Status = QuoteStatus.InProgress,
+            LineItems = [new QuoteLineItem { Description = "Part", Quantity = 1 }]
+        };
+
+        var id = await repository.SaveQuoteAsync(quote);
+        var completedResult = await repository.UpdateStatusAsync(id, QuoteStatus.Completed, "sales.user");
+        Assert.True(completedResult.Success);
+
+        var wonResult = await repository.UpdateStatusAsync(id, QuoteStatus.Won, "sales.user");
+        Assert.True(wonResult.Success);
+
+        var loaded = await repository.GetQuoteAsync(id);
+        Assert.NotNull(loaded);
+        Assert.Equal(QuoteStatus.Won, loaded!.Status);
+        Assert.NotNull(loaded.WonUtc);
+        Assert.Equal("sales.user", loaded.WonByUserId);
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task ValidateQuoteFileLinkageAsync_FailsWhenBlobLineItemLinkIsBroken()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-linkage-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+        var quote = new Quote
+        {
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            Status = QuoteStatus.Won,
+            LineItems =
+            [
+                new QuoteLineItem
+                {
+                    Description = "Part",
+                    Quantity = 1,
+                    BlobAttachments =
+                    [
+                        new QuoteBlobAttachment
+                        {
+                            BlobType = QuoteBlobType.Technical,
+                            FileName = "drawing.pdf",
+                            Extension = ".pdf",
+                            BlobData = [1, 2, 3],
+                            UploadedUtc = DateTime.UtcNow
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var id = await repository.SaveQuoteAsync(quote);
+        var saved = await repository.GetQuoteAsync(id);
+        var savedLineItemId = Assert.Single(saved!.LineItems).Id;
+
+        await using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = @"
+                UPDATE QuoteBlobFiles
+                SET LineItemId = $brokenLineItemId
+                WHERE QuoteId = $quoteId;";
+            command.Parameters.AddWithValue("$brokenLineItemId", savedLineItemId + 1000);
+            command.Parameters.AddWithValue("$quoteId", id);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var validation = await repository.ValidateQuoteFileLinkageAsync(id);
+        Assert.False(validation.Success);
+        Assert.Contains("broken line-item linkage", validation.Message, StringComparison.OrdinalIgnoreCase);
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
     public async Task InitializeDatabaseAsync_BackfillsLegacyCustomerNameIntoCustomers()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-backfill-{Guid.NewGuid():N}.db");

@@ -269,6 +269,13 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
             return;
         }
 
+        var linkageValidation = await _quoteRepository.ValidateQuoteFileLinkageAsync(quote.Id);
+        if (!linkageValidation.Success)
+        {
+            _feedback.Text = $"Cannot finalize Purchasing step: {linkageValidation.Message}";
+            return;
+        }
+
         var existing = (await _productionRepository.GetJobsAsync()).FirstOrDefault(x => x.SourceQuoteId == quote.Id);
         if (existing is null)
         {
@@ -287,11 +294,11 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
             };
 
             await _productionRepository.SaveJobAsync(job);
-            _feedback.Text = $"Quote {quote.Id} moved to Production queue as {job.JobNumber}.";
+            _feedback.Text = $"Quote {quote.Id} moved to Production queue as {job.JobNumber}. {linkageValidation.Message}";
         }
         else
         {
-            _feedback.Text = $"Quote {quote.Id} is already linked to production job {existing.JobNumber}.";
+            _feedback.Text = $"Quote {quote.Id} is already linked to production job {existing.JobNumber}. {linkageValidation.Message}";
         }
 
         await LoadPurchasingQuotesAsync();
