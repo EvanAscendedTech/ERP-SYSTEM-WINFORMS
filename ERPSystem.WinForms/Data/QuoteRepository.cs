@@ -97,6 +97,10 @@ public class QuoteRepository
                 RequiresGForce INTEGER NOT NULL DEFAULT 0,
                 RequiresSecondaryProcessing INTEGER NOT NULL DEFAULT 0,
                 RequiresPlating INTEGER NOT NULL DEFAULT 0,
+                RequiresDfars INTEGER NOT NULL DEFAULT 0,
+                RequiresMaterialTestReport INTEGER NOT NULL DEFAULT 0,
+                RequiresCertificateOfConformance INTEGER NOT NULL DEFAULT 0,
+                RequiresSecondaryOperations INTEGER NOT NULL DEFAULT 0,
                 Notes TEXT NOT NULL DEFAULT '',
                 FOREIGN KEY(QuoteId) REFERENCES Quotes(Id) ON DELETE CASCADE
             );
@@ -182,6 +186,10 @@ public class QuoteRepository
                 RequiresGForce INTEGER NOT NULL DEFAULT 0,
                 RequiresSecondaryProcessing INTEGER NOT NULL DEFAULT 0,
                 RequiresPlating INTEGER NOT NULL DEFAULT 0,
+                RequiresDfars INTEGER NOT NULL DEFAULT 0,
+                RequiresMaterialTestReport INTEGER NOT NULL DEFAULT 0,
+                RequiresCertificateOfConformance INTEGER NOT NULL DEFAULT 0,
+                RequiresSecondaryOperations INTEGER NOT NULL DEFAULT 0,
                 Notes TEXT NOT NULL DEFAULT '',
                 AssociatedFiles TEXT NOT NULL DEFAULT '',
                 FOREIGN KEY(ArchiveId) REFERENCES ArchivedQuotes(ArchiveId) ON DELETE CASCADE
@@ -265,7 +273,16 @@ public class QuoteRepository
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresGForce", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresSecondaryProcessing", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresPlating", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresDfars", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresMaterialTestReport", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresCertificateOfConformance", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresSecondaryOperations", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "Notes", "TEXT NOT NULL DEFAULT ''");
+
+        await EnsureColumnExistsAsync(connection, "ArchivedQuoteLineItems", "RequiresDfars", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "ArchivedQuoteLineItems", "RequiresMaterialTestReport", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "ArchivedQuoteLineItems", "RequiresCertificateOfConformance", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "ArchivedQuoteLineItems", "RequiresSecondaryOperations", "INTEGER NOT NULL DEFAULT 0");
 
         await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "QuoteId", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "LifecycleId", "TEXT NOT NULL DEFAULT ''");
@@ -511,8 +528,12 @@ public class QuoteRepository
                         RequiresGForce,
                         RequiresSecondaryProcessing,
                         RequiresPlating,
+                        RequiresDfars,
+                        RequiresMaterialTestReport,
+                        RequiresCertificateOfConformance,
+                        RequiresSecondaryOperations,
                         Notes)
-                    VALUES ($quoteId, $description, $drawingNumber, $drawingName, $revision, $qty, $unitPrice, $productionHours, $setupHours, $materialCost, $toolingCost, $secondaryOperationsCost, $lineItemTotal, $leadTimeDays, $requiresGForce, $requiresSecondary, $requiresPlating, $notes);
+                    VALUES ($quoteId, $description, $drawingNumber, $drawingName, $revision, $qty, $unitPrice, $productionHours, $setupHours, $materialCost, $toolingCost, $secondaryOperationsCost, $lineItemTotal, $leadTimeDays, $requiresGForce, $requiresSecondary, $requiresPlating, $requiresDfars, $requiresMaterialTestReport, $requiresCertificateOfConformance, $requiresSecondaryOperations, $notes);
                     SELECT last_insert_rowid();";
                 insertLineItem.Parameters.AddWithValue("$quoteId", quote.Id);
                 insertLineItem.Parameters.AddWithValue("$description", lineItem.Description);
@@ -531,6 +552,10 @@ public class QuoteRepository
                 insertLineItem.Parameters.AddWithValue("$requiresGForce", lineItem.RequiresGForce ? 1 : 0);
                 insertLineItem.Parameters.AddWithValue("$requiresSecondary", lineItem.RequiresSecondaryProcessing ? 1 : 0);
                 insertLineItem.Parameters.AddWithValue("$requiresPlating", lineItem.RequiresPlating ? 1 : 0);
+                insertLineItem.Parameters.AddWithValue("$requiresDfars", lineItem.RequiresDfars ? 1 : 0);
+                insertLineItem.Parameters.AddWithValue("$requiresMaterialTestReport", lineItem.RequiresMaterialTestReport ? 1 : 0);
+                insertLineItem.Parameters.AddWithValue("$requiresCertificateOfConformance", lineItem.RequiresCertificateOfConformance ? 1 : 0);
+                insertLineItem.Parameters.AddWithValue("$requiresSecondaryOperations", lineItem.RequiresSecondaryOperations ? 1 : 0);
                 insertLineItem.Parameters.AddWithValue("$notes", lineItem.Notes ?? string.Empty);
                 lineItem.Id = Convert.ToInt32(await insertLineItem.ExecuteScalarAsync());
 
@@ -976,6 +1001,10 @@ public class QuoteRepository
                 li.RequiresGForce,
                 li.RequiresSecondaryProcessing,
                 li.RequiresPlating,
+                li.RequiresDfars,
+                li.RequiresMaterialTestReport,
+                li.RequiresCertificateOfConformance,
+                li.RequiresSecondaryOperations,
                 li.Notes,
                 f.FilePath
             FROM QuoteLineItems li
@@ -1011,15 +1040,19 @@ public class QuoteRepository
                     RequiresGForce = reader.GetInt32(14) == 1,
                     RequiresSecondaryProcessing = reader.GetInt32(15) == 1,
                     RequiresPlating = reader.GetInt32(16) == 1,
-                    Notes = reader.IsDBNull(17) ? string.Empty : reader.GetString(17)
+                    RequiresDfars = reader.GetInt32(17) == 1,
+                    RequiresMaterialTestReport = reader.GetInt32(18) == 1,
+                    RequiresCertificateOfConformance = reader.GetInt32(19) == 1,
+                    RequiresSecondaryOperations = reader.GetInt32(20) == 1,
+                    Notes = reader.IsDBNull(21) ? string.Empty : reader.GetString(21)
                 };
                 cache[lineItemId] = lineItem;
                 lineItems.Add(lineItem);
             }
 
-            if (!reader.IsDBNull(18))
+            if (!reader.IsDBNull(22))
             {
-                lineItem.AssociatedFiles.Add(reader.GetString(18));
+                lineItem.AssociatedFiles.Add(reader.GetString(22));
             }
         }
 
@@ -1695,6 +1728,10 @@ public class QuoteRepository
                     RequiresGForce,
                     RequiresSecondaryProcessing,
                     RequiresPlating,
+                    RequiresDfars,
+                    RequiresMaterialTestReport,
+                    RequiresCertificateOfConformance,
+                    RequiresSecondaryOperations,
                     Notes,
                     AssociatedFiles)
                 VALUES (
@@ -1707,6 +1744,10 @@ public class QuoteRepository
                     $requiresGForce,
                     $requiresSecondaryProcessing,
                     $requiresPlating,
+                    $requiresDfars,
+                    $requiresMaterialTestReport,
+                    $requiresCertificateOfConformance,
+                    $requiresSecondaryOperations,
                     $notes,
                     $associatedFiles);";
             insertLine.Parameters.AddWithValue("$archiveId", archiveId);
@@ -1718,6 +1759,10 @@ public class QuoteRepository
             insertLine.Parameters.AddWithValue("$requiresGForce", lineItem.RequiresGForce ? 1 : 0);
             insertLine.Parameters.AddWithValue("$requiresSecondaryProcessing", lineItem.RequiresSecondaryProcessing ? 1 : 0);
             insertLine.Parameters.AddWithValue("$requiresPlating", lineItem.RequiresPlating ? 1 : 0);
+            insertLine.Parameters.AddWithValue("$requiresDfars", lineItem.RequiresDfars ? 1 : 0);
+            insertLine.Parameters.AddWithValue("$requiresMaterialTestReport", lineItem.RequiresMaterialTestReport ? 1 : 0);
+            insertLine.Parameters.AddWithValue("$requiresCertificateOfConformance", lineItem.RequiresCertificateOfConformance ? 1 : 0);
+            insertLine.Parameters.AddWithValue("$requiresSecondaryOperations", lineItem.RequiresSecondaryOperations ? 1 : 0);
             insertLine.Parameters.AddWithValue("$notes", lineItem.Notes ?? string.Empty);
             insertLine.Parameters.AddWithValue("$associatedFiles", string.Join('|', lineItem.AssociatedFiles));
             await insertLine.ExecuteNonQueryAsync();
@@ -1789,6 +1834,10 @@ public class QuoteRepository
                    RequiresGForce,
                    RequiresSecondaryProcessing,
                    RequiresPlating,
+                   RequiresDfars,
+                   RequiresMaterialTestReport,
+                   RequiresCertificateOfConformance,
+                   RequiresSecondaryOperations,
                    Notes,
                    AssociatedFiles
             FROM ArchivedQuoteLineItems
@@ -1803,7 +1852,7 @@ public class QuoteRepository
             var originalLineId = reader.GetInt32(1);
             originalLineIds[originalLineId] = lineItems.Count;
 
-            var associatedFilesRaw = reader.IsDBNull(10) ? string.Empty : reader.GetString(10);
+            var associatedFilesRaw = reader.IsDBNull(14) ? string.Empty : reader.GetString(14);
             lineItems.Add(new QuoteLineItem
             {
                 Id = lineId,
@@ -1814,7 +1863,11 @@ public class QuoteRepository
                 RequiresGForce = reader.GetInt32(6) == 1,
                 RequiresSecondaryProcessing = reader.GetInt32(7) == 1,
                 RequiresPlating = reader.GetInt32(8) == 1,
-                Notes = reader.IsDBNull(9) ? string.Empty : reader.GetString(9),
+                RequiresDfars = reader.GetInt32(9) == 1,
+                RequiresMaterialTestReport = reader.GetInt32(10) == 1,
+                RequiresCertificateOfConformance = reader.GetInt32(11) == 1,
+                RequiresSecondaryOperations = reader.GetInt32(12) == 1,
+                Notes = reader.IsDBNull(13) ? string.Empty : reader.GetString(13),
                 AssociatedFiles = associatedFilesRaw.Split('|', StringSplitOptions.RemoveEmptyEntries).ToList(),
                 BlobAttachments = new List<QuoteBlobAttachment>()
             });

@@ -25,7 +25,6 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
     private readonly TableLayoutPanel _requirementsChecklistPanel = new() { Dock = DockStyle.Fill, AutoScroll = true, ColumnCount = 1, Padding = new Padding(0, 4, 0, 4) };
     private readonly Button _passToProductionButton;
     private readonly Dictionary<string, ChecklistResolution> _checklistState = new(StringComparer.OrdinalIgnoreCase);
-    private IReadOnlyList<InventoryItem> _inventoryItems = Array.Empty<InventoryItem>();
     private bool _restoringLayout;
 
     public PurchasingControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, UserManagementRepository userRepository, Models.UserAccount currentUser, Action<string> openSection, bool canEdit)
@@ -318,7 +317,6 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         var selectedQuoteId = GetSelectedQuote()?.Id;
         var quotes = await _quoteRepository.GetPurchasingQuotesAsync();
         var jobs = await _productionRepository.GetJobsAsync();
-        _inventoryItems = await _productionRepository.GetInventoryItemsAsync();
         var inProductionQuoteIds = jobs.Where(x => x.SourceQuoteId.HasValue).Select(x => x.SourceQuoteId!.Value).ToHashSet();
 
         var queue = quotes.Where(q => !inProductionQuoteIds.Contains(q.Id)).ToList();
@@ -395,35 +393,32 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         return requirements.Count == 0 ? "No flagged docs" : string.Join(", ", requirements.Select(x => x.DisplayName));
     }
 
-    private List<RequirementDefinition> BuildRequirementsForLine(QuoteLineItem line)
+    private static List<RequirementDefinition> BuildRequirementsForLine(QuoteLineItem line)
     {
         var requirements = new List<RequirementDefinition>();
 
-        if (line.RequiresGForce || NotesContainFlag(line.Notes, "material test report") || NotesContainFlag(line.Notes, "mtr"))
+        if (line.RequiresDfars)
         {
-            requirements.Add(new RequirementDefinition("MaterialTestReport", "Upload material test report"));
+            requirements.Add(new RequirementDefinition("DfarsCompliance", "Confirm DFARS compliance (Yes/No)", RequirementInputType.YesNo));
         }
 
-        if (line.RequiresSecondaryProcessing || NotesContainFlag(line.Notes, "traceability"))
+        if (line.RequiresMaterialTestReport)
         {
-            requirements.Add(new RequirementDefinition("Traceability", "Upload traceability document"));
+            requirements.Add(new RequirementDefinition("MaterialTestReport", "Upload material test report", RequirementInputType.FileUpload));
         }
 
-        if (line.RequiresPlating || NotesContainFlag(line.Notes, "plating"))
+        if (line.RequiresCertificateOfConformance)
         {
-            requirements.Add(new RequirementDefinition("Plating", "Upload plating certification"));
+            requirements.Add(new RequirementDefinition("CertificateOfConformance", "Upload certificate of conformance", RequirementInputType.FileUpload));
         }
 
-        return requirements
-            .GroupBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(x => x.First())
-            .ToList();
+        if (line.RequiresSecondaryOperations)
+        {
+            requirements.Add(new RequirementDefinition("PostOperationStatus", "Confirm post-operation status (Yes/No)", RequirementInputType.YesNo));
+        }
+
+        return requirements;
     }
-
-    private static bool NotesContainFlag(string? notes, string keyword)
-        => !string.IsNullOrWhiteSpace(notes)
-           && notes.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-           && !notes.Contains($"{keyword}: no", StringComparison.OrdinalIgnoreCase);
 
     private void RenderDynamicChecklist(Quote quote)
     {
@@ -478,16 +473,15 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         {
             Dock = DockStyle.Top,
             Height = 86,
-            ColumnCount = 4,
+            ColumnCount = 3,
             RowCount = 2,
             Margin = new Padding(0, 0, 0, 6),
             CellBorderStyle = TableLayoutPanelCellBorderStyle.Single,
             BackColor = Color.FromArgb(247, 250, 254)
         };
-        rowPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 36f));
+        rowPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 56f));
         rowPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 24f));
-        rowPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 24f));
-        rowPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16f));
+        rowPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f));
         rowPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 55f));
         rowPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 45f));
 
@@ -499,66 +493,64 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
             Font = new Font(Font, FontStyle.Bold)
         };
 
-        var uploadButton = new Button
-        {
-            Text = "Upload file",
-            AutoSize = true,
-            Anchor = AnchorStyles.Left,
-            Enabled = _canEdit
-        };
-        uploadButton.Click += async (_, _) =>
-        {
-            await UploadRequirementDocumentAsync(quote, rowModel.LineItem, rowModel.Requirement);
-            SetState(rowModel.StateKey, new ChecklistResolution(ChecklistResolutionType.Uploaded, "Uploaded"));
-            UpdateChecklistAfterAction(quote);
-        };
+        var actionHost = new Panel { Dock = DockStyle.Fill };
 
-        var inventoryPicker = new ComboBox
+        if (rowModel.Requirement.InputType == RequirementInputType.FileUpload)
         {
-            DropDownStyle = ComboBoxStyle.DropDownList,
-            Dock = DockStyle.Fill,
-            Enabled = _canEdit
-        };
-        inventoryPicker.Items.Add("Select from inventory...");
-        foreach (var item in _inventoryItems)
-        {
-            inventoryPicker.Items.Add($"{item.Sku} - {item.Description} ({item.QuantityOnHand:0.##} {item.UnitOfMeasure})");
+            var uploadButton = new Button
+            {
+                Text = "Upload file",
+                AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                Enabled = _canEdit
+            };
+            uploadButton.Click += async (_, _) =>
+            {
+                await UploadRequirementDocumentAsync(quote, rowModel.LineItem, rowModel.Requirement);
+                SetState(rowModel.StateKey, new ChecklistResolution(ChecklistResolutionType.Uploaded, "Uploaded"));
+                UpdateChecklistAfterAction(quote);
+            };
+            actionHost.Controls.Add(uploadButton);
         }
-        inventoryPicker.SelectedIndex = 0;
-        inventoryPicker.SelectedIndexChanged += (_, _) =>
+        else
         {
-            if (inventoryPicker.SelectedIndex <= 0)
+            var yesNoSelector = new ComboBox
             {
-                SetState(rowModel.StateKey, new ChecklistResolution(ChecklistResolutionType.Pending, "Pending"));
-            }
-            else
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = 200,
+                Enabled = _canEdit
+            };
+            yesNoSelector.Items.Add("Select response...");
+            yesNoSelector.Items.Add("Yes");
+            yesNoSelector.Items.Add("No");
+            yesNoSelector.SelectedIndex = 0;
+            yesNoSelector.SelectedIndexChanged += (_, _) =>
             {
-                SetState(rowModel.StateKey, new ChecklistResolution(ChecklistResolutionType.InventorySelected, "Inventory selected"));
-            }
+                if (yesNoSelector.SelectedIndex == 1)
+                {
+                    SetState(rowModel.StateKey, new ChecklistResolution(ChecklistResolutionType.ConfirmedYes, "Confirmed: Yes"));
+                }
+                else if (yesNoSelector.SelectedIndex == 2)
+                {
+                    SetState(rowModel.StateKey, new ChecklistResolution(ChecklistResolutionType.ConfirmedNo, "Confirmed: No"));
+                }
+                else
+                {
+                    SetState(rowModel.StateKey, new ChecklistResolution(ChecklistResolutionType.Pending, "Pending"));
+                }
 
-            UpdateChecklistAfterAction(quote);
-        };
+                UpdateChecklistAfterAction(quote);
+            };
+            actionHost.Controls.Add(yesNoSelector);
+        }
 
-        var notRequired = new CheckBox
+        var instructionLabel = new Label
         {
-            Text = "Not required",
+            Text = rowModel.Requirement.InputType == RequirementInputType.FileUpload
+                ? "Action: Upload the required document"
+                : "Action: Record Yes/No response",
             Dock = DockStyle.Fill,
-            Enabled = _canEdit,
             TextAlign = ContentAlignment.MiddleLeft
-        };
-        notRequired.CheckedChanged += (_, _) =>
-        {
-            if (notRequired.Checked)
-            {
-                inventoryPicker.SelectedIndex = 0;
-                SetState(rowModel.StateKey, new ChecklistResolution(ChecklistResolutionType.NotRequired, "Marked not required"));
-            }
-            else
-            {
-                SetState(rowModel.StateKey, new ChecklistResolution(ChecklistResolutionType.Pending, "Pending"));
-            }
-
-            UpdateChecklistAfterAction(quote);
         };
 
         var statusLabel = new Label
@@ -570,11 +562,10 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         };
 
         rowPanel.Controls.Add(title, 0, 0);
-        rowPanel.SetColumnSpan(title, 4);
-        rowPanel.Controls.Add(uploadButton, 0, 1);
-        rowPanel.Controls.Add(inventoryPicker, 1, 1);
-        rowPanel.Controls.Add(notRequired, 2, 1);
-        rowPanel.Controls.Add(statusLabel, 3, 1);
+        rowPanel.SetColumnSpan(title, 3);
+        rowPanel.Controls.Add(instructionLabel, 0, 1);
+        rowPanel.Controls.Add(actionHost, 1, 1);
+        rowPanel.Controls.Add(statusLabel, 2, 1);
 
         return rowPanel;
     }
@@ -685,7 +676,7 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
     private bool IsChecklistRowSatisfied(string stateKey)
     {
         var state = GetState(stateKey);
-        return state.Type is ChecklistResolutionType.Uploaded or ChecklistResolutionType.InventorySelected or ChecklistResolutionType.NotRequired;
+        return state.Type is ChecklistResolutionType.Uploaded or ChecklistResolutionType.ConfirmedYes or ChecklistResolutionType.ConfirmedNo;
     }
 
     private bool AreAllRequirementsSatisfied(Quote quote)
@@ -892,14 +883,20 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         public string RequirementSummary { get; init; } = string.Empty;
     }
 
-    private sealed record RequirementDefinition(string Key, string DisplayName);
+    private sealed record RequirementDefinition(string Key, string DisplayName, RequirementInputType InputType);
     private sealed record ChecklistResolution(ChecklistResolutionType Type, string Label);
+    private enum RequirementInputType
+    {
+        FileUpload,
+        YesNo
+    }
+
     private enum ChecklistResolutionType
     {
         Pending,
         Uploaded,
-        InventorySelected,
-        NotRequired
+        ConfirmedYes,
+        ConfirmedNo
     }
 
     private sealed record ChecklistRowModel(QuoteLineItem LineItem, int DisplayLineNumber, RequirementDefinition Requirement, string StateKey);

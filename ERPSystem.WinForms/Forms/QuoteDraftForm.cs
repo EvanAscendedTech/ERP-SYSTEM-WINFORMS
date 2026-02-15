@@ -285,11 +285,12 @@ public class QuoteDraftForm : Form
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 1,
-            RowCount = 3,
+            RowCount = 4,
             Dock = DockStyle.Top,
             Margin = Padding.Empty,
             Padding = Padding.Empty
         };
+        contentGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         contentGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         contentGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         contentGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -324,7 +325,8 @@ public class QuoteDraftForm : Form
 
         contentGrid.Controls.Add(detailsSection, 0, 0);
         contentGrid.Controls.Add(costsSection, 0, 1);
-        contentGrid.Controls.Add(attachmentsSection, 0, 2);
+        contentGrid.Controls.Add(productionFlagsSection, 0, 2);
+        contentGrid.Controls.Add(attachmentsSection, 0, 3);
         contentScroller.Controls.Add(contentGrid);
         layout.Controls.Add(contentScroller, 0, 1);
 
@@ -374,6 +376,10 @@ public class QuoteDraftForm : Form
             ToolingCost = toolingCost,
             SecondaryCost = secondaryCost,
             Total = totalBox,
+            RequiresDfars = requiresDfars,
+            RequiresMaterialTestReport = requiresMaterialTestReport,
+            RequiresCertificateOfConformance = requiresCertificateOfConformance,
+            RequiresSecondaryOperations = requiresSecondaryOperations,
             BlobLists = new Dictionary<QuoteBlobType, ListView>
             {
                 [QuoteBlobType.Technical] = drawingDocs.List,
@@ -896,6 +902,10 @@ public class QuoteDraftForm : Form
             line.Description = string.IsNullOrWhiteSpace(line.DrawingName) ? card.Title.Text : line.DrawingName;
             line.Quantity = 1;
             line.UnitPrice = line.LineItemTotal;
+            line.RequiresDfars = card.RequiresDfars.Checked;
+            line.RequiresMaterialTestReport = card.RequiresMaterialTestReport.Checked;
+            line.RequiresCertificateOfConformance = card.RequiresCertificateOfConformance.Checked;
+            line.RequiresSecondaryOperations = card.RequiresSecondaryOperations.Checked;
             line.Notes = BuildLineNotes(_customerPartPo.Text.Trim());
             quote.LineItems.Add(line);
         }
@@ -969,6 +979,10 @@ public class QuoteDraftForm : Form
         public required TextBox ToolingCost { get; init; }
         public required TextBox SecondaryCost { get; init; }
         public required TextBox Total { get; init; }
+        public required CheckBox RequiresDfars { get; init; }
+        public required CheckBox RequiresMaterialTestReport { get; init; }
+        public required CheckBox RequiresCertificateOfConformance { get; init; }
+        public required CheckBox RequiresSecondaryOperations { get; init; }
         public required Dictionary<QuoteBlobType, ListView> BlobLists { get; init; }
     }
 }
