@@ -101,4 +101,30 @@ public class UserManagementRepositoryTests
         File.Delete(dbPath);
     }
 
+
+    [Fact]
+    public async Task UserPreferences_RoundTripPerUser()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-prefs-{Guid.NewGuid():N}.db");
+        var repository = new UserManagementRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        await repository.SaveUserAsync(new UserAccount
+        {
+            Username = "layout.user",
+            DisplayName = "Layout User",
+            PasswordHash = "hash",
+            IsActive = true
+        });
+
+        var user = Assert.Single(await repository.GetUsersAsync());
+        await repository.SaveUserPreferenceAsync(user.Id, "purchasing.layout", "{\"MainSplitterDistance\":500,\"DocsSplitterDistance\":180}");
+
+        var loaded = await repository.GetUserPreferenceAsync(user.Id, "purchasing.layout");
+        Assert.NotNull(loaded);
+        Assert.Contains("MainSplitterDistance", loaded);
+
+        File.Delete(dbPath);
+    }
+
 }

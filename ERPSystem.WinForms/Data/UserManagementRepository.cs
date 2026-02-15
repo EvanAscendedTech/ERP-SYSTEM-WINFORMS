@@ -54,6 +54,15 @@ public class UserManagementRepository
                 PRIMARY KEY (UserId, RoleId),
                 FOREIGN KEY(UserId) REFERENCES Users(Id) ON DELETE CASCADE,
                 FOREIGN KEY(RoleId) REFERENCES Roles(Id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS UserPreferences (
+                UserId INTEGER NOT NULL,
+                PreferenceKey TEXT NOT NULL,
+                PreferenceValue TEXT NOT NULL DEFAULT '',
+                LastUpdatedUtc TEXT NOT NULL,
+                PRIMARY KEY (UserId, PreferenceKey),
+                FOREIGN KEY(UserId) REFERENCES Users(Id) ON DELETE CASCADE
             );";
 
         await using var command = connection.CreateCommand();
@@ -246,6 +255,48 @@ public class UserManagementRepository
         }
 
         return users;
+    }
+
+
+    public async Task<string?> GetUserPreferenceAsync(int userId, string preferenceKey)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT PreferenceValue
+            FROM UserPreferences
+            WHERE UserId = $userId AND PreferenceKey = $preferenceKey;";
+        command.Parameters.AddWithValue("$userId", userId);
+        command.Parameters.AddWithValue("$preferenceKey", preferenceKey);
+
+        var value = await command.ExecuteScalarAsync();
+        return value is null or DBNull ? null : Convert.ToString(value);
+    }
+
+    public async Task SaveUserPreferenceAsync(int userId, string preferenceKey, string preferenceValue)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO UserPreferences (UserId, PreferenceKey, PreferenceValue, LastUpdatedUtc)
+            VALUES ($userId, $preferenceKey, $preferenceValue, $lastUpdatedUtc)
+            ON CONFLICT(UserId, PreferenceKey) DO UPDATE SET
+                PreferenceValue = excluded.PreferenceValue,
+                LastUpdatedUtc = excluded.LastUpdatedUtc;";
+        command.Parameters.AddWithValue("$userId", userId);
+        command.Parameters.AddWithValue("$preferenceKey", preferenceKey);
+        command.Parameters.AddWithValue("$preferenceValue", preferenceValue);
+        command.Parameters.AddWithValue("$lastUpdatedUtc", DateTime.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync();
+
+        if (_realtimeDataService is not null)
+        {
+            await _realtimeDataService.PublishChangeAsync("Users", "save-preference");
+        }
     }
 
 
