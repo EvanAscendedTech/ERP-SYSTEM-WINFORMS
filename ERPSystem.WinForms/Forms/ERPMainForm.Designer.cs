@@ -10,6 +10,8 @@ public partial class ERPMainForm
     private PictureBox picCompanyLogo = null!;
     private Label lblAppTitle = null!;
     private ModernButton btnSettingsMenu = null!;
+    private ModernButton btnBack = null!;
+    private ModernButton btnForward = null!;
     private Label lblSyncClock = null!;
     private Label lblSaveClock = null!;
     private FlowLayoutPanel onlineUsersPanel = null!;
@@ -33,6 +35,8 @@ public partial class ERPMainForm
         picCompanyLogo = new PictureBox();
         lblAppTitle = new Label();
         btnSettingsMenu = new ModernButton();
+        btnBack = new ModernButton();
+        btnForward = new ModernButton();
         lblSyncClock = new Label();
         lblSaveClock = new Label();
         onlineUsersPanel = new FlowLayoutPanel();
@@ -81,6 +85,18 @@ public partial class ERPMainForm
         btnSettingsMenu.Location = new Point(648, 14);
         btnSettingsMenu.CornerRadius = 8;
 
+        btnBack.Text = "◀";
+        btnBack.Size = new Size(42, 36);
+        btnBack.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        btnBack.Location = new Point(556, 14);
+        btnBack.CornerRadius = 8;
+
+        btnForward.Text = "▶";
+        btnForward.Size = new Size(42, 36);
+        btnForward.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        btnForward.Location = new Point(602, 14);
+        btnForward.CornerRadius = 8;
+
         lblSyncClock.AutoSize = true;
         lblSyncClock.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
         lblSyncClock.Anchor = AnchorStyles.Top | AnchorStyles.Right;
@@ -103,6 +119,8 @@ public partial class ERPMainForm
         headerPanel.Resize += (_, _) =>
         {
             btnSettingsMenu.Left = headerPanel.Width - btnSettingsMenu.Width - 20;
+            btnForward.Left = btnSettingsMenu.Left - btnForward.Width - 8;
+            btnBack.Left = btnForward.Left - btnBack.Width - 8;
             lblSyncClock.Left = btnSettingsMenu.Left - Math.Max(lblSyncClock.Width, lblSaveClock.Width) - 20;
             lblSaveClock.Left = lblSyncClock.Left;
             onlineUsersPanel.Left = lblSyncClock.Left;
@@ -113,6 +131,8 @@ public partial class ERPMainForm
         headerPanel.Controls.Add(lblAppTitle);
         headerPanel.Controls.Add(lblSyncClock);
         headerPanel.Controls.Add(lblSaveClock);
+        headerPanel.Controls.Add(btnBack);
+        headerPanel.Controls.Add(btnForward);
         headerPanel.Controls.Add(btnSettingsMenu);
         headerPanel.Controls.Add(onlineUsersPanel);
 
