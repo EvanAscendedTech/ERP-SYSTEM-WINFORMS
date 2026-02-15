@@ -809,7 +809,7 @@ public class QuoteDraftForm : Form
         public required Panel Container { get; init; }
         public required Size BaseSize { get; init; }
         public required Panel ResizeGrip { get; init; }
-        public required IDictionary<Control, float> BaseFonts { get; init; }
+        public required IReadOnlyDictionary<Control, float> BaseFonts { get; init; }
         public bool IsUserResized { get; set; }
         public required Label Title { get; init; }
         public required QuoteLineItem Model { get; init; }
