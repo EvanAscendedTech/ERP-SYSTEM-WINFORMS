@@ -85,6 +85,11 @@ public class ArchivedQuoteDetailForm : Form
         var text = BuildExportText(_quote);
         printDocument.PrintPage += (_, e) =>
         {
+            if (e.Graphics is null)
+            {
+                return;
+            }
+
             e.Graphics.DrawString(text, Font, Brushes.Black, new RectangleF(40, 40, e.MarginBounds.Width, e.MarginBounds.Height));
         };
 
