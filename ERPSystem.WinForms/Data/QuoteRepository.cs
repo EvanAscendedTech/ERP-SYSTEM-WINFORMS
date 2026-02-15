@@ -15,7 +15,8 @@ public class QuoteRepository
     {
         _connectionString = new SqliteConnectionStringBuilder
         {
-            DataSource = databasePath
+            DataSource = databasePath,
+            ForeignKeys = true
         }.ToString();
         _realtimeDataService = realtimeDataService;
     }
@@ -36,7 +37,7 @@ public class QuoteRepository
 
             CREATE TABLE IF NOT EXISTS CustomerContacts (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                CustomerId INTEGER NOT NULL,
+                CustomerId INTEGER,
                 Name TEXT NOT NULL,
                 Email TEXT NOT NULL DEFAULT '',
                 Phone TEXT NOT NULL DEFAULT '',
@@ -61,7 +62,13 @@ public class QuoteRepository
                 CompletedUtc TEXT NULL,
                 CompletedByUserId TEXT NULL,
                 PassedToPurchasingUtc TEXT NULL,
-                PassedToPurchasingByUserId TEXT NULL
+                PassedToPurchasingByUserId TEXT NULL,
+                FOREIGN KEY(CustomerId) REFERENCES Customers(Id) ON UPDATE CASCADE ON DELETE CASCADE,
+                FOREIGN KEY(WonByUserId) REFERENCES Users(Username) ON UPDATE CASCADE ON DELETE SET NULL,
+                FOREIGN KEY(LostByUserId) REFERENCES Users(Username) ON UPDATE CASCADE ON DELETE SET NULL,
+                FOREIGN KEY(ExpiredByUserId) REFERENCES Users(Username) ON UPDATE CASCADE ON DELETE SET NULL,
+                FOREIGN KEY(CompletedByUserId) REFERENCES Users(Username) ON UPDATE CASCADE ON DELETE SET NULL,
+                FOREIGN KEY(PassedToPurchasingByUserId) REFERENCES Users(Username) ON UPDATE CASCADE ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS QuoteLineItems (
@@ -82,7 +89,7 @@ public class QuoteRepository
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 LineItemId INTEGER NOT NULL,
                 FilePath TEXT NOT NULL,
-                FOREIGN KEY(LineItemId) REFERENCES QuoteLineItems(Id) ON DELETE CASCADE
+                FOREIGN KEY(LineItemId) REFERENCES QuoteLineItems(Id) ON UPDATE CASCADE ON DELETE CASCADE
             );
 
 
@@ -101,7 +108,8 @@ public class QuoteRepository
                 UploadedBy TEXT NOT NULL DEFAULT '',
                 BlobData BLOB NOT NULL,
                 UploadedUtc TEXT NOT NULL,
-                FOREIGN KEY(LineItemId) REFERENCES QuoteLineItems(Id) ON DELETE CASCADE
+                FOREIGN KEY(LineItemId) REFERENCES QuoteLineItems(Id) ON UPDATE CASCADE ON DELETE CASCADE,
+                FOREIGN KEY(QuoteId) REFERENCES Quotes(Id) ON UPDATE CASCADE ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS QuoteAuditEvents (
@@ -111,7 +119,8 @@ public class QuoteRepository
                 OperationMode TEXT NOT NULL,
                 LineItemCount INTEGER NOT NULL DEFAULT 0,
                 Details TEXT,
-                CreatedUtc TEXT NOT NULL
+                CreatedUtc TEXT NOT NULL,
+                FOREIGN KEY(QuoteId) REFERENCES Quotes(Id) ON UPDATE CASCADE ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS ArchivedQuotes (
@@ -150,6 +159,25 @@ public class QuoteRepository
                 FOREIGN KEY(ArchiveId) REFERENCES ArchivedQuotes(ArchiveId) ON DELETE CASCADE
             );
 
+
+
+            CREATE TABLE IF NOT EXISTS IntegrityValidationRuns (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Scope TEXT NOT NULL,
+                Success INTEGER NOT NULL,
+                IssueCount INTEGER NOT NULL,
+                Details TEXT NOT NULL,
+                ExecutedUtc TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS RelationshipChangeLog (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                TableName TEXT NOT NULL,
+                ChangeType TEXT NOT NULL,
+                RelationshipKey TEXT NOT NULL,
+                Details TEXT NOT NULL,
+                ChangedUtc TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS ArchivedQuoteBlobFiles (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ArchiveId INTEGER NOT NULL,
@@ -203,6 +231,7 @@ public class QuoteRepository
         await EnsureCustomerIndexesAsync(connection);
         await EnsureQuoteIndexesAsync(connection);
         await EnsureArchiveIndexesAsync(connection);
+        await EnsureRelationshipTriggersAsync(connection);
         await BackfillCustomersAsync(connection);
         await EnsureDefaultCustomerAsync(connection);
     }
@@ -275,6 +304,7 @@ public class QuoteRepository
 
     public async Task<int> SaveQuoteAsync(Quote quote)
     {
+        ValidateQuoteForPersistence(quote);
         var operationMode = quote.Id == 0 ? "create" : "update";
         var requestedId = quote.Id;
         var lineItemCount = quote.LineItems.Count;
@@ -1667,4 +1697,114 @@ public class QuoteRepository
 
         await transaction.CommitAsync();
     }
+
+    public async Task<IntegrityValidationReport> RunReferentialIntegrityBatchAsync()
+    {
+        var report = new IntegrityValidationReport { ExecutedUtc = DateTime.UtcNow, Success = true };
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        var checks = new (string Name, string Sql, string Details)[]
+        {
+            (
+                "QuotesMissingCustomers",
+                @"SELECT COUNT(1)
+                  FROM Quotes q
+                  LEFT JOIN Customers c ON c.Id = q.CustomerId
+                  WHERE c.Id IS NULL;",
+                "Every quote must reference a valid customer."
+            ),
+            (
+                "LineItemsMissingQuotes",
+                @"SELECT COUNT(1)
+                  FROM QuoteLineItems li
+                  LEFT JOIN Quotes q ON q.Id = li.QuoteId
+                  WHERE q.Id IS NULL;",
+                "Every quote line item must reference a valid quote."
+            ),
+            (
+                "BlobFilesMissingLineItems",
+                @"SELECT COUNT(1)
+                  FROM QuoteBlobFiles b
+                  LEFT JOIN QuoteLineItems li ON li.Id = b.LineItemId
+                  WHERE li.Id IS NULL;",
+                "Every quote file must reference a valid line item."
+            )
+        };
+
+        foreach (var check in checks)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = check.Sql;
+            var count = Convert.ToInt32(await command.ExecuteScalarAsync());
+            if (count > 0)
+            {
+                report.Success = false;
+                report.Issues.Add(new IntegrityValidationIssue
+                {
+                    CheckName = check.Name,
+                    AffectedRows = count,
+                    Details = check.Details
+                });
+            }
+        }
+
+        await using var insertRun = connection.CreateCommand();
+        insertRun.CommandText = @"
+            INSERT INTO IntegrityValidationRuns (Scope, Success, IssueCount, Details, ExecutedUtc)
+            VALUES ($scope, $success, $issueCount, $details, $executedUtc);";
+        insertRun.Parameters.AddWithValue("$scope", "quotes");
+        insertRun.Parameters.AddWithValue("$success", report.Success ? 1 : 0);
+        insertRun.Parameters.AddWithValue("$issueCount", report.Issues.Count);
+        insertRun.Parameters.AddWithValue("$details", report.Summary);
+        insertRun.Parameters.AddWithValue("$executedUtc", report.ExecutedUtc.ToString("O"));
+        await insertRun.ExecuteNonQueryAsync();
+
+        return report;
+    }
+
+    private static void ValidateQuoteForPersistence(Quote quote)
+    {
+        if (string.IsNullOrWhiteSpace(quote.CustomerName))
+        {
+            throw new InvalidOperationException("Customer name is required.");
+        }
+
+        if (quote.LineItems.Count == 0)
+        {
+            throw new InvalidOperationException("A quote must include at least one line item.");
+        }
+
+        foreach (var lineItem in quote.LineItems)
+        {
+            if (string.IsNullOrWhiteSpace(lineItem.Description))
+            {
+                throw new InvalidOperationException("Each line item requires a description.");
+            }
+
+            if (lineItem.Quantity <= 0)
+            {
+                throw new InvalidOperationException("Each line item must have a quantity greater than zero.");
+            }
+        }
+    }
+
+    private static async Task EnsureRelationshipTriggersAsync(SqliteConnection connection)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            CREATE TRIGGER IF NOT EXISTS trg_Quotes_StatusChange
+            AFTER UPDATE OF Status ON Quotes
+            FOR EACH ROW
+            WHEN OLD.Status <> NEW.Status
+            BEGIN
+                INSERT INTO RelationshipChangeLog (TableName, ChangeType, RelationshipKey, Details, ChangedUtc)
+                VALUES ('Quotes', 'status_change', NEW.Id,
+                        'Quote status changed from ' || OLD.Status || ' to ' || NEW.Status,
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+            END;";
+        await command.ExecuteNonQueryAsync();
+    }
+
 }

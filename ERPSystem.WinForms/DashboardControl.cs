@@ -296,11 +296,15 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
     {
         IReadOnlyList<Quote> quotes;
         IReadOnlyList<ProductionJob> jobs;
+        IntegrityValidationReport? quoteIntegrityReport = null;
+        IntegrityValidationReport? productionIntegrityReport = null;
 
         try
         {
             quotes = await _quoteRepository.GetQuotesAsync();
             jobs = await _productionRepository.GetJobsAsync();
+            quoteIntegrityReport = await _quoteRepository.RunReferentialIntegrityBatchAsync();
+            productionIntegrityReport = await _productionRepository.RunReferentialIntegrityBatchAsync();
         }
         catch (Exception ex)
         {
@@ -347,7 +351,10 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             ("Inspection", CreateInspectionQueuePanel("Inspection", qualityAndInspectionQueue), Color.FromArgb(205, 98, 184)),
             ("Shipping", CreateShippingQueuePanel("Shipping", shippingQueue), Color.FromArgb(95, 175, 193)));
 
-        _lastUpdatedLabel.Text = $"Updated {DateTime.Now:g}";
+                var integrityIssueCount = (quoteIntegrityReport?.Issues.Count ?? 0) + (productionIntegrityReport?.Issues.Count ?? 0);
+        _lastUpdatedLabel.Text = integrityIssueCount == 0
+            ? $"Updated {DateTime.Now:g} · Integrity checks passing"
+            : $"Updated {DateTime.Now:g} · ALERT: {integrityIssueCount} integrity mismatch(es) detected";
     }
 
     private Panel CreateOpenQuotesSnapshotPanel(IReadOnlyCollection<Quote> inProgressQuotes)

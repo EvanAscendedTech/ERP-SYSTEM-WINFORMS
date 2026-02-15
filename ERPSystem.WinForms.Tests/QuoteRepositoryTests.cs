@@ -761,4 +761,53 @@ public class QuoteRepositoryTests
         return Convert.ToInt32(await command.ExecuteScalarAsync());
     }
 
+
+
+    [Fact]
+    public async Task SaveQuoteAsync_RequiresLineItems()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-required-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+
+        var quote = new Quote
+        {
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            Status = QuoteStatus.InProgress
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.SaveQuoteAsync(quote));
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task RunReferentialIntegrityBatchAsync_ReturnsSuccessForHealthyData()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-integrity-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+        var quote = new Quote
+        {
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            Status = QuoteStatus.InProgress,
+            LineItems = [new QuoteLineItem { Description = "Plate", Quantity = 1 }]
+        };
+
+        await repository.SaveQuoteAsync(quote);
+
+        var report = await repository.RunReferentialIntegrityBatchAsync();
+
+        Assert.True(report.Success);
+        Assert.Empty(report.Issues);
+
+        File.Delete(dbPath);
+    }
+
 }

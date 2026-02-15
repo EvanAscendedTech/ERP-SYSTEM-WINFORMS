@@ -12,7 +12,7 @@ public class UserManagementRepository
 
     public UserManagementRepository(string dbPath, RealtimeDataService? realtimeDataService = null)
     {
-        _connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+        _connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath, ForeignKeys = true }.ToString();
         _realtimeDataService = realtimeDataService;
     }
 
