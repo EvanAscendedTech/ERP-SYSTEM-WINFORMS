@@ -8,4 +8,5 @@ public class AppSettings
     public bool EnableNotifications { get; set; } = true;
     public int AutoRefreshSeconds { get; set; } = 30;
     public string DefaultArchivePath { get; set; } = "archive";
+    public decimal QuoteShopHourlyRate { get; set; } = 75m;
 }

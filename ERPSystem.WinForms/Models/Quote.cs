@@ -19,5 +19,7 @@ public class Quote
     public string? CompletedByUserId { get; set; }
     public DateTime? PassedToPurchasingUtc { get; set; }
     public string? PassedToPurchasingByUserId { get; set; }
+    public decimal ShopHourlyRateSnapshot { get; set; }
+    public decimal MasterTotal { get; set; }
     public List<QuoteLineItem> LineItems { get; set; } = new();
 }

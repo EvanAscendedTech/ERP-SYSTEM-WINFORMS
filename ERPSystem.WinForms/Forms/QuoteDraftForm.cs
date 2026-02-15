@@ -1,46 +1,24 @@
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
-using ERPSystem.WinForms.Services;
 using System.Globalization;
-using System.Text;
 
 namespace ERPSystem.WinForms.Forms;
 
 public class QuoteDraftForm : Form
 {
-    private const string DescriptionFieldName = "Description";
-    private const string ProductionHoursFieldName = "ProductionHours";
-    private const string SetupHoursFieldName = "SetupHours";
-    private const string HoursConsumedFieldName = "HoursConsumed";
-    private const string LineItemPriceFieldName = "UnitPrice";
-
-    private sealed class BlobUploadSectionState
-    {
-        public required QuoteBlobType BlobType { get; init; }
-        public required string Title { get; init; }
-        public required Label DropZoneLabel { get; init; }
-        public required DataGridView UploadGrid { get; init; }
-        public required Dictionary<string, int> RowByFilePath { get; init; }
-        public List<QuoteBlobAttachment> Attachments { get; } = new();
-    }
-
     private readonly QuoteRepository _quoteRepository;
-    private readonly BlobImportService _blobImportService;
     private readonly bool _canViewPricing;
-    private readonly string _uploadedBy;
-    private readonly ComboBox _customerPicker = new() { Width = 320, DropDownStyle = ComboBoxStyle.DropDownList };
-    private readonly TextBox _customerQuoteNumber = new() { Width = 220, PlaceholderText = "Customer quote number" };
-    private readonly TextBox _customerAddress = new() { Width = 320, PlaceholderText = "Customer address" };
-    private readonly TextBox _pricingAdjustment = new() { Width = 160, PlaceholderText = "Pricing adjustment" };
+    private readonly ComboBox _customerPicker = new() { Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
+    private readonly TextBox _customerAddress = new() { Width = 300, ReadOnly = true };
+    private readonly TextBox _customerPartPo = new() { Width = 220, PlaceholderText = "Customer Part PO" };
+    private readonly TextBox _cycleTime = new() { Width = 120, PlaceholderText = "Cycle Time" };
+    private readonly TextBox _ipNotes = new() { Width = 180, PlaceholderText = "IP Fields" };
     private readonly TextBox _quoteLifecycleId = new() { Width = 220, ReadOnly = true };
-    private readonly NumericUpDown _lineCount = new() { Minimum = 1, Maximum = 20, Value = 1, Width = 100 };
     private readonly FlowLayoutPanel _lineItemsPanel = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
-    private readonly TextBox _dailyCapacityHours = new() { Width = 120, Text = "8" };
-    private readonly TextBox _leadTimeAdjustmentDays = new() { Width = 120, Text = "0" };
     private readonly Label _totalHoursValue = new() { AutoSize = true, Text = "0.00" };
-    private readonly Label _totalLeadTimeValue = new() { AutoSize = true, Text = "0 days" };
-    private readonly Label _totalPriceValue = new() { AutoSize = true, Text = "$0.00" };
+    private readonly Label _masterTotalValue = new() { AutoSize = true, Text = "$0.00" };
     private readonly Quote? _editingQuote;
+    private decimal _shopHourlyRate;
 
     public int CreatedQuoteId { get; private set; }
     public bool WasDeleted { get; private set; }
@@ -49,33 +27,12 @@ public class QuoteDraftForm : Form
     {
         _quoteRepository = quoteRepository;
         _canViewPricing = canViewPricing;
-        _uploadedBy = uploadedBy;
         _editingQuote = editingQuote;
         _quoteLifecycleId.Text = string.IsNullOrWhiteSpace(editingQuote?.LifecycleQuoteId) ? GenerateLifecycleQuoteId() : editingQuote.LifecycleQuoteId;
 
-        _blobImportService = new BlobImportService((quoteId, lineItemId, lifecycleId, blobType, fileName, extension, fileSizeBytes, sha256, uploadedByValue, uploadedUtc, blobData) =>
-        {
-            return Task.FromResult(new QuoteBlobAttachment
-            {
-                QuoteId = quoteId,
-                LineItemId = lineItemId,
-                LifecycleId = lifecycleId,
-                BlobType = blobType,
-                FileName = fileName,
-                Extension = extension,
-                ContentType = extension,
-                FileSizeBytes = fileSizeBytes,
-                Sha256 = sha256,
-                UploadedBy = uploadedByValue,
-                UploadedUtc = uploadedUtc,
-                BlobData = blobData
-            });
-        });
-        _blobImportService.UploadProgressChanged += OnBlobUploadProgressChanged;
-
         Text = _editingQuote is null ? $"New Quote Draft - {_quoteLifecycleId.Text}" : $"Edit In-Process Quote #{_editingQuote.Id} - {_quoteLifecycleId.Text}";
-        Width = 1200;
-        Height = 760;
+        Width = 1300;
+        Height = 780;
         WindowState = FormWindowState.Maximized;
         StartPosition = FormStartPosition.CenterParent;
 
@@ -85,50 +42,30 @@ public class QuoteDraftForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var headerContainer = new Panel { Dock = DockStyle.Top, Height = 42 };
-        var header = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, WrapContents = true };
-        var createCustomerButton = new Button { Text = "Create New Customer", AutoSize = true };
-        var generatePdfButton = new Button { Text = "Generate Quote PDF", AutoSize = true, Anchor = AnchorStyles.Top | AnchorStyles.Right };
-        createCustomerButton.Click += (_, _) => OpenCustomerCreation();
-        generatePdfButton.Click += async (_, _) => await GenerateQuotePdfAsync();
-
-        header.Controls.Add(new Label { Text = "Customer:", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
+        var header = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true };
+        header.Controls.Add(new Label { Text = "Customer Name", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
         header.Controls.Add(_customerPicker);
+        header.Controls.Add(new Label { Text = "Customer Address", AutoSize = true, Margin = new Padding(10, 8, 0, 0) });
         header.Controls.Add(_customerAddress);
-        header.Controls.Add(_customerQuoteNumber);
+        header.Controls.Add(new Label { Text = "Customer Part PO", AutoSize = true, Margin = new Padding(10, 8, 0, 0) });
+        header.Controls.Add(_customerPartPo);
+        header.Controls.Add(new Label { Text = "Cycle Time", AutoSize = true, Margin = new Padding(10, 8, 0, 0) });
+        header.Controls.Add(_cycleTime);
+        header.Controls.Add(new Label { Text = "IP Fields", AutoSize = true, Margin = new Padding(10, 8, 0, 0) });
+        header.Controls.Add(_ipNotes);
         header.Controls.Add(new Label { Text = "Lifecycle ID", AutoSize = true, Margin = new Padding(10, 8, 0, 0) });
         header.Controls.Add(_quoteLifecycleId);
-        header.Controls.Add(new Label { Text = "Adjustment", AutoSize = true, Margin = new Padding(8, 8, 0, 0) });
-        header.Controls.Add(_pricingAdjustment);
-        header.Controls.Add(new Label { Text = "Line items:", AutoSize = true, Margin = new Padding(8, 8, 0, 0) });
-        header.Controls.Add(_lineCount);
-        header.Controls.Add(createCustomerButton);
 
-        headerContainer.Controls.Add(header);
-        headerContainer.Controls.Add(generatePdfButton);
-        generatePdfButton.Location = new Point(headerContainer.Width - generatePdfButton.Width - 6, 6);
-        headerContainer.Resize += (_, _) =>
-        {
-            generatePdfButton.Location = new Point(headerContainer.Width - generatePdfButton.Width - 6, 6);
-        };
-
-        _lineCount.ValueChanged += (_, _) => SyncLineItems((int)_lineCount.Value);
-        _dailyCapacityHours.TextChanged += (_, _) => RecalculateQuoteTotals();
-        _leadTimeAdjustmentDays.TextChanged += (_, _) => RecalculateQuoteTotals();
-        SyncLineItems((int)_lineCount.Value);
+        var addLineButton = new Button { Text = "Add Line Item", AutoSize = true, Margin = new Padding(20, 4, 0, 0) };
+        addLineButton.Click += (_, _) => AddLineItemCard();
+        header.Controls.Add(addLineButton);
 
         var totalsPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = true };
-        totalsPanel.Controls.Add(new Label { Text = "Daily Capacity (hrs)", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
-        totalsPanel.Controls.Add(_dailyCapacityHours);
-        totalsPanel.Controls.Add(new Label { Text = "Lead Time Adjustment (days)", AutoSize = true, Margin = new Padding(12, 8, 0, 0) });
-        totalsPanel.Controls.Add(_leadTimeAdjustmentDays);
-        totalsPanel.Controls.Add(new Label { Text = "Total Hours:", AutoSize = true, Margin = new Padding(20, 8, 0, 0) });
+        totalsPanel.Controls.Add(new Label { Text = "Total Hours:", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
         totalsPanel.Controls.Add(_totalHoursValue);
-        totalsPanel.Controls.Add(new Label { Text = "Total Lead Time:", AutoSize = true, Margin = new Padding(20, 8, 0, 0) });
-        totalsPanel.Controls.Add(_totalLeadTimeValue);
-        totalsPanel.Controls.Add(new Label { Text = "Total Price:", AutoSize = true, Margin = new Padding(20, 8, 0, 0), Visible = _canViewPricing });
-        _totalPriceValue.Visible = _canViewPricing;
-        totalsPanel.Controls.Add(_totalPriceValue);
+        totalsPanel.Controls.Add(new Label { Text = "Master Quote Total:", AutoSize = true, Margin = new Padding(20, 8, 0, 0), Visible = _canViewPricing });
+        _masterTotalValue.Visible = _canViewPricing;
+        totalsPanel.Controls.Add(_masterTotalValue);
 
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, AutoSize = true };
         var saveButton = new Button { Text = "Save Quote", AutoSize = true };
@@ -142,590 +79,185 @@ public class QuoteDraftForm : Form
             buttons.Controls.Add(deleteButton);
         }
 
-        root.Controls.Add(headerContainer, 0, 0);
+        root.Controls.Add(header, 0, 0);
         root.Controls.Add(_lineItemsPanel, 0, 1);
         root.Controls.Add(totalsPanel, 0, 2);
         root.Controls.Add(buttons, 0, 3);
-
         Controls.Add(root);
-        _ = LoadCustomersAsync();
+
+        _customerPicker.SelectedIndexChanged += (_, _) => OnCustomerSelected();
+        _ = InitializeAsync();
     }
 
-    protected override void Dispose(bool disposing)
+    private async Task InitializeAsync()
     {
-        if (disposing)
-        {
-            _blobImportService.UploadProgressChanged -= OnBlobUploadProgressChanged;
-        }
-
-        base.Dispose(disposing);
+        _shopHourlyRate = await _quoteRepository.GetShopHourlyRateAsync();
+        await LoadCustomersAsync();
     }
 
-    private static string GenerateLifecycleQuoteId()
-    {
-        return $"Q-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()}";
-    }
+    private static string GenerateLifecycleQuoteId() => $"Q-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()}";
 
     private async Task LoadCustomersAsync()
     {
         var customers = await _quoteRepository.GetCustomersAsync();
         _customerPicker.DataSource = customers.ToList();
-        _customerPicker.DisplayMember = nameof(Customer.DisplayLabel);
+        _customerPicker.DisplayMember = nameof(Customer.Name);
         _customerPicker.ValueMember = nameof(Customer.Id);
 
         if (_editingQuote is not null)
         {
             PopulateFromQuote(_editingQuote);
+            return;
+        }
+
+        AddLineItemCard();
+    }
+
+    private void OnCustomerSelected()
+    {
+        if (_customerPicker.SelectedItem is Customer customer)
+        {
+            _customerAddress.Text = customer.Address;
         }
     }
 
     private void PopulateFromQuote(Quote quote)
     {
         _customerPicker.SelectedValue = quote.CustomerId;
-        _quoteLifecycleId.Text = quote.LifecycleQuoteId;
-        _lineCount.Value = Math.Max(1, Math.Min((int)_lineCount.Maximum, quote.LineItems.Count));
-        SyncLineItems((int)_lineCount.Value);
+        _customerPartPo.Text = ParseMetadata(quote.LineItems.FirstOrDefault()?.Notes).GetValueOrDefault("Customer Part PO", string.Empty);
+        _cycleTime.Text = ParseMetadata(quote.LineItems.FirstOrDefault()?.Notes).GetValueOrDefault("Cycle Time", string.Empty);
+        _ipNotes.Text = ParseMetadata(quote.LineItems.FirstOrDefault()?.Notes).GetValueOrDefault("IP Fields", string.Empty);
+        _shopHourlyRate = quote.ShopHourlyRateSnapshot > 0 ? quote.ShopHourlyRateSnapshot : _shopHourlyRate;
 
-        for (var index = 0; index < quote.LineItems.Count && index < _lineItemsPanel.Controls.Count; index++)
+        _lineItemsPanel.Controls.Clear();
+        foreach (var line in quote.LineItems)
         {
-            PopulateLineItem((GroupBox)_lineItemsPanel.Controls[index], quote.LineItems[index]);
+            AddLineItemCard(line);
+        }
+
+        if (_lineItemsPanel.Controls.Count == 0)
+        {
+            AddLineItemCard();
         }
 
         RecalculateQuoteTotals();
     }
 
-    private void PopulateLineItem(GroupBox group, QuoteLineItem line)
+    private void AddLineItemCard(QuoteLineItem? source = null)
     {
-        var table = group.Controls.OfType<TableLayoutPanel>().First();
-        var fields = table.Controls.OfType<FlowLayoutPanel>().First();
-        var uploadFlow = table.Controls.OfType<FlowLayoutPanel>().Skip(1).First();
+        var group = new GroupBox { Text = $"Line Item {_lineItemsPanel.Controls.Count + 1}", Width = 1210, Height = 180, AutoSize = false };
+        var fields = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 3, Padding = new Padding(6) };
+        for (var i = 0; i < 5; i++) fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
 
-        var description = fields.Controls.OfType<TextBox>().FirstOrDefault(t => t.Name == DescriptionFieldName);
-        if (description is not null)
+        var drawingNumber = NewField("Drawing Number", source?.DrawingNumber);
+        var drawingName = NewField("Drawing Name", source?.DrawingName);
+        var revision = NewField("Revision", source?.Revision);
+        var productionHours = NewField("Production Hours", source?.ProductionHours.ToString(CultureInfo.CurrentCulture));
+        var setupHours = NewField("Setup Hours", source?.SetupHours.ToString(CultureInfo.CurrentCulture));
+        var materialCost = NewField("Material Cost", source?.MaterialCost.ToString(CultureInfo.CurrentCulture));
+        var toolingCost = NewField("Tooling Cost", source?.ToolingCost.ToString(CultureInfo.CurrentCulture));
+        var secondaryCost = NewField("Secondary Operations Cost", source?.SecondaryOperationsCost.ToString(CultureInfo.CurrentCulture));
+        var lineTotal = NewField("Line Item Total", source?.LineItemTotal.ToString(CultureInfo.CurrentCulture), readOnly: true);
+
+        productionHours.Name = "ProductionHours";
+        setupHours.Name = "SetupHours";
+        materialCost.Name = "MaterialCost";
+        toolingCost.Name = "ToolingCost";
+        secondaryCost.Name = "SecondaryOperationsCost";
+        lineTotal.Name = "LineItemTotal";
+
+        drawingNumber.Name = "DrawingNumber";
+        drawingName.Name = "DrawingName";
+        revision.Name = "Revision";
+
+        foreach (var box in new[] { productionHours, setupHours, materialCost, toolingCost, secondaryCost })
         {
-            description.Text = line.Description;
+            box.TextChanged += (_, _) => RecalculateQuoteTotals();
         }
 
-        var unitPrice = fields.Controls.OfType<TextBox>().FirstOrDefault(t => t.Name == LineItemPriceFieldName);
-        if (unitPrice is not null) unitPrice.Text = line.UnitPrice.ToString();
+        AddControl(fields, 0, 0, "Drawing Number", drawingNumber);
+        AddControl(fields, 1, 0, "Drawing Name", drawingName);
+        AddControl(fields, 2, 0, "Revision", revision);
+        AddControl(fields, 3, 0, "Production Hours", productionHours);
+        AddControl(fields, 4, 0, "Setup Hours", setupHours);
+        AddControl(fields, 0, 1, "Material Cost", materialCost);
+        AddControl(fields, 1, 1, "Tooling Cost", toolingCost);
+        AddControl(fields, 2, 1, "Secondary Operations Cost", secondaryCost);
+        AddControl(fields, 3, 1, "Line Item Total", lineTotal);
 
-        var metadata = ParseMetadata(line.Notes);
-        if (metadata.TryGetValue("Customer quote #", out var quoteNumber))
+        var removeButton = new Button { Text = "Remove", AutoSize = true };
+        removeButton.Click += (_, _) =>
         {
-            _customerQuoteNumber.Text = quoteNumber;
-        }
+            _lineItemsPanel.Controls.Remove(group);
+            RenumberLineItems();
+            RecalculateQuoteTotals();
+        };
+        fields.Controls.Add(removeButton, 4, 1);
 
-        if (metadata.TryGetValue("Customer address", out var address))
-        {
-            _customerAddress.Text = address;
-        }
-
-        if (metadata.TryGetValue("Pricing adjustment", out var adjustment))
-        {
-            _pricingAdjustment.Text = adjustment;
-        }
-
-        if (metadata.TryGetValue("Daily capacity hours", out var dailyCapacity))
-        {
-            _dailyCapacityHours.Text = dailyCapacity;
-        }
-
-        if (metadata.TryGetValue("Lead time adjustment days", out var leadTimeAdjustment))
-        {
-            _leadTimeAdjustmentDays.Text = leadTimeAdjustment;
-        }
-
-        foreach (var section in uploadFlow.Controls.OfType<Panel>().Select(p => p.Tag).OfType<BlobUploadSectionState>())
-        {
-            foreach (var attachment in line.BlobAttachments.Where(a => a.BlobType == section.BlobType))
-            {
-                section.Attachments.Add(attachment);
-                var rowIndex = section.UploadGrid.Rows.Add(attachment.FileName, BlobUploadStatus.Done.ToString());
-                section.UploadGrid.Rows[rowIndex].Tag = attachment.FileName;
-            }
-        }
-
+        group.Controls.Add(fields);
+        _lineItemsPanel.Controls.Add(group);
         RecalculateQuoteTotals();
     }
 
-    private void OpenCustomerCreation()
+    private static TextBox NewField(string name, string? value = null, bool readOnly = false) => new() { Width = 180, Name = name.Replace(" ", string.Empty), Text = value ?? string.Empty, ReadOnly = readOnly };
+
+    private static void AddControl(TableLayoutPanel panel, int col, int row, string label, Control input)
     {
-        using var customerForm = new Form { Width = 500, Height = 340, Text = "Create Customer", StartPosition = FormStartPosition.CenterParent };
-        customerForm.Controls.Add(new Label
-        {
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleCenter,
-            Text = "Use the CRM section to create customers and load multiple contacts."
-        });
-        customerForm.ShowDialog(this);
+        var flow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
+        flow.Controls.Add(new Label { Text = label, AutoSize = true });
+        flow.Controls.Add(input);
+        panel.Controls.Add(flow, col, row);
     }
 
-    private void SyncLineItems(int targetCount)
+    private void RenumberLineItems()
     {
-        var currentCount = _lineItemsPanel.Controls.Count;
-
-        if (targetCount > currentCount)
+        for (var i = 0; i < _lineItemsPanel.Controls.Count; i++)
         {
-            for (var i = currentCount + 1; i <= targetCount; i++)
+            if (_lineItemsPanel.Controls[i] is GroupBox gb)
             {
-                _lineItemsPanel.Controls.Add(BuildLineItemCard(i, _canViewPricing));
+                gb.Text = $"Line Item {i + 1}";
             }
-
-            RecalculateQuoteTotals();
-
-            return;
         }
-
-        if (targetCount < currentCount)
-        {
-            for (var i = currentCount - 1; i >= targetCount; i--)
-            {
-                _lineItemsPanel.Controls.RemoveAt(i);
-            }
-
-            RecalculateQuoteTotals();
-        }
-    }
-
-    private Control BuildLineItemCard(int lineIndex, bool canViewPricing)
-    {
-        var group = new GroupBox { Text = $"Line Item {lineIndex}", Width = 1100, Height = 420 };
-        var container = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 2,
-            Padding = new Padding(6)
-        };
-        container.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        container.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-        var fieldsLayout = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true };
-        fieldsLayout.Controls.Add(new TextBox { Width = 200, PlaceholderText = "Line item name", Name = DescriptionFieldName });
-
-        var pricing = new TextBox { Width = 120, PlaceholderText = "Line item price", Name = LineItemPriceFieldName, Visible = canViewPricing };
-        pricing.TextChanged += (_, _) => RecalculateQuoteTotals();
-        fieldsLayout.Controls.Add(pricing);
-
-        fieldsLayout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Production hrs", Name = ProductionHoursFieldName });
-        fieldsLayout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Setup hrs", Name = SetupHoursFieldName });
-
-        var hoursConsumed = new TextBox { Width = 120, PlaceholderText = "Hours consumed", Name = HoursConsumedFieldName };
-        hoursConsumed.TextChanged += (_, _) => RecalculateQuoteTotals();
-        fieldsLayout.Controls.Add(hoursConsumed);
-
-        var uploadLayout = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
-            AutoScroll = true
-        };
-
-        uploadLayout.Controls.Add(BuildBlobUploadSection("Technical Files", QuoteBlobType.Technical));
-        uploadLayout.Controls.Add(BuildBlobUploadSection("Material Pricing", QuoteBlobType.MaterialPricing));
-        uploadLayout.Controls.Add(BuildBlobUploadSection("Post-Op Pricing", QuoteBlobType.PostOpPricing));
-
-        container.Controls.Add(fieldsLayout, 0, 0);
-        container.Controls.Add(uploadLayout, 0, 1);
-        group.Controls.Add(container);
-        return group;
     }
 
     private void RecalculateQuoteTotals()
     {
-        var lineSummaries = _lineItemsPanel.Controls.OfType<GroupBox>()
-            .Select(ReadLineSummary)
-            .ToList();
+        decimal masterTotal = 0;
+        decimal totalHours = 0;
+        foreach (var group in _lineItemsPanel.Controls.OfType<GroupBox>())
+        {
+            var production = GetDecimal(group, "ProductionHours");
+            var setup = GetDecimal(group, "SetupHours");
+            var material = GetDecimal(group, "MaterialCost");
+            var tooling = GetDecimal(group, "ToolingCost");
+            var secondary = GetDecimal(group, "SecondaryOperationsCost");
 
-        var totalHours = lineSummaries.Sum(line => line.HoursConsumed);
-        var totalPrice = lineSummaries.Sum(line => line.LineTotal);
-        var totalLeadTimeDays = CalculateLeadTimeDays(totalHours);
+            var lineTotal = ((production + setup) * _shopHourlyRate) + material + tooling + secondary;
+            totalHours += production + setup;
+            masterTotal += lineTotal;
 
-        _totalHoursValue.Text = totalHours.ToString("0.##", CultureInfo.CurrentCulture);
-        _totalLeadTimeValue.Text = $"{totalLeadTimeDays} days";
-        _totalPriceValue.Text = totalPrice.ToString("C", CultureInfo.CurrentCulture);
+            SetText(group, "LineItemTotal", lineTotal.ToString("0.00", CultureInfo.CurrentCulture));
+        }
+
+        _totalHoursValue.Text = totalHours.ToString("0.00", CultureInfo.CurrentCulture);
+        _masterTotalValue.Text = masterTotal.ToString("C", CultureInfo.CurrentCulture);
     }
 
-    private int CalculateLeadTimeDays(decimal totalHours)
+    private static decimal GetDecimal(GroupBox group, string name)
     {
-        var dailyCapacity = decimal.TryParse(_dailyCapacityHours.Text, NumberStyles.Any, CultureInfo.CurrentCulture, out var parsedDailyCapacity)
-            ? parsedDailyCapacity
-            : 0m;
-        var adjustmentDays = int.TryParse(_leadTimeAdjustmentDays.Text, NumberStyles.Any, CultureInfo.CurrentCulture, out var parsedAdjustment)
-            ? parsedAdjustment
-            : 0;
-
-        if (dailyCapacity <= 0)
-        {
-            return Math.Max(0, adjustmentDays);
-        }
-
-        var calculatedDays = (int)Math.Ceiling(totalHours / dailyCapacity);
-        return Math.Max(0, calculatedDays + adjustmentDays);
+        var text = group.Controls.OfType<TableLayoutPanel>().SelectMany(t => t.Controls.OfType<FlowLayoutPanel>()).SelectMany(f => f.Controls.OfType<TextBox>()).FirstOrDefault(t => t.Name == name)?.Text;
+        return decimal.TryParse(text, NumberStyles.Any, CultureInfo.CurrentCulture, out var value) ? value : 0m;
     }
 
-    private Control BuildBlobUploadSection(string title, QuoteBlobType blobType)
+    private static string GetText(GroupBox group, string name)
     {
-        var uploadGrid = new DataGridView
-        {
-            Width = 312,
-            Height = 188,
-            Top = 108,
-            Left = 6,
-            AllowUserToAddRows = false,
-            AllowUserToDeleteRows = false,
-            ReadOnly = true,
-            RowHeadersVisible = false,
-            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-            MultiSelect = false
-        };
-
-        uploadGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "FileName", HeaderText = "File", Width = 150 });
-        uploadGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Status", Width = 80 });
-        uploadGrid.Columns.Add(new DataGridViewButtonColumn
-        {
-            Name = "Remove",
-            HeaderText = "",
-            Text = "Remove",
-            UseColumnTextForButtonValue = true,
-            Width = 70
-        });
-
-        var dropZone = new Label
-        {
-            Text = "Click or drag files here",
-            AutoSize = false,
-            Width = 312,
-            Height = 58,
-            TextAlign = ContentAlignment.MiddleCenter,
-            BorderStyle = BorderStyle.FixedSingle,
-            Cursor = Cursors.Hand,
-            Top = 26,
-            Left = 6,
-            AllowDrop = true
-        };
-
-        var state = new BlobUploadSectionState
-        {
-            BlobType = blobType,
-            Title = title,
-            DropZoneLabel = dropZone,
-            UploadGrid = uploadGrid,
-            RowByFilePath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
-        };
-
-        var panel = new Panel
-        {
-            Width = 330,
-            Height = 302,
-            BorderStyle = BorderStyle.FixedSingle,
-            Padding = new Padding(6),
-            Tag = state
-        };
-
-        var sectionTitle = new Label { Text = title, AutoSize = true, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) };
-
-        var uploadedLabel = new Label
-        {
-            Text = "Uploaded files:",
-            AutoSize = true,
-            Top = 88,
-            Left = 6
-        };
-
-        dropZone.Click += async (_, _) => await BrowseAndQueueAsync(state);
-        dropZone.DragEnter += DropZoneOnDragEnter;
-        dropZone.DragDrop += async (_, e) => await DropZoneOnDragDropAsync(state, e);
-        uploadGrid.CellDoubleClick += (_, e) => OpenBlobAction(state, e.RowIndex);
-        uploadGrid.CellContentClick += async (_, e) => await RemoveBlobAsync(state, e);
-
-        panel.Controls.Add(sectionTitle);
-        panel.Controls.Add(dropZone);
-        panel.Controls.Add(uploadedLabel);
-        panel.Controls.Add(uploadGrid);
-        return panel;
+        return group.Controls.OfType<TableLayoutPanel>().SelectMany(t => t.Controls.OfType<FlowLayoutPanel>()).SelectMany(f => f.Controls.OfType<TextBox>()).FirstOrDefault(t => t.Name == name)?.Text?.Trim() ?? string.Empty;
     }
 
-    private async Task BrowseAndQueueAsync(BlobUploadSectionState state)
+    private static void SetText(GroupBox group, string name, string value)
     {
-        try
-        {
-            using var picker = new OpenFileDialog
-            {
-                Multiselect = true,
-                Title = $"Upload {state.Title}",
-                Filter = "PDF files (*.pdf)|*.pdf|STEP files (*.step;*.stp)|*.step;*.stp|IGES files (*.iges;*.igs)|*.iges;*.igs|All files (*.*)|*.*"
-            };
-
-            if (picker.ShowDialog(this) != DialogResult.OK)
-            {
-                return;
-            }
-
-            await EnqueueFilesForSectionAsync(state, picker.FileNames);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Unable to select files: {ex.Message}", "File Upload", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-    }
-
-    private void DropZoneOnDragEnter(object? sender, DragEventArgs e)
-    {
-        if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true)
-        {
-            e.Effect = DragDropEffects.Copy;
-            return;
-        }
-
-        e.Effect = DragDropEffects.None;
-    }
-
-    private async Task DropZoneOnDragDropAsync(BlobUploadSectionState state, DragEventArgs e)
-    {
-        try
-        {
-            if (e.Data?.GetData(DataFormats.FileDrop) is not string[] files)
-            {
-                return;
-            }
-
-            await EnqueueFilesForSectionAsync(state, files);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Unable to import dropped files: {ex.Message}", "File Upload", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-    }
-
-    private async Task EnqueueFilesForSectionAsync(BlobUploadSectionState state, IEnumerable<string> filePaths)
-    {
-        var files = filePaths.Where(File.Exists).ToList();
-        if (files.Count == 0)
-        {
-            return;
-        }
-
-        EnsureRowsForFiles(state, files);
-
-        var results = await _blobImportService.EnqueueFilesAsync(
-            quoteId: 0,
-            lineItemId: 0,
-            lifecycleId: _quoteLifecycleId.Text,
-            blobType: state.BlobType,
-            filePaths: files,
-            uploadedBy: _uploadedBy);
-
-        foreach (var result in results)
-        {
-            if (result.IsSuccess && result.Attachment is not null)
-            {
-                state.Attachments.Add(result.Attachment);
-            }
-            else if (!result.IsSuccess)
-            {
-                MessageBox.Show($"Failed to upload {result.FileName}: {result.ErrorMessage}", "File Upload", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-        }
-    }
-
-    private static void EnsureRowsForFiles(BlobUploadSectionState state, IEnumerable<string> files)
-    {
-        foreach (var file in files)
-        {
-            if (state.RowByFilePath.ContainsKey(file))
-            {
-                continue;
-            }
-
-            var rowIndex = state.UploadGrid.Rows.Add(Path.GetFileName(file), BlobUploadStatus.Queued.ToString());
-            state.RowByFilePath[file] = rowIndex;
-            state.UploadGrid.Rows[rowIndex].Tag = file;
-        }
-    }
-
-    private void OnBlobUploadProgressChanged(object? sender, BlobUploadProgressEventArgs e)
-    {
-        if (InvokeRequired)
-        {
-            BeginInvoke(new Action(() => OnBlobUploadProgressChanged(sender, e)));
-            return;
-        }
-
-        foreach (var state in _lineItemsPanel.Controls
-                     .OfType<GroupBox>()
-                     .SelectMany(group => group.Controls.OfType<TableLayoutPanel>())
-                     .SelectMany(table => table.Controls.OfType<FlowLayoutPanel>())
-                     .SelectMany(flow => flow.Controls.OfType<Panel>())
-                     .Select(panel => panel.Tag)
-                     .OfType<BlobUploadSectionState>())
-        {
-            if (!state.RowByFilePath.TryGetValue(e.FilePath, out var rowIndex) || rowIndex < 0 || rowIndex >= state.UploadGrid.Rows.Count)
-            {
-                continue;
-            }
-
-            state.UploadGrid.Rows[rowIndex].Cells[1].Value = e.Status.ToString();
-            if (e.Status == BlobUploadStatus.Failed && !string.IsNullOrWhiteSpace(e.ErrorMessage))
-            {
-                state.UploadGrid.Rows[rowIndex].Cells[1].Value = $"Failed";
-                state.UploadGrid.Rows[rowIndex].ErrorText = e.ErrorMessage;
-            }
-        }
-    }
-
-    private async Task RemoveBlobAsync(BlobUploadSectionState state, DataGridViewCellEventArgs e)
-    {
-        if (e.RowIndex < 0 || e.ColumnIndex < 0)
-        {
-            return;
-        }
-
-        if (!string.Equals(state.UploadGrid.Columns[e.ColumnIndex].Name, "Remove", StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        if (e.RowIndex >= state.UploadGrid.Rows.Count)
-        {
-            return;
-        }
-
-        var filePath = state.UploadGrid.Rows[e.RowIndex].Tag as string;
-        var fileName = state.UploadGrid.Rows[e.RowIndex].Cells[0].Value?.ToString() ?? string.Empty;
-        var attachment = state.Attachments.FirstOrDefault(item => string.Equals(item.FileName, fileName, StringComparison.OrdinalIgnoreCase));
-
-        if (attachment is not null && attachment.Id > 0)
-        {
-            try
-            {
-                await _quoteRepository.DeleteQuoteLineItemFileAsync(attachment.Id);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Unable to remove file: {ex.Message}", "File Upload", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-        }
-
-        if (filePath is not null)
-        {
-            state.RowByFilePath.Remove(filePath);
-        }
-
-        if (attachment is not null)
-        {
-            state.Attachments.Remove(attachment);
-        }
-
-        state.UploadGrid.Rows.RemoveAt(e.RowIndex);
-    }
-
-    private static void OpenBlobAction(BlobUploadSectionState state, int rowIndex)
-    {
-        if (rowIndex < 0 || rowIndex >= state.UploadGrid.Rows.Count || rowIndex >= state.Attachments.Count)
-        {
-            return;
-        }
-
-        var blob = state.Attachments[rowIndex];
-        var isPdf = string.Equals(Path.GetExtension(blob.FileName), ".pdf", StringComparison.OrdinalIgnoreCase);
-
-        if (isPdf)
-        {
-            var previewResult = MessageBox.Show(
-                "Select Yes to preview this PDF in the system. Select No to download it.",
-                "PDF Attachment",
-                MessageBoxButtons.YesNoCancel,
-                MessageBoxIcon.Question);
-
-            if (previewResult == DialogResult.Yes)
-            {
-                ShowPdfPreview(blob);
-                return;
-            }
-
-            if (previewResult == DialogResult.Cancel)
-            {
-                return;
-            }
-        }
-
-        using var saver = new SaveFileDialog
-        {
-            FileName = blob.FileName,
-            Filter = "All files (*.*)|*.*"
-        };
-
-        if (saver.ShowDialog() == DialogResult.OK)
-        {
-            File.WriteAllBytes(saver.FileName, blob.BlobData);
-        }
-    }
-
-    private static void ShowPdfPreview(QuoteBlobAttachment blob)
-    {
-        var tempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}_{blob.FileName}");
-        File.WriteAllBytes(tempPath, blob.BlobData);
-
-        var previewForm = new Form
-        {
-            Text = $"PDF Preview - {blob.FileName}",
-            Width = 900,
-            Height = 700,
-            StartPosition = FormStartPosition.CenterParent
-        };
-
-        var browser = new WebBrowser
-        {
-            Dock = DockStyle.Fill,
-            Url = new Uri(tempPath)
-        };
-
-        previewForm.FormClosed += (_, _) =>
-        {
-            try
-            {
-                if (File.Exists(tempPath))
-                {
-                    File.Delete(tempPath);
-                }
-            }
-            catch
-            {
-                // Best effort cleanup.
-            }
-        };
-
-        previewForm.Controls.Add(browser);
-        previewForm.ShowDialog();
-    }
-
-    private async Task DeleteQuoteAsync()
-    {
-        if (_editingQuote is null)
-        {
-            return;
-        }
-
-        var confirm = MessageBox.Show($"Delete quote #{_editingQuote.Id}? This cannot be undone.", "Delete Quote", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-        if (confirm != DialogResult.Yes)
-        {
-            return;
-        }
-
-        try
-        {
-            await _quoteRepository.DeleteQuoteAsync(_editingQuote.Id);
-            WasDeleted = true;
-            DialogResult = DialogResult.OK;
-            Close();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Failed to delete quote: {ex.Message}", "Quote", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
+        var box = group.Controls.OfType<TableLayoutPanel>().SelectMany(t => t.Controls.OfType<FlowLayoutPanel>()).SelectMany(f => f.Controls.OfType<TextBox>()).FirstOrDefault(t => t.Name == name);
+        if (box is not null) box.Text = value;
     }
 
     private async Task SaveQuoteAsync()
@@ -742,40 +274,35 @@ public class QuoteDraftForm : Form
             CustomerId = customer.Id,
             CustomerName = customer.Name,
             LifecycleQuoteId = _quoteLifecycleId.Text,
+            ShopHourlyRateSnapshot = _shopHourlyRate,
             Status = _editingQuote?.Status ?? QuoteStatus.InProgress,
             CreatedUtc = _editingQuote?.CreatedUtc ?? DateTime.UtcNow,
             LastUpdatedUtc = DateTime.UtcNow
         };
 
-        var totalLeadTimeDays = CalculateLeadTimeDays(_lineItemsPanel.Controls.OfType<GroupBox>().Select(ReadLineSummary).Sum(line => line.HoursConsumed));
-
-        foreach (GroupBox item in _lineItemsPanel.Controls.OfType<GroupBox>())
+        foreach (var group in _lineItemsPanel.Controls.OfType<GroupBox>())
         {
-            var table = item.Controls.OfType<TableLayoutPanel>().First();
-            var fields = table.Controls.OfType<FlowLayoutPanel>().First();
-            var uploadFlow = table.Controls.OfType<FlowLayoutPanel>().Skip(1).First();
-
-            var textboxes = fields.Controls.OfType<TextBox>().ToList();
-            var description = textboxes.FirstOrDefault(t => t.Name == DescriptionFieldName)?.Text;
-            var priceText = textboxes.FirstOrDefault(t => t.Name == LineItemPriceFieldName)?.Text;
-
             var line = new QuoteLineItem
             {
-                Description = string.IsNullOrWhiteSpace(description) ? $"Line {quote.LineItems.Count + 1}" : description,
+                Description = string.IsNullOrWhiteSpace(GetText(group, "DrawingName")) ? group.Text : GetText(group, "DrawingName"),
+                DrawingNumber = GetText(group, "DrawingNumber"),
+                DrawingName = GetText(group, "DrawingName"),
+                Revision = GetText(group, "Revision"),
+                ProductionHours = GetDecimal(group, "ProductionHours"),
+                SetupHours = GetDecimal(group, "SetupHours"),
+                MaterialCost = GetDecimal(group, "MaterialCost"),
+                ToolingCost = GetDecimal(group, "ToolingCost"),
+                SecondaryOperationsCost = GetDecimal(group, "SecondaryOperationsCost"),
+                LineItemTotal = GetDecimal(group, "LineItemTotal"),
                 Quantity = 1,
-                UnitPrice = decimal.TryParse(priceText, out var unitPrice) ? unitPrice : 0,
-                LeadTimeDays = totalLeadTimeDays,
-                Notes = BuildLineNotes(_customerQuoteNumber.Text.Trim(), _customerAddress.Text.Trim(), _pricingAdjustment.Text.Trim(), _dailyCapacityHours.Text.Trim(), _leadTimeAdjustmentDays.Text.Trim())
+                UnitPrice = GetDecimal(group, "LineItemTotal"),
+                Notes = BuildLineNotes(_customerPartPo.Text.Trim(), _cycleTime.Text.Trim(), _ipNotes.Text.Trim())
             };
-
-            line.BlobAttachments = uploadFlow.Controls.OfType<Panel>()
-                .Select(control => control.Tag)
-                .OfType<BlobUploadSectionState>()
-                .SelectMany(section => section.Attachments)
-                .ToList();
 
             quote.LineItems.Add(line);
         }
+
+        quote.MasterTotal = quote.LineItems.Sum(x => x.LineItemTotal);
 
         try
         {
@@ -789,176 +316,36 @@ public class QuoteDraftForm : Form
         }
     }
 
-    private async Task GenerateQuotePdfAsync()
+    private static string BuildLineNotes(string customerPartPo, string cycleTime, string ipFields)
     {
-        if (_customerPicker.SelectedItem is not Customer customer)
-        {
-            MessageBox.Show("Select a customer before generating the quote PDF.", "Quote PDF", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-
-        var lineSummaries = _lineItemsPanel.Controls.OfType<GroupBox>()
-            .Select(ReadLineSummary)
-            .ToList();
-
-        if (lineSummaries.Count == 0)
-        {
-            MessageBox.Show("Add at least one line item before generating the quote PDF.", "Quote PDF", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-
-        var adjustment = decimal.TryParse(_pricingAdjustment.Text, NumberStyles.Any, CultureInfo.CurrentCulture, out var parsedAdjustment)
-            ? parsedAdjustment
-            : 0m;
-
-        var lineTotal = lineSummaries.Sum(line => line.LineTotal);
-        var grandTotal = lineTotal + adjustment;
-        var leadTimeDays = CalculateLeadTimeDays(lineSummaries.Sum(line => line.HoursConsumed));
-        var quoteIdentifier = _editingQuote is not null ? $"#{_editingQuote.Id} ({_quoteLifecycleId.Text})" : _quoteLifecycleId.Text;
-        var address = string.IsNullOrWhiteSpace(_customerAddress.Text) ? "Not provided" : _customerAddress.Text.Trim();
-
-        var documentLines = new List<string>
-        {
-            "Quote",
-            $"Customer Name: {customer.Name}",
-            $"Customer Address: {address}",
-            $"Quote ID: {quoteIdentifier}",
-            $"Lead Time: {leadTimeDays} days",
-            string.Empty,
-            "Line Items",
-            "Description | Quantity"
-        };
-
-        documentLines.AddRange(lineSummaries.Select(line => $"{line.Description} | {line.Quantity.ToString("0.##", CultureInfo.InvariantCulture)}"));
-        documentLines.Add(string.Empty);
-        documentLines.Add($"Total Price: {lineTotal:C}");
-        documentLines.Add($"Pricing Adjustment: {adjustment:C}");
-        documentLines.Add($"Sum Total: {grandTotal:C}");
-        documentLines.Add(string.Empty);
-        documentLines.Add("Quality Statement: We are committed to delivering consistent, traceable, and high-quality products that meet or exceed customer specifications.");
-
-        using var saver = new SaveFileDialog
-        {
-            FileName = $"Quote_{_quoteLifecycleId.Text}.pdf",
-            Filter = "PDF files (*.pdf)|*.pdf"
-        };
-
-        if (saver.ShowDialog() != DialogResult.OK)
-        {
-            return;
-        }
-
-        try
-        {
-            var pdfBytes = BuildSimplePdf(documentLines);
-            await File.WriteAllBytesAsync(saver.FileName, pdfBytes);
-            MessageBox.Show("Quote PDF generated.", "Quote PDF", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Failed to generate PDF: {ex.Message}", "Quote PDF", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
+        return $"Customer Part PO: {customerPartPo}\nCycle Time: {cycleTime}\nIP Fields: {ipFields}";
     }
 
-    private (string Description, decimal Quantity, decimal HoursConsumed, decimal LineTotal) ReadLineSummary(GroupBox item)
-    {
-        var table = item.Controls.OfType<TableLayoutPanel>().First();
-        var fields = table.Controls.OfType<FlowLayoutPanel>().First();
-        var descriptionText = fields.Controls.OfType<TextBox>().FirstOrDefault(t => t.Name == DescriptionFieldName)?.Text;
-        var description = string.IsNullOrWhiteSpace(descriptionText)
-            ? item.Text
-            : descriptionText.Trim();
-
-        var quantity = 1m;
-        var hoursConsumedText = fields.Controls.OfType<TextBox>().FirstOrDefault(t => t.Name == HoursConsumedFieldName)?.Text;
-        var hoursConsumed = decimal.TryParse(hoursConsumedText, NumberStyles.Any, CultureInfo.CurrentCulture, out var parsedHours)
-            ? parsedHours
-            : 0m;
-
-        var unitPriceText = fields.Controls.OfType<TextBox>().FirstOrDefault(t => t.Name == LineItemPriceFieldName)?.Text;
-        var unitPrice = decimal.TryParse(unitPriceText, NumberStyles.Any, CultureInfo.CurrentCulture, out var parsedPrice)
-            ? parsedPrice
-            : 0m;
-
-        return (description, quantity, hoursConsumed, quantity * unitPrice);
-    }
-
-    private static string BuildLineNotes(string customerQuoteNumber, string customerAddress, string adjustment, string dailyCapacityHours, string leadTimeAdjustmentDays)
-    {
-        return $"Customer quote #: {customerQuoteNumber}\nCustomer address: {customerAddress}\nPricing adjustment: {adjustment}\nDaily capacity hours: {dailyCapacityHours}\nLead time adjustment days: {leadTimeAdjustmentDays}";
-    }
-
-    private static Dictionary<string, string> ParseMetadata(string notes)
+    private static Dictionary<string, string> ParseMetadata(string? notes)
     {
         var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(notes)) return metadata;
+
         foreach (var line in notes.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var separator = line.IndexOf(':');
-            if (separator <= 0 || separator >= line.Length - 1)
-            {
-                continue;
-            }
-
+            if (separator <= 0 || separator >= line.Length - 1) continue;
             metadata[line[..separator].Trim()] = line[(separator + 1)..].Trim();
         }
 
         return metadata;
     }
 
-    private static byte[] BuildSimplePdf(IReadOnlyCollection<string> lines)
+    private async Task DeleteQuoteAsync()
     {
-        var escapedLines = lines.Select(EscapePdfText).ToList();
-        var y = 780;
-        var content = new StringBuilder("BT\n/F1 12 Tf\n");
-        foreach (var line in escapedLines)
-        {
-            content.AppendLine($"72 {y} Td ({line}) Tj");
-            content.AppendLine("0 -18 Td");
-            y -= 18;
-        }
+        if (_editingQuote is null) return;
 
-        content.Append("ET");
-        var contentBytes = Encoding.ASCII.GetBytes(content.ToString());
+        var confirm = MessageBox.Show($"Delete quote #{_editingQuote.Id}? This cannot be undone.", "Delete Quote", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes) return;
 
-        var objects = new List<string>
-        {
-            "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
-            "2 0 obj << /Type /Pages /Count 1 /Kids [3 0 R] >> endobj\n",
-            "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n",
-            "4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n",
-            $"5 0 obj << /Length {contentBytes.Length} >> stream\n{Encoding.ASCII.GetString(contentBytes)}\nendstream endobj\n"
-        };
-
-        using var stream = new MemoryStream();
-        var writer = new StreamWriter(stream, Encoding.ASCII) { NewLine = "\n" };
-        writer.Write("%PDF-1.4\n");
-        writer.Flush();
-
-        var offsets = new List<long> { 0 };
-        foreach (var obj in objects)
-        {
-            offsets.Add(stream.Position);
-            writer.Write(obj);
-            writer.Flush();
-        }
-
-        var xrefPosition = stream.Position;
-        writer.Write($"xref\n0 {objects.Count + 1}\n0000000000 65535 f \n");
-        foreach (var offset in offsets.Skip(1))
-        {
-            writer.Write($"{offset:0000000000} 00000 n \n");
-        }
-
-        writer.Write($"trailer << /Size {objects.Count + 1} /Root 1 0 R >>\nstartxref\n{xrefPosition}\n%%EOF");
-        writer.Flush();
-        return stream.ToArray();
-    }
-
-    private static string EscapePdfText(string value)
-    {
-        return value
-            .Replace("\\", "\\\\", StringComparison.Ordinal)
-            .Replace("(", "\\(", StringComparison.Ordinal)
-            .Replace(")", "\\)", StringComparison.Ordinal);
+        await _quoteRepository.DeleteQuoteAsync(_editingQuote.Id);
+        WasDeleted = true;
+        DialogResult = DialogResult.OK;
+        Close();
     }
 }

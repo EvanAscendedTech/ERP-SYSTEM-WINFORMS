@@ -49,6 +49,8 @@ public class QuoteRepository
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 CustomerId INTEGER,
                 CustomerName TEXT NOT NULL,
+                ShopHourlyRateSnapshot REAL NOT NULL DEFAULT 0,
+                MasterTotal REAL NOT NULL DEFAULT 0,
                 LifecycleQuoteId TEXT NOT NULL DEFAULT '',
                 Status INTEGER NOT NULL,
                 CreatedUtc TEXT NOT NULL,
@@ -75,8 +77,17 @@ public class QuoteRepository
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 QuoteId INTEGER NOT NULL,
                 Description TEXT NOT NULL,
+                DrawingNumber TEXT NOT NULL DEFAULT '',
+                DrawingName TEXT NOT NULL DEFAULT '',
+                Revision TEXT NOT NULL DEFAULT '',
                 Quantity REAL NOT NULL,
                 UnitPrice REAL NOT NULL DEFAULT 0,
+                ProductionHours REAL NOT NULL DEFAULT 0,
+                SetupHours REAL NOT NULL DEFAULT 0,
+                MaterialCost REAL NOT NULL DEFAULT 0,
+                ToolingCost REAL NOT NULL DEFAULT 0,
+                SecondaryOperationsCost REAL NOT NULL DEFAULT 0,
+                LineItemTotal REAL NOT NULL DEFAULT 0,
                 LeadTimeDays INTEGER NOT NULL DEFAULT 0,
                 RequiresGForce INTEGER NOT NULL DEFAULT 0,
                 RequiresSecondaryProcessing INTEGER NOT NULL DEFAULT 0,
@@ -128,6 +139,8 @@ public class QuoteRepository
                 OriginalQuoteId INTEGER NOT NULL,
                 CustomerId INTEGER,
                 CustomerName TEXT NOT NULL,
+                ShopHourlyRateSnapshot REAL NOT NULL DEFAULT 0,
+                MasterTotal REAL NOT NULL DEFAULT 0,
                 LifecycleQuoteId TEXT NOT NULL DEFAULT '',
                 Status INTEGER NOT NULL,
                 CreatedUtc TEXT NOT NULL,
@@ -148,8 +161,17 @@ public class QuoteRepository
                 ArchiveId INTEGER NOT NULL,
                 OriginalLineItemId INTEGER NOT NULL,
                 Description TEXT NOT NULL,
+                DrawingNumber TEXT NOT NULL DEFAULT '',
+                DrawingName TEXT NOT NULL DEFAULT '',
+                Revision TEXT NOT NULL DEFAULT '',
                 Quantity REAL NOT NULL,
                 UnitPrice REAL NOT NULL DEFAULT 0,
+                ProductionHours REAL NOT NULL DEFAULT 0,
+                SetupHours REAL NOT NULL DEFAULT 0,
+                MaterialCost REAL NOT NULL DEFAULT 0,
+                ToolingCost REAL NOT NULL DEFAULT 0,
+                SecondaryOperationsCost REAL NOT NULL DEFAULT 0,
+                LineItemTotal REAL NOT NULL DEFAULT 0,
                 LeadTimeDays INTEGER NOT NULL DEFAULT 0,
                 RequiresGForce INTEGER NOT NULL DEFAULT 0,
                 RequiresSecondaryProcessing INTEGER NOT NULL DEFAULT 0,
@@ -160,6 +182,12 @@ public class QuoteRepository
             );
 
 
+
+
+            CREATE TABLE IF NOT EXISTS QuoteSettings (
+                Id INTEGER PRIMARY KEY CHECK (Id = 1),
+                ShopHourlyRate REAL NOT NULL DEFAULT 75
+            );
 
             CREATE TABLE IF NOT EXISTS IntegrityValidationRuns (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -203,6 +231,8 @@ public class QuoteRepository
         await EnsureColumnExistsAsync(connection, "Customers", "LastInteractionUtc", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "Quotes", "CustomerId", "INTEGER");
         await EnsureColumnExistsAsync(connection, "Quotes", "LifecycleQuoteId", "TEXT NOT NULL DEFAULT ''");
+        await EnsureColumnExistsAsync(connection, "Quotes", "ShopHourlyRateSnapshot", "REAL NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "Quotes", "MasterTotal", "REAL NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "Quotes", "WonUtc", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "Quotes", "WonByUserId", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "Quotes", "LostUtc", "TEXT NULL");
@@ -215,6 +245,15 @@ public class QuoteRepository
         await EnsureColumnExistsAsync(connection, "Quotes", "PassedToPurchasingByUserId", "TEXT NULL");
 
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "UnitPrice", "REAL NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "DrawingNumber", "TEXT NOT NULL DEFAULT ''");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "DrawingName", "TEXT NOT NULL DEFAULT ''");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "Revision", "TEXT NOT NULL DEFAULT ''");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "ProductionHours", "REAL NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "SetupHours", "REAL NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "MaterialCost", "REAL NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "ToolingCost", "REAL NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "SecondaryOperationsCost", "REAL NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "QuoteLineItems", "LineItemTotal", "REAL NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "LeadTimeDays", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresGForce", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "RequiresSecondaryProcessing", "INTEGER NOT NULL DEFAULT 0");
@@ -227,6 +266,10 @@ public class QuoteRepository
         await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "FileSizeBytes", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "Sha256", "BLOB NOT NULL DEFAULT X''");
         await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "UploadedBy", "TEXT NOT NULL DEFAULT ''");
+
+        await EnsureColumnExistsAsync(connection, "Customers", "Address", "TEXT NOT NULL DEFAULT ''");
+
+        await EnsureDefaultQuoteSettingsAsync(connection);
 
         await EnsureCustomerIndexesAsync(connection);
         await EnsureQuoteIndexesAsync(connection);
@@ -245,7 +288,7 @@ public class QuoteRepository
 
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            SELECT Id, Code, Name, IsActive, LastInteractionUtc
+            SELECT Id, Code, Name, Address, IsActive, LastInteractionUtc
             FROM Customers
             WHERE $activeOnly = 0 OR IsActive = 1
             ORDER BY Name;";
@@ -259,8 +302,9 @@ public class QuoteRepository
                 Id = reader.GetInt32(0),
                 Code = reader.GetString(1),
                 Name = reader.GetString(2),
-                IsActive = reader.GetInt32(3) == 1,
-                LastInteractionUtc = reader.IsDBNull(4) ? null : DateTime.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                Address = reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
+                IsActive = reader.GetInt32(4) == 1,
+                LastInteractionUtc = reader.IsDBNull(5) ? null : DateTime.Parse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
                 Contacts = new List<CustomerContact>()
             });
         }
@@ -324,6 +368,8 @@ public class QuoteRepository
                     INSERT INTO Quotes (
                         CustomerId,
                         CustomerName,
+                        ShopHourlyRateSnapshot,
+                        MasterTotal,
                         LifecycleQuoteId,
                         Status,
                         CreatedUtc,
@@ -341,6 +387,8 @@ public class QuoteRepository
                     VALUES (
                         $customerId,
                         $name,
+                        $shopHourlyRateSnapshot,
+                        $masterTotal,
                         $lifecycleQuoteId,
                         $status,
                         $created,
@@ -359,6 +407,8 @@ public class QuoteRepository
                 insertQuote.Parameters.AddWithValue("$customerId", quote.CustomerId == 0 ? DBNull.Value : quote.CustomerId);
                 insertQuote.Parameters.AddWithValue("$name", quote.CustomerName);
                 insertQuote.Parameters.AddWithValue("$lifecycleQuoteId", quote.LifecycleQuoteId);
+                insertQuote.Parameters.AddWithValue("$shopHourlyRateSnapshot", quote.ShopHourlyRateSnapshot);
+                insertQuote.Parameters.AddWithValue("$masterTotal", quote.MasterTotal);
                 insertQuote.Parameters.AddWithValue("$status", (int)quote.Status);
                 insertQuote.Parameters.AddWithValue("$created", quote.CreatedUtc.ToString("O"));
                 insertQuote.Parameters.AddWithValue("$updated", quote.LastUpdatedUtc.ToString("O"));
@@ -389,6 +439,8 @@ public class QuoteRepository
                     UPDATE Quotes
                     SET CustomerId = $customerId,
                         CustomerName = $name,
+                        ShopHourlyRateSnapshot = $shopHourlyRateSnapshot,
+                        MasterTotal = $masterTotal,
                         LifecycleQuoteId = $lifecycleQuoteId,
                         Status = $status,
                         LastUpdatedUtc = $updated,
@@ -407,6 +459,8 @@ public class QuoteRepository
                 updateQuote.Parameters.AddWithValue("$customerId", quote.CustomerId == 0 ? DBNull.Value : quote.CustomerId);
                 updateQuote.Parameters.AddWithValue("$name", quote.CustomerName);
                 updateQuote.Parameters.AddWithValue("$lifecycleQuoteId", quote.LifecycleQuoteId);
+                updateQuote.Parameters.AddWithValue("$shopHourlyRateSnapshot", quote.ShopHourlyRateSnapshot);
+                updateQuote.Parameters.AddWithValue("$masterTotal", quote.MasterTotal);
                 updateQuote.Parameters.AddWithValue("$status", (int)quote.Status);
                 updateQuote.Parameters.AddWithValue("$updated", quote.LastUpdatedUtc.ToString("O"));
                 AddNullableString(updateQuote, "$wonUtc", quote.WonUtc?.ToString("O"));
@@ -432,19 +486,37 @@ public class QuoteRepository
                     INSERT INTO QuoteLineItems (
                         QuoteId,
                         Description,
+                        DrawingNumber,
+                        DrawingName,
+                        Revision,
                         Quantity,
                         UnitPrice,
+                        ProductionHours,
+                        SetupHours,
+                        MaterialCost,
+                        ToolingCost,
+                        SecondaryOperationsCost,
+                        LineItemTotal,
                         LeadTimeDays,
                         RequiresGForce,
                         RequiresSecondaryProcessing,
                         RequiresPlating,
                         Notes)
-                    VALUES ($quoteId, $description, $qty, $unitPrice, $leadTimeDays, $requiresGForce, $requiresSecondary, $requiresPlating, $notes);
+                    VALUES ($quoteId, $description, $drawingNumber, $drawingName, $revision, $qty, $unitPrice, $productionHours, $setupHours, $materialCost, $toolingCost, $secondaryOperationsCost, $lineItemTotal, $leadTimeDays, $requiresGForce, $requiresSecondary, $requiresPlating, $notes);
                     SELECT last_insert_rowid();";
                 insertLineItem.Parameters.AddWithValue("$quoteId", quote.Id);
                 insertLineItem.Parameters.AddWithValue("$description", lineItem.Description);
+                insertLineItem.Parameters.AddWithValue("$drawingNumber", lineItem.DrawingNumber ?? string.Empty);
+                insertLineItem.Parameters.AddWithValue("$drawingName", lineItem.DrawingName ?? string.Empty);
+                insertLineItem.Parameters.AddWithValue("$revision", lineItem.Revision ?? string.Empty);
                 insertLineItem.Parameters.AddWithValue("$qty", lineItem.Quantity);
                 insertLineItem.Parameters.AddWithValue("$unitPrice", lineItem.UnitPrice);
+                insertLineItem.Parameters.AddWithValue("$productionHours", lineItem.ProductionHours);
+                insertLineItem.Parameters.AddWithValue("$setupHours", lineItem.SetupHours);
+                insertLineItem.Parameters.AddWithValue("$materialCost", lineItem.MaterialCost);
+                insertLineItem.Parameters.AddWithValue("$toolingCost", lineItem.ToolingCost);
+                insertLineItem.Parameters.AddWithValue("$secondaryOperationsCost", lineItem.SecondaryOperationsCost);
+                insertLineItem.Parameters.AddWithValue("$lineItemTotal", lineItem.LineItemTotal);
                 insertLineItem.Parameters.AddWithValue("$leadTimeDays", lineItem.LeadTimeDays);
                 insertLineItem.Parameters.AddWithValue("$requiresGForce", lineItem.RequiresGForce ? 1 : 0);
                 insertLineItem.Parameters.AddWithValue("$requiresSecondary", lineItem.RequiresSecondaryProcessing ? 1 : 0);
@@ -806,6 +878,8 @@ public class QuoteRepository
             SELECT q.Id,
                    q.CustomerId,
                    q.CustomerName,
+                   q.ShopHourlyRateSnapshot,
+                   q.MasterTotal,
                    q.LifecycleQuoteId,
                    q.Status,
                    q.CreatedUtc,
@@ -832,26 +906,28 @@ public class QuoteRepository
             return null;
         }
 
-        var customerName = reader.IsDBNull(17) ? reader.GetString(2) : reader.GetString(17);
+        var customerName = reader.IsDBNull(19) ? reader.GetString(2) : reader.GetString(19);
         return new Quote
         {
             Id = reader.GetInt32(0),
             CustomerId = reader.IsDBNull(1) ? 0 : reader.GetInt32(1),
             CustomerName = customerName,
-            LifecycleQuoteId = reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
-            Status = (QuoteStatus)reader.GetInt32(4),
-            CreatedUtc = DateTime.Parse(reader.GetString(5)),
-            LastUpdatedUtc = DateTime.Parse(reader.GetString(6)),
-            WonUtc = reader.IsDBNull(7) ? null : DateTime.Parse(reader.GetString(7)),
-            WonByUserId = reader.IsDBNull(8) ? null : reader.GetString(8),
-            LostUtc = reader.IsDBNull(9) ? null : DateTime.Parse(reader.GetString(9)),
-            LostByUserId = reader.IsDBNull(10) ? null : reader.GetString(10),
-            ExpiredUtc = reader.IsDBNull(11) ? null : DateTime.Parse(reader.GetString(11)),
-            ExpiredByUserId = reader.IsDBNull(12) ? null : reader.GetString(12),
-            CompletedUtc = reader.IsDBNull(13) ? null : DateTime.Parse(reader.GetString(13)),
-            CompletedByUserId = reader.IsDBNull(14) ? null : reader.GetString(14),
-            PassedToPurchasingUtc = reader.IsDBNull(15) ? null : DateTime.Parse(reader.GetString(15)),
-            PassedToPurchasingByUserId = reader.IsDBNull(16) ? null : reader.GetString(16)
+            ShopHourlyRateSnapshot = Convert.ToDecimal(reader.GetDouble(3)),
+            MasterTotal = Convert.ToDecimal(reader.GetDouble(4)),
+            LifecycleQuoteId = reader.IsDBNull(5) ? string.Empty : reader.GetString(5),
+            Status = (QuoteStatus)reader.GetInt32(6),
+            CreatedUtc = DateTime.Parse(reader.GetString(7)),
+            LastUpdatedUtc = DateTime.Parse(reader.GetString(8)),
+            WonUtc = reader.IsDBNull(9) ? null : DateTime.Parse(reader.GetString(9)),
+            WonByUserId = reader.IsDBNull(10) ? null : reader.GetString(10),
+            LostUtc = reader.IsDBNull(11) ? null : DateTime.Parse(reader.GetString(11)),
+            LostByUserId = reader.IsDBNull(12) ? null : reader.GetString(12),
+            ExpiredUtc = reader.IsDBNull(13) ? null : DateTime.Parse(reader.GetString(13)),
+            ExpiredByUserId = reader.IsDBNull(14) ? null : reader.GetString(14),
+            CompletedUtc = reader.IsDBNull(15) ? null : DateTime.Parse(reader.GetString(15)),
+            CompletedByUserId = reader.IsDBNull(16) ? null : reader.GetString(16),
+            PassedToPurchasingUtc = reader.IsDBNull(17) ? null : DateTime.Parse(reader.GetString(17)),
+            PassedToPurchasingByUserId = reader.IsDBNull(18) ? null : reader.GetString(18)
         };
     }
 
@@ -869,8 +945,17 @@ public class QuoteRepository
             SELECT
                 li.Id,
                 li.Description,
+                li.DrawingNumber,
+                li.DrawingName,
+                li.Revision,
                 li.Quantity,
                 li.UnitPrice,
+                li.ProductionHours,
+                li.SetupHours,
+                li.MaterialCost,
+                li.ToolingCost,
+                li.SecondaryOperationsCost,
+                li.LineItemTotal,
                 li.LeadTimeDays,
                 li.RequiresGForce,
                 li.RequiresSecondaryProcessing,
@@ -895,21 +980,30 @@ public class QuoteRepository
                     Id = lineItemId,
                     QuoteId = quoteId,
                     Description = reader.GetString(1),
-                    Quantity = Convert.ToDecimal(reader.GetDouble(2)),
-                    UnitPrice = Convert.ToDecimal(reader.GetDouble(3)),
-                    LeadTimeDays = reader.GetInt32(4),
-                    RequiresGForce = reader.GetInt32(5) == 1,
-                    RequiresSecondaryProcessing = reader.GetInt32(6) == 1,
-                    RequiresPlating = reader.GetInt32(7) == 1,
-                    Notes = reader.IsDBNull(8) ? string.Empty : reader.GetString(8)
+                    DrawingNumber = reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+                    DrawingName = reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
+                    Revision = reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+                    Quantity = Convert.ToDecimal(reader.GetDouble(5)),
+                    UnitPrice = Convert.ToDecimal(reader.GetDouble(6)),
+                    ProductionHours = Convert.ToDecimal(reader.GetDouble(7)),
+                    SetupHours = Convert.ToDecimal(reader.GetDouble(8)),
+                    MaterialCost = Convert.ToDecimal(reader.GetDouble(9)),
+                    ToolingCost = Convert.ToDecimal(reader.GetDouble(10)),
+                    SecondaryOperationsCost = Convert.ToDecimal(reader.GetDouble(11)),
+                    LineItemTotal = Convert.ToDecimal(reader.GetDouble(12)),
+                    LeadTimeDays = reader.GetInt32(13),
+                    RequiresGForce = reader.GetInt32(14) == 1,
+                    RequiresSecondaryProcessing = reader.GetInt32(15) == 1,
+                    RequiresPlating = reader.GetInt32(16) == 1,
+                    Notes = reader.IsDBNull(17) ? string.Empty : reader.GetString(17)
                 };
                 cache[lineItemId] = lineItem;
                 lineItems.Add(lineItem);
             }
 
-            if (!reader.IsDBNull(9))
+            if (!reader.IsDBNull(18))
             {
-                lineItem.AssociatedFiles.Add(reader.GetString(9));
+                lineItem.AssociatedFiles.Add(reader.GetString(18));
             }
         }
 
@@ -928,16 +1022,18 @@ public class QuoteRepository
 
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            INSERT INTO Customers (Code, Name, IsActive, LastInteractionUtc)
-            VALUES ($code, $name, $isActive, $lastInteractionUtc)
+            INSERT INTO Customers (Code, Name, Address, IsActive, LastInteractionUtc)
+            VALUES ($code, $name, $address, $isActive, $lastInteractionUtc)
             ON CONFLICT(Code) DO UPDATE SET
                 Name = excluded.Name,
+                Address = excluded.Address,
                 IsActive = excluded.IsActive,
                 LastInteractionUtc = excluded.LastInteractionUtc;
 
             SELECT Id FROM Customers WHERE Code = $code;";
         command.Parameters.AddWithValue("$code", customer.Code);
         command.Parameters.AddWithValue("$name", customer.Name);
+        command.Parameters.AddWithValue("$address", customer.Address ?? string.Empty);
         command.Parameters.AddWithValue("$isActive", customer.IsActive ? 1 : 0);
         command.Parameters.AddWithValue("$lastInteractionUtc", customer.LastInteractionUtc?.ToString("O") ?? (object)DBNull.Value);
         var customerId = Convert.ToInt32(await command.ExecuteScalarAsync());
@@ -1762,6 +1858,43 @@ public class QuoteRepository
         await insertRun.ExecuteNonQueryAsync();
 
         return report;
+    }
+
+    public async Task<decimal> GetShopHourlyRateAsync()
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await EnsureDefaultQuoteSettingsAsync(connection);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT ShopHourlyRate FROM QuoteSettings WHERE Id = 1;";
+        var result = await command.ExecuteScalarAsync();
+        return result is null || result is DBNull ? 75m : Convert.ToDecimal(result, CultureInfo.InvariantCulture);
+    }
+
+    public async Task SaveShopHourlyRateAsync(decimal rate)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO QuoteSettings (Id, ShopHourlyRate)
+            VALUES (1, $rate)
+            ON CONFLICT(Id) DO UPDATE SET ShopHourlyRate = excluded.ShopHourlyRate;";
+        command.Parameters.AddWithValue("$rate", rate);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task EnsureDefaultQuoteSettingsAsync(SqliteConnection connection)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO QuoteSettings (Id, ShopHourlyRate)
+            SELECT 1, 75
+            WHERE NOT EXISTS (SELECT 1 FROM QuoteSettings WHERE Id = 1);";
+        await command.ExecuteNonQueryAsync();
     }
 
     private static void ValidateQuoteForPersistence(Quote quote)
