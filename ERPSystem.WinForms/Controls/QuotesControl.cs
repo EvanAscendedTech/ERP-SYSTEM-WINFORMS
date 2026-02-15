@@ -2,6 +2,7 @@ using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Forms;
 using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
+using System.Drawing.Drawing2D;
 
 namespace ERPSystem.WinForms.Controls;
 
@@ -38,14 +39,14 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         var refreshButton = new Button { Text = "Refresh Active Quotes", AutoSize = true };
         var newQuoteButton = new Button { Text = "Create New Quote", AutoSize = true };
         var openQuotePacketButton = new Button { Text = "Open Quote Packet", AutoSize = true };
-        var editQuoteButton = new Button { Text = "Edit In-Process Quote", AutoSize = true };
+        var editQuoteButton = new Button { Text = "Open Quote Details", AutoSize = true };
         var deleteQuoteButton = new Button { Text = "Delete In-Process Quote", AutoSize = true };
         var passToProductionButton = new Button { Text = "Pass to Production", AutoSize = true };
 
         refreshButton.Click += async (_, _) => await LoadActiveQuotesAsync();
         newQuoteButton.Click += async (_, _) => await CreateNewQuoteAsync();
         openQuotePacketButton.Click += async (_, _) => await OpenSelectedQuotePacketAsync();
-        editQuoteButton.Click += async (_, _) => await EditSelectedQuoteAsync();
+        editQuoteButton.Click += async (_, _) => await OpenSelectedQuoteDetailsAsync();
         deleteQuoteButton.Click += async (_, _) => await DeleteSelectedQuoteAsync();
         passToProductionButton.Click += async (_, _) => await PassSelectedToProductionAsync();
         _backToHubButton.Click += (_, _) =>
@@ -53,7 +54,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             _selectedCustomer = null;
             RefreshActiveQuotesView();
         };
-        _quotesGrid.CellDoubleClick += async (_, _) => await EditSelectedQuoteAsync();
+        _quotesGrid.CellDoubleClick += async (_, _) => await OpenSelectedQuoteDetailsAsync();
 
         actionsPanel.Controls.Add(refreshButton);
         actionsPanel.Controls.Add(newQuoteButton);
@@ -197,7 +198,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         }
     }
 
-    private async Task EditSelectedQuoteAsync()
+    private async Task OpenSelectedQuoteDetailsAsync()
     {
         if (TryGetSelectedQuoteId() is not int selectedId)
         {
@@ -212,9 +213,9 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        if (fullQuote.Status != QuoteStatus.InProgress)
+        if (fullQuote.Status is QuoteStatus.Lost or QuoteStatus.Expired)
         {
-            _feedback.Text = "Only in-process quotes can be edited from this screen.";
+            _feedback.Text = "Only active quotes (Open/In-Process or Won) can be opened from this screen.";
             return;
         }
 
@@ -412,12 +413,12 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
     private Control CreateCustomerCard(string customerName, IReadOnlyCollection<Quote> quotes)
     {
-        var card = new Panel
+        var card = new CustomerCardPanel
         {
             Width = 250,
             Height = 116,
             Margin = new Padding(0, 0, 12, 0),
-            BackColor = string.Equals(_selectedCustomer, customerName, StringComparison.OrdinalIgnoreCase)
+            FillColor = string.Equals(_selectedCustomer, customerName, StringComparison.OrdinalIgnoreCase)
                 ? Color.FromArgb(214, 236, 255)
                 : Color.FromArgb(236, 240, 245),
             Cursor = Cursors.Hand
@@ -447,6 +448,78 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         card.Controls.Add(summaryLabel);
         card.Controls.Add(nameLabel);
         return card;
+    }
+
+    private sealed class CustomerCardPanel : Panel
+    {
+        private const int CornerRadius = 14;
+        private Color _fillColor = Color.FromArgb(236, 240, 245);
+
+        public Color FillColor
+        {
+            get => _fillColor;
+            set
+            {
+                _fillColor = value;
+                Invalidate();
+            }
+        }
+
+        public CustomerCardPanel()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            BackColor = Color.Transparent;
+            Padding = new Padding(1);
+        }
+
+        protected override void OnResize(EventArgs eventargs)
+        {
+            base.OnResize(eventargs);
+            UpdateRoundedRegion();
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using var cardPath = CreateRoundedRectanglePath(ClientRectangle, CornerRadius);
+
+            using var fillBrush = new SolidBrush(FillColor);
+            e.Graphics.FillPath(fillBrush, cardPath);
+
+            var topHighlight = Rectangle.Inflate(ClientRectangle, -1, -1);
+            topHighlight.Height = Math.Max(18, topHighlight.Height / 3);
+            using var highlightPath = CreateRoundedRectanglePath(topHighlight, CornerRadius - 1);
+            using var highlightBrush = new LinearGradientBrush(topHighlight, Color.FromArgb(105, Color.White), Color.FromArgb(0, Color.White), LinearGradientMode.Vertical);
+            e.Graphics.FillPath(highlightBrush, highlightPath);
+
+            using var outerPen = new Pen(Color.FromArgb(145, Color.White), 1.2f);
+            e.Graphics.DrawPath(outerPen, cardPath);
+
+            var innerBounds = Rectangle.Inflate(ClientRectangle, -1, -1);
+            using var innerPath = CreateRoundedRectanglePath(innerBounds, CornerRadius - 1);
+            using var innerPen = new Pen(Color.FromArgb(110, 132, 145), 1f);
+            e.Graphics.DrawPath(innerPen, innerPath);
+        }
+
+        private void UpdateRoundedRegion()
+        {
+            using var rounded = CreateRoundedRectanglePath(ClientRectangle, CornerRadius);
+            Region = new Region(rounded);
+        }
+
+        private static GraphicsPath CreateRoundedRectanglePath(Rectangle bounds, int radius)
+        {
+            var diameter = Math.Max(2, radius * 2);
+            var rect = Rectangle.Inflate(bounds, -1, -1);
+            var path = new GraphicsPath();
+
+            path.AddArc(rect.X, rect.Y, diameter, diameter, 180, 90);
+            path.AddArc(rect.Right - diameter, rect.Y, diameter, diameter, 270, 90);
+            path.AddArc(rect.Right - diameter, rect.Bottom - diameter, diameter, diameter, 0, 90);
+            path.AddArc(rect.X, rect.Bottom - diameter, diameter, diameter, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
     }
 
     private static string NormalizeCustomerName(string? customerName)
