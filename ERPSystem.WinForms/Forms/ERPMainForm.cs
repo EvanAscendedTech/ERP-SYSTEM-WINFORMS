@@ -528,6 +528,7 @@ public partial class ERPMainForm : Form
             "Settings" => new SettingsControl(
                 _settings,
                 _userRepo,
+                _quoteRepo,
                 _currentUser,
                 canManageSettings: true,
                 settingsChanged: ApplySettings,

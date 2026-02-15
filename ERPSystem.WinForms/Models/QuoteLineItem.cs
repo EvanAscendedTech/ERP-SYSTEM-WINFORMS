@@ -30,8 +30,17 @@ public class QuoteLineItem
     public int Id { get; set; }
     public int QuoteId { get; set; }
     public string Description { get; set; } = string.Empty;
+    public string DrawingNumber { get; set; } = string.Empty;
+    public string DrawingName { get; set; } = string.Empty;
+    public string Revision { get; set; } = string.Empty;
     public decimal Quantity { get; set; }
     public decimal UnitPrice { get; set; }
+    public decimal ProductionHours { get; set; }
+    public decimal SetupHours { get; set; }
+    public decimal MaterialCost { get; set; }
+    public decimal ToolingCost { get; set; }
+    public decimal SecondaryOperationsCost { get; set; }
+    public decimal LineItemTotal { get; set; }
     public int LeadTimeDays { get; set; }
     public bool RequiresGForce { get; set; }
     public bool RequiresSecondaryProcessing { get; set; }

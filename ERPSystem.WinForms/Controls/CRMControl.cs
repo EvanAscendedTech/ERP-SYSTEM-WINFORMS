@@ -48,6 +48,7 @@ public class CRMControl : UserControl, IRealtimeDataControl
     {
         var code = Prompt.Show("Customer code");
         var name = Prompt.Show("Customer name");
+        var address = Prompt.Show("Customer address");
         if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(name))
         {
             return;
@@ -57,6 +58,7 @@ public class CRMControl : UserControl, IRealtimeDataControl
         {
             Code = code.Trim(),
             Name = name.Trim(),
+            Address = address.Trim(),
             IsActive = true,
             Contacts = new List<CustomerContact>()
         };

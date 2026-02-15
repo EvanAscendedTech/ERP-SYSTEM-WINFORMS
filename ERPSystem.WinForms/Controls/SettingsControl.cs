@@ -24,6 +24,9 @@ public class SettingsControl : UserControl, IRealtimeDataControl
     private readonly Button _toggleThemeButton = new() { AutoSize = true };
     private readonly Button _lastSyncButton = new() { AutoSize = true, Enabled = false };
     private readonly UsersControl _usersControl;
+    private readonly QuoteRepository _quoteRepository;
+    private readonly NumericUpDown _shopRateInput = new() { Minimum = 0, Maximum = 10000, DecimalPlaces = 2, Increment = 1, Width = 140 };
+    private readonly Label _quoteSettingsFeedback = new() { AutoSize = true };
 
     private AppSettings _settings = new();
     private AppTheme _currentTheme;
@@ -31,6 +34,7 @@ public class SettingsControl : UserControl, IRealtimeDataControl
     public SettingsControl(
         AppSettingsService settingsService,
         UserManagementRepository userRepository,
+        QuoteRepository quoteRepository,
         UserAccount currentUser,
         bool canManageSettings,
         Action<AppSettings>? settingsChanged = null,
@@ -42,6 +46,7 @@ public class SettingsControl : UserControl, IRealtimeDataControl
     {
         _settingsService = settingsService;
         _canManageSettings = canManageSettings;
+        _quoteRepository = quoteRepository;
         _settingsChanged = settingsChanged;
         _currentTheme = currentTheme;
         _themeChanged = themeChanged;
@@ -55,12 +60,15 @@ public class SettingsControl : UserControl, IRealtimeDataControl
         var tabs = new TabControl { Dock = DockStyle.Fill };
         var generalTab = new TabPage("General Settings");
         var accessTab = new TabPage("User Access");
+        var quoteSettingsTab = new TabPage("Quote Settings");
 
         generalTab.Controls.Add(BuildGeneralSettingsPanel());
         accessTab.Controls.Add(_usersControl);
+        quoteSettingsTab.Controls.Add(BuildQuoteSettingsPanel());
 
         tabs.TabPages.Add(generalTab);
         tabs.TabPages.Add(accessTab);
+        tabs.TabPages.Add(quoteSettingsTab);
 
         Controls.Add(tabs);
 
@@ -222,6 +230,37 @@ public class SettingsControl : UserControl, IRealtimeDataControl
         _feedback.Text = "Settings saved.";
     }
 
+
+    private Control BuildQuoteSettingsPanel()
+    {
+        var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12) };
+        var form = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2 };
+        form.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        form.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        form.Controls.Add(new Label { Text = "Shop Hourly Rate", AutoSize = true, Margin = new Padding(0, 8, 8, 0) }, 0, 0);
+        form.Controls.Add(_shopRateInput, 1, 0);
+
+        var saveButton = new Button { Text = "Save Quote Settings", AutoSize = true, Enabled = _canManageSettings };
+        saveButton.Click += async (_, _) =>
+        {
+            await _quoteRepository.SaveShopHourlyRateAsync(_shopRateInput.Value);
+            _quoteSettingsFeedback.Text = "Quote settings saved.";
+        };
+
+        form.Controls.Add(saveButton, 1, 1);
+        form.Controls.Add(_quoteSettingsFeedback, 1, 2);
+        panel.Controls.Add(form);
+
+        _ = LoadQuoteSettingsAsync();
+        return panel;
+    }
+
+    private async Task LoadQuoteSettingsAsync()
+    {
+        _shopRateInput.Value = Math.Clamp(await _quoteRepository.GetShopHourlyRateAsync(), (decimal)_shopRateInput.Minimum, (decimal)_shopRateInput.Maximum);
+    }
+
     private async Task RunSyncAsync()
     {
         if (_syncAction is null)
@@ -258,5 +297,6 @@ public class SettingsControl : UserControl, IRealtimeDataControl
     {
         await LoadSettingsAsync();
         await _usersControl.RefreshDataAsync(fromFailSafeCheckpoint);
+        _shopRateInput.Value = Math.Clamp(await _quoteRepository.GetShopHourlyRateAsync(), (decimal)_shopRateInput.Minimum, (decimal)_shopRateInput.Maximum);
     }
 }
