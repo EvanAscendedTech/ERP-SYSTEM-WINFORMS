@@ -113,7 +113,7 @@ internal static class Program
             [
                 new RoleDefinition
                 {
-                    Name = "Administrator",
+                    Name = RoleCatalog.Admin,
                     Permissions = Enum.GetValues<UserPermission>().ToList()
                 }
             ]

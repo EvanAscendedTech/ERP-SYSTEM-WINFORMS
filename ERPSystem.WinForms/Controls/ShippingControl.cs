@@ -10,14 +10,16 @@ public class ShippingControl : UserControl, IRealtimeDataControl
     private readonly JobFlowService _flowService;
     private readonly Action<string> _openSection;
     private readonly bool _isAdmin;
+    private readonly bool _canEdit;
     private readonly DataGridView _jobsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
 
-    public ShippingControl(ProductionRepository productionRepository, JobFlowService flowService, Models.UserAccount currentUser, Action<string> openSection)
+    public ShippingControl(ProductionRepository productionRepository, JobFlowService flowService, Models.UserAccount currentUser, Action<string> openSection, bool canEdit)
     {
         _productionRepository = productionRepository;
         _flowService = flowService;
         _openSection = openSection;
+        _canEdit = canEdit;
         _isAdmin = currentUser.Roles.Any(r => string.Equals(r.Name, "Admin", StringComparison.OrdinalIgnoreCase)
                                            || string.Equals(r.Name, "Administrator", StringComparison.OrdinalIgnoreCase));
         Dock = DockStyle.Fill;
@@ -26,7 +28,7 @@ public class ShippingControl : UserControl, IRealtimeDataControl
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
         var refresh = new Button { Text = "Refresh", AutoSize = true };
-        var markShipped = new Button { Text = "Mark Shipped", AutoSize = true };
+        var markShipped = new Button { Text = "Mark Shipped", AutoSize = true, Enabled = _canEdit };
         var rewind = new Button { Text = "Admin: Push Backward", AutoSize = true, Visible = _isAdmin };
 
         refresh.Click += async (_, _) => await LoadJobsAsync();

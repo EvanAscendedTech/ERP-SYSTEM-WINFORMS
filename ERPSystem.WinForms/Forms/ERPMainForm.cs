@@ -1,6 +1,7 @@
 using ERPSystem.WinForms;
 using ERPSystem.WinForms.Controls;
 using ERPSystem.WinForms.Data;
+using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms.Forms;
@@ -68,8 +69,9 @@ public partial class ERPMainForm : Form
         WireEvents();
         _ = LoadAndApplySettingsAsync();
         InitializeSyncClock();
+        ApplyNavigationPermissions();
 
-        LoadSection("Dashboard");
+        LoadSection(AuthorizationService.CanAccessSection(_currentUser, "Dashboard") ? "Dashboard" : GetFirstAccessibleSection());
         ApplyTheme();
     }
 
@@ -375,6 +377,21 @@ public partial class ERPMainForm : Form
         btnForward.Click += (_, _) => NavigateForward();
     }
 
+
+    private void ApplyNavigationPermissions()
+    {
+        foreach (var pair in _navButtons)
+        {
+            pair.Value.Visible = AuthorizationService.CanAccessSection(_currentUser, pair.Key);
+        }
+    }
+
+    private string GetFirstAccessibleSection()
+    {
+        var orderedSections = new[] { "Dashboard", "Quotes", "Purchasing", "Production", "Inspection", "Shipping", "Settings" };
+        return orderedSections.FirstOrDefault(section => AuthorizationService.CanAccessSection(_currentUser, section)) ?? "Dashboard";
+    }
+
     private void NavigateBack()
     {
         if (_backHistory.Count == 0)
@@ -487,6 +504,11 @@ public partial class ERPMainForm : Form
 
     private void LoadSection(string key)
     {
+        if (!AuthorizationService.CanAccessSection(_currentUser, key))
+        {
+            return;
+        }
+
         if (!string.IsNullOrWhiteSpace(_activeSectionKey) && !_isProgrammaticNavigation &&
             !string.Equals(_activeSectionKey, key, StringComparison.OrdinalIgnoreCase))
         {
@@ -520,17 +542,17 @@ public partial class ERPMainForm : Form
         {
             "Dashboard" => new DashboardControl(_quoteRepo, _prodRepo, _jobFlow, OpenDashboardTarget),
             "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, _currentUser, LoadSection),
-            "Purchasing" => new PurchasingControl(_quoteRepo, _prodRepo, _userRepo, _currentUser, LoadSection),
-            "Production" => new ProductionControl(_prodRepo, _jobFlow, _currentUser, LoadSection),
+            "Purchasing" => new PurchasingControl(_quoteRepo, _prodRepo, _userRepo, _currentUser, LoadSection, AuthorizationService.CanEditSection(_currentUser, "Purchasing")),
+            "Production" => new ProductionControl(_prodRepo, _jobFlow, _currentUser, LoadSection, AuthorizationService.CanEditSection(_currentUser, "Production")),
             "CRM" => new CRMControl(_quoteRepo),
-            "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, _currentUser, LoadSection),
-            "Shipping" => new ShippingControl(_prodRepo, _jobFlow, _currentUser, LoadSection),
+            "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, _currentUser, LoadSection, AuthorizationService.CanEditSection(_currentUser, "Inspection")),
+            "Shipping" => new ShippingControl(_prodRepo, _jobFlow, _currentUser, LoadSection, AuthorizationService.CanEditSection(_currentUser, "Shipping")),
             "Settings" => new SettingsControl(
                 _settings,
                 _userRepo,
                 _quoteRepo,
                 _currentUser,
-                canManageSettings: true,
+                canManageSettings: AuthorizationService.HasPermission(_currentUser, UserPermission.ManageSettings),
                 settingsChanged: ApplySettings,
                 currentTheme: _themeManager.CurrentTheme,
                 themeChanged: OnThemeChanged,

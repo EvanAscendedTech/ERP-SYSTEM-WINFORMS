@@ -11,6 +11,7 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
     private readonly Action<string> _openSection;
     private readonly string _actorUserId;
     private readonly int _currentUserId;
+    private readonly bool _canEdit;
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _technicalDocsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _purchaseDocsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
@@ -20,7 +21,7 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
     private readonly SplitContainer _docsSplit = new() { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
     private bool _restoringLayout;
 
-    public PurchasingControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, UserManagementRepository userRepository, Models.UserAccount currentUser, Action<string> openSection)
+    public PurchasingControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, UserManagementRepository userRepository, Models.UserAccount currentUser, Action<string> openSection, bool canEdit)
     {
         _quoteRepository = quoteRepository;
         _productionRepository = productionRepository;
@@ -28,14 +29,15 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         _actorUserId = currentUser.Username;
         _currentUserId = currentUser.Id;
         _openSection = openSection;
+        _canEdit = canEdit;
         Dock = DockStyle.Fill;
 
         ConfigureGrids();
 
         var actionsPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
         var refreshButton = new Button { Text = "Refresh Purchasing", AutoSize = true };
-        var uploadPurchaseDocButton = new Button { Text = "Upload Purchase Doc", AutoSize = true };
-        var passToProductionButton = new Button { Text = "Pass to Production", AutoSize = true };
+        var uploadPurchaseDocButton = new Button { Text = "Upload Purchase Doc", AutoSize = true, Enabled = _canEdit };
+        var passToProductionButton = new Button { Text = "Pass to Production", AutoSize = true, Enabled = _canEdit };
 
         refreshButton.Click += async (_, _) => await LoadPurchasingQuotesAsync();
         uploadPurchaseDocButton.Click += async (_, _) => await UploadPurchaseDocumentAsync();

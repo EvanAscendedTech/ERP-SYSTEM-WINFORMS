@@ -2,14 +2,17 @@ namespace ERPSystem.WinForms.Models;
 
 public enum UserPermission
 {
-    ViewProduction = 0,
-    ManageProduction = 1,
-    ViewInspection = 2,
-    ManageInspection = 3,
-    ViewArchive = 4,
-    ManageUsers = 5,
-    ManageSettings = 6,
-    ViewPricing = 7
+    ViewPurchasing = 0,
+    EditPurchasing = 1,
+    ViewProduction = 2,
+    EditProduction = 3,
+    ViewInspection = 4,
+    EditInspection = 5,
+    ViewShipping = 6,
+    EditShipping = 7,
+    ManageUsers = 8,
+    ManageSettings = 9,
+    ViewPricing = 10
 }
 
 public class RoleDefinition
@@ -60,17 +63,20 @@ public class PurchasingLayoutSetting
     public DateTime LastUpdatedUtc { get; set; }
 }
 
-
 public static class RoleCatalog
 {
+    public const string Admin = "Admin";
+    public const string Purchasing = "Purchasing";
+    public const string Production = "Production";
+    public const string Inspector = "Inspector";
+    public const string ShippingReceiving = "Shipping/Receiving";
+
     public static readonly string[] AccountLevels =
     [
-        "Operator",
-        "Foreman",
-        "Purchasing",
-        "Inspection",
-        "Shipping and Receiving",
-        "Admin",
-        "Quoting"
+        Admin,
+        Purchasing,
+        Production,
+        Inspector,
+        ShippingReceiving
     ];
 }

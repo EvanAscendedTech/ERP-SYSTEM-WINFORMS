@@ -11,15 +11,17 @@ public class InspectionControl : UserControl, IRealtimeDataControl
     private readonly InspectionService _inspectionService;
     private readonly Action<string> _openSection;
     private readonly bool _isAdmin;
+    private readonly bool _canEdit;
     private readonly DataGridView _jobsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
 
-    public InspectionControl(ProductionRepository productionRepository, JobFlowService flowService, InspectionService inspectionService, Models.UserAccount currentUser, Action<string> openSection)
+    public InspectionControl(ProductionRepository productionRepository, JobFlowService flowService, InspectionService inspectionService, Models.UserAccount currentUser, Action<string> openSection, bool canEdit)
     {
         _productionRepository = productionRepository;
         _flowService = flowService;
         _inspectionService = inspectionService;
         _openSection = openSection;
+        _canEdit = canEdit;
         _isAdmin = currentUser.Roles.Any(r => string.Equals(r.Name, "Admin", StringComparison.OrdinalIgnoreCase)
                                            || string.Equals(r.Name, "Administrator", StringComparison.OrdinalIgnoreCase));
         Dock = DockStyle.Fill;
@@ -28,7 +30,7 @@ public class InspectionControl : UserControl, IRealtimeDataControl
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
         var refresh = new Button { Text = "Refresh", AutoSize = true };
-        var startAndPass = new Button { Text = "Start + Pass Inspection", AutoSize = true };
+        var startAndPass = new Button { Text = "Start + Pass Inspection", AutoSize = true, Enabled = _canEdit };
         var advance = new Button { Text = "Admin: Push Forward", AutoSize = true, Visible = _isAdmin };
         var rewind = new Button { Text = "Admin: Push Backward", AutoSize = true, Visible = _isAdmin };
 
