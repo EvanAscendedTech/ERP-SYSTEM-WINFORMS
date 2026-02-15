@@ -268,6 +268,33 @@ public class QuoteDraftForm : Form
         costsRow.Controls.Add(NewFieldPanel("Material Cost", materialCost), 2, 0);
         costsRow.Controls.Add(NewFieldPanel("Tooling Cost", toolingCost), 3, 0);
         costsRow.Controls.Add(NewFieldPanel("Secondary Operations Cost", secondaryCost), 4, 0);
+
+        var productionFlagsGrid = new TableLayoutPanel
+        {
+            AutoSize = true,
+            ColumnCount = 2,
+            RowCount = 2,
+            Dock = DockStyle.Top,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Margin = new Padding(0, StandardGap / 2, 0, StandardGap / 2)
+        };
+        productionFlagsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        productionFlagsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        productionFlagsGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        productionFlagsGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var requiresDfars = new CheckBox { Text = "Requires DFARS", AutoSize = true, Checked = model.RequiresDfars, Margin = new Padding(0, 0, StandardGap, 0) };
+        var requiresMaterialTestReport = new CheckBox { Text = "Requires Material Test Report", AutoSize = true, Checked = model.RequiresMaterialTestReport, Margin = new Padding(0, 0, StandardGap, 0) };
+        var requiresCertificateOfConformance = new CheckBox { Text = "Requires Certificate of Conformance", AutoSize = true, Checked = model.RequiresCertificateOfConformance, Margin = new Padding(0, 0, StandardGap, 0) };
+        var requiresSecondaryOperations = new CheckBox { Text = "Requires Secondary Operations", AutoSize = true, Checked = model.RequiresSecondaryOperations, Margin = Padding.Empty };
+
+        productionFlagsGrid.Controls.Add(requiresDfars, 0, 0);
+        productionFlagsGrid.Controls.Add(requiresMaterialTestReport, 1, 0);
+        productionFlagsGrid.Controls.Add(requiresCertificateOfConformance, 0, 1);
+        productionFlagsGrid.Controls.Add(requiresSecondaryOperations, 1, 1);
+
+        var productionFlagsSection = BuildCompactSection("Production Flags", productionFlagsGrid);
+
         var materialDocs = BuildBlobArea(model, QuoteBlobType.MaterialPricing, "Material");
         var toolingDocs = BuildBlobArea(model, QuoteBlobType.ToolingDocumentation, "Tooling");
         var postOpDocs = BuildBlobArea(model, QuoteBlobType.PostOpPricing, "Post-Operation");
