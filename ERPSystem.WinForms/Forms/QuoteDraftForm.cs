@@ -37,6 +37,7 @@ public class QuoteDraftForm : Form
         Text = _editingQuote is null ? $"New Quote Draft - {_quoteLifecycleId.Text}" : $"Edit In-Process Quote #{_editingQuote.Id} - {_quoteLifecycleId.Text}";
         Width = 1300;
         Height = 780;
+        MinimumSize = new Size(1100, 700);
         WindowState = FormWindowState.Maximized;
         StartPosition = FormStartPosition.CenterParent;
 
@@ -46,7 +47,14 @@ public class QuoteDraftForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var header = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true };
+        var header = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            WrapContents = true,
+            AutoScroll = true,
+            Margin = new Padding(0, 0, 0, 8)
+        };
         header.Controls.Add(new Label { Text = "Customer Name", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
         header.Controls.Add(_customerPicker);
         header.Controls.Add(new Label { Text = "Customer Address", AutoSize = true, Margin = new Padding(10, 8, 0, 0) });
@@ -91,6 +99,7 @@ public class QuoteDraftForm : Form
 
         _customerPicker.SelectedIndexChanged += (_, _) => OnCustomerSelected();
         _lineItemsPanel.Resize += (_, _) => ResizeCards();
+        Resize += (_, _) => ResizeCards();
         _ = InitializeAsync();
     }
 
@@ -205,15 +214,16 @@ public class QuoteDraftForm : Form
     {
         var cardPanel = new Panel
         {
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            AutoSize = false,
             BorderStyle = BorderStyle.FixedSingle,
             Margin = new Padding(0, 0, 0, 10),
             Padding = new Padding(10),
-            BackColor = index % 2 == 0 ? Color.FromArgb(245, 248, 252) : Color.FromArgb(234, 243, 250)
+            BackColor = index % 2 == 0 ? Color.FromArgb(245, 248, 252) : Color.FromArgb(234, 243, 250),
+            MinimumSize = new Size(860, 430)
         };
 
-        var layout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 5 };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, ColumnCount = 1, RowCount = 6 };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -235,19 +245,19 @@ public class QuoteDraftForm : Form
         topFields.Controls.Add(NewFieldPanel("Drawing Number", drawingNumber), 0, 0);
         topFields.Controls.Add(NewFieldPanel("Drawing Name", drawingName), 1, 0);
         topFields.Controls.Add(NewFieldPanel("Revision", revision), 2, 0);
-        topFields.Controls.Add(new FlowLayoutPanel { AutoSize = true, Controls = { removeButton } }, 3, 0);
+        topFields.Controls.Add(new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Right, Controls = { removeButton } }, 3, 0);
         layout.Controls.Add(topFields, 0, 1);
 
         var drawingDocs = BuildBlobArea(model, QuoteBlobType.Technical, "Drawings (PDF / STEP)");
         var modelDocs = BuildBlobArea(model, QuoteBlobType.ThreeDModel, "3D Models");
-        var docsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Dock = DockStyle.Top };
+        var docsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Dock = DockStyle.Top, Margin = new Padding(0, 6, 0, 6) };
         docsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         docsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         docsRow.Controls.Add(drawingDocs.SectionPanel, 0, 0);
         docsRow.Controls.Add(modelDocs.SectionPanel, 1, 0);
         layout.Controls.Add(docsRow, 0, 2);
 
-        var costsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 5, Dock = DockStyle.Top };
+        var costsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 5, Dock = DockStyle.Top, Margin = new Padding(0, 6, 0, 6) };
         for (var i = 0; i < 5; i++) costsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
 
         var productionHours = NewNumericField(model.ProductionHours);
@@ -268,7 +278,7 @@ public class QuoteDraftForm : Form
         costsRow.Controls.Add(NewFieldPanel("Secondary Operations Cost", secondaryCost), 4, 0);
         layout.Controls.Add(costsRow, 0, 3);
 
-        var supportDocsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 3, Dock = DockStyle.Top };
+        var supportDocsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 3, Dock = DockStyle.Top, Margin = new Padding(0, 6, 0, 6) };
         supportDocsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
         supportDocsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
         supportDocsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
@@ -280,7 +290,7 @@ public class QuoteDraftForm : Form
         supportDocsRow.Controls.Add(postOpDocs.SectionPanel, 2, 0);
         layout.Controls.Add(supportDocsRow, 0, 4);
 
-        var footer = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+        var footer = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Dock = DockStyle.Top };
         var totalBox = new TextBox { ReadOnly = true, Width = 180, Text = model.LineItemTotal.ToString("0.00", CultureInfo.CurrentCulture) };
         footer.Controls.Add(new Label { Text = "Line Item Total", AutoSize = true, Margin = new Padding(0, 8, 8, 0), Font = new Font(Font, FontStyle.Bold) });
         footer.Controls.Add(totalBox);
@@ -318,30 +328,73 @@ public class QuoteDraftForm : Form
 
     private BlobArea BuildBlobArea(QuoteLineItem model, QuoteBlobType blobType, string title)
     {
-        var panel = new Panel { AutoSize = true, BorderStyle = BorderStyle.FixedSingle, Padding = new Padding(6), Margin = new Padding(3) };
+        var panel = new Panel
+        {
+            AutoSize = false,
+            BorderStyle = BorderStyle.FixedSingle,
+            Padding = new Padding(6),
+            Margin = new Padding(3),
+            Dock = DockStyle.Fill,
+            MinimumSize = new Size(260, 180)
+        };
         var titleLabel = new Label { Text = title, AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
-        var list = new ListBox { Width = 320, Height = 70 };
+        var list = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false };
 
-        var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-        var upload = new Button { Text = "Upload", AutoSize = true };
+        var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Dock = DockStyle.Top };
+        var upload = new Button { Text = "Upload File…", AutoSize = true, BackColor = Color.FromArgb(52, 152, 219), ForeColor = Color.White };
         var delete = new Button { Text = "Delete", AutoSize = true };
         var download = new Button { Text = "Download", AutoSize = true };
+
+        var dropZone = new Label
+        {
+            Text = "Drop files here to upload",
+            Dock = DockStyle.Top,
+            Height = 34,
+            TextAlign = ContentAlignment.MiddleCenter,
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = Color.FromArgb(235, 244, 255),
+            AllowDrop = true,
+            Margin = new Padding(0, 6, 0, 2)
+        };
 
         upload.Click += async (_, _) => await UploadBlobAsync(model, blobType);
         delete.Click += async (_, _) => await DeleteBlobAsync(model, blobType, list.SelectedItem as QuoteBlobAttachment);
         download.Click += async (_, _) => await DownloadBlobAsync(list.SelectedItem as QuoteBlobAttachment);
+        dropZone.DragEnter += (_, e) =>
+        {
+            if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true)
+            {
+                e.Effect = DragDropEffects.Copy;
+            }
+        };
+        dropZone.DragDrop += async (_, e) => await HandleBlobDropAsync(model, blobType, e.Data?.GetData(DataFormats.FileDrop) as string[]);
 
         buttons.Controls.Add(upload);
         buttons.Controls.Add(delete);
         buttons.Controls.Add(download);
 
-        var content = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
-        content.Controls.Add(titleLabel);
-        content.Controls.Add(list);
-        content.Controls.Add(buttons);
+        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        content.Controls.Add(titleLabel, 0, 0);
+        content.Controls.Add(list, 0, 1);
+        content.Controls.Add(dropZone, 0, 2);
+        content.Controls.Add(buttons, 0, 3);
         panel.Controls.Add(content);
 
         return new BlobArea { SectionPanel = panel, List = list };
+    }
+
+    private async Task HandleBlobDropAsync(QuoteLineItem model, QuoteBlobType blobType, IEnumerable<string>? filePaths)
+    {
+        if (filePaths is null) return;
+
+        foreach (var filePath in filePaths.Where(File.Exists))
+        {
+            await UploadBlobAsync(model, blobType, filePath);
+        }
     }
 
     private async Task UploadBlobAsync(QuoteLineItem model, QuoteBlobType blobType)
@@ -355,7 +408,14 @@ public class QuoteDraftForm : Form
 
         if (picker.ShowDialog(this) != DialogResult.OK) return;
 
-        var fileName = Path.GetFileName(picker.FileName);
+        await UploadBlobAsync(model, blobType, picker.FileName);
+    }
+
+    private async Task UploadBlobAsync(QuoteLineItem model, QuoteBlobType blobType, string filePath)
+    {
+        if (!File.Exists(filePath)) return;
+
+        var fileName = Path.GetFileName(filePath);
         var existing = model.BlobAttachments.FirstOrDefault(x => x.BlobType == blobType && string.Equals(x.FileName, fileName, StringComparison.OrdinalIgnoreCase));
         if (existing is not null)
         {
@@ -363,7 +423,7 @@ public class QuoteDraftForm : Form
             model.BlobAttachments.Remove(existing);
         }
 
-        var bytes = await File.ReadAllBytesAsync(picker.FileName);
+        var bytes = await File.ReadAllBytesAsync(filePath);
         using var sha = SHA256.Create();
         var attachment = new QuoteBlobAttachment
         {
@@ -372,8 +432,8 @@ public class QuoteDraftForm : Form
             LifecycleId = _quoteLifecycleId.Text,
             BlobType = blobType,
             FileName = fileName,
-            Extension = Path.GetExtension(picker.FileName),
-            ContentType = Path.GetExtension(picker.FileName),
+            Extension = Path.GetExtension(filePath),
+            ContentType = Path.GetExtension(filePath),
             FileSizeBytes = bytes.LongLength,
             Sha256 = sha.ComputeHash(bytes),
             UploadedBy = _uploadedBy,
@@ -499,7 +559,8 @@ public class QuoteDraftForm : Form
     {
         foreach (var card in _lineItemCards)
         {
-            card.Container.Width = Math.Max(600, _lineItemsPanel.ClientSize.Width - 28);
+            card.Container.Width = Math.Max(860, _lineItemsPanel.ClientSize.Width - 28);
+            card.Container.Height = Math.Max(card.Container.MinimumSize.Height, card.Container.PreferredSize.Height);
         }
     }
 
