@@ -23,4 +23,5 @@ public class ProductionJob
     public string? StartedByUserId { get; set; }
     public DateTime? CompletedUtc { get; set; }
     public string? CompletedByUserId { get; set; }
+    public int EstimatedDurationHours { get; set; } = 8;
 }
