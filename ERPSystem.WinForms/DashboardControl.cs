@@ -35,12 +35,13 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         Margin = new Padding(0, 0, 0, 12)
     };
 
-    private readonly TabControl _workQueueTabs = new()
+    private readonly TableLayoutPanel _workQueueCards = new()
     {
         Dock = DockStyle.Fill,
+        ColumnCount = 5,
+        RowCount = 1,
         Margin = new Padding(0),
-        Padding = new Point(12, 6),
-        SizeMode = TabSizeMode.Normal
+        Padding = new Padding(0)
     };
 
     private readonly Label _lastUpdatedLabel = new()
@@ -143,7 +144,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
 
         var queueHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 8, 0, 0) };
         queueHost.Controls.Add(queueTitle);
-        queueHost.Controls.Add(_workQueueTabs);
+        queueHost.Controls.Add(_workQueueCards);
         root.Controls.Add(queueHost, 0, 5);
 
         Controls.Add(root);
@@ -185,8 +186,14 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
 
     private void ConfigureWorkQueueLayout()
     {
-        _workQueueTabs.Appearance = TabAppearance.Normal;
-        _workQueueTabs.Multiline = false;
+        _workQueueCards.ColumnStyles.Clear();
+        _workQueueCards.RowStyles.Clear();
+        for (var index = 0; index < _workQueueCards.ColumnCount; index++)
+        {
+            _workQueueCards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F));
+        }
+
+        _workQueueCards.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
     }
 
     private void PopulateGlanceCards(params (string Metric, string Value)[] cards)
@@ -221,26 +228,19 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         _workflowStageCards.ResumeLayout();
     }
 
-    private void PopulateQueueGrid(params (string TabTitle, Control Card, Color TabColor)[] cards)
+    private void PopulateQueueGrid(params Control[] cards)
     {
-        _workQueueTabs.SuspendLayout();
-        _workQueueTabs.TabPages.Clear();
+        _workQueueCards.SuspendLayout();
+        _workQueueCards.Controls.Clear();
 
-        foreach (var (tabTitle, card, tabColor) in cards)
+        for (var index = 0; index < cards.Length; index++)
         {
-            var tabPage = new TabPage(tabTitle)
-            {
-                BackColor = ControlPaint.Light(tabColor, 0.94f),
-                ForeColor = tabColor,
-                Padding = new Padding(8)
-            };
-
+            var card = cards[index];
             card.Dock = DockStyle.Fill;
-            tabPage.Controls.Add(card);
-            _workQueueTabs.TabPages.Add(tabPage);
+            _workQueueCards.Controls.Add(card, index, 0);
         }
 
-        _workQueueTabs.ResumeLayout();
+        _workQueueCards.ResumeLayout();
     }
 
     private Panel CreateStageCard(string title, string subtitle, int count, Color color, string sectionKey)
@@ -345,11 +345,11 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             CreateStageCard("CRM", "Follow-up", completedQuotes.Count, Color.FromArgb(121, 111, 214), "CRM"));
 
         PopulateQueueGrid(
-            ("Quotes", CreateQuoteQueuePanel("Quotes", inProgressQuotes, includeExpiryWarning: false), Color.FromArgb(45, 125, 255)),
-            ("Purchasing", CreatePurchasingQueuePanel("Purchasing", purchasingQueue), Color.FromArgb(176, 131, 72)),
-            ("Manufacturing", CreateProductionQueuePanel("Manufacturing", productionInProgress), Color.FromArgb(83, 143, 94)),
-            ("Inspection", CreateInspectionQueuePanel("Inspection", qualityAndInspectionQueue), Color.FromArgb(205, 98, 184)),
-            ("Shipping", CreateShippingQueuePanel("Shipping", shippingQueue), Color.FromArgb(95, 175, 193)));
+            CreateQuoteQueuePanel("Quotes", inProgressQuotes, includeExpiryWarning: false),
+            CreatePurchasingQueuePanel("Purchasing", purchasingQueue),
+            CreateProductionQueuePanel("Production", productionInProgress),
+            CreateInspectionQueuePanel("Inspection", qualityAndInspectionQueue),
+            CreateShippingQueuePanel("Shipping", shippingQueue));
 
                 var integrityIssueCount = (quoteIntegrityReport?.Issues.Count ?? 0) + (productionIntegrityReport?.Issues.Count ?? 0);
         _lastUpdatedLabel.Text = integrityIssueCount == 0
