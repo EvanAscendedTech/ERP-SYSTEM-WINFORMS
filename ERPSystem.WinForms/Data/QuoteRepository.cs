@@ -1557,6 +1557,55 @@ public class QuoteRepository
             .ToList();
     }
 
+    public async Task<(bool Success, string Message)> ValidateQuoteFileLinkageAsync(int quoteId)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var quoteExistsCommand = connection.CreateCommand();
+        quoteExistsCommand.CommandText = "SELECT COUNT(1) FROM Quotes WHERE Id = $quoteId;";
+        quoteExistsCommand.Parameters.AddWithValue("$quoteId", quoteId);
+        var existsCount = Convert.ToInt32(await quoteExistsCommand.ExecuteScalarAsync());
+        if (existsCount == 0)
+        {
+            return (false, $"Quote {quoteId} does not exist.");
+        }
+
+        await using var orphanCountCommand = connection.CreateCommand();
+        orphanCountCommand.CommandText = @"
+            SELECT COUNT(1)
+            FROM QuoteBlobFiles qb
+            LEFT JOIN QuoteLineItems li ON li.Id = qb.LineItemId
+            WHERE qb.QuoteId = $quoteId
+              AND (li.Id IS NULL OR li.QuoteId <> $quoteId);";
+        orphanCountCommand.Parameters.AddWithValue("$quoteId", quoteId);
+        var orphanCount = Convert.ToInt32(await orphanCountCommand.ExecuteScalarAsync());
+        if (orphanCount > 0)
+        {
+            return (false, $"Quote {quoteId} has {orphanCount} file(s) with broken line-item linkage.");
+        }
+
+        await using var invalidDocCountCommand = connection.CreateCommand();
+        invalidDocCountCommand.CommandText = @"
+            SELECT COUNT(1)
+            FROM QuoteBlobFiles qb
+            WHERE qb.QuoteId = $quoteId
+              AND (TRIM(COALESCE(qb.FileName, '')) = '' OR length(COALESCE(qb.BlobData, X'')) = 0);";
+        invalidDocCountCommand.Parameters.AddWithValue("$quoteId", quoteId);
+        var invalidDocCount = Convert.ToInt32(await invalidDocCountCommand.ExecuteScalarAsync());
+        if (invalidDocCount > 0)
+        {
+            return (false, $"Quote {quoteId} has {invalidDocCount} invalid file record(s) (missing name/content).");
+        }
+
+        await using var totalDocCountCommand = connection.CreateCommand();
+        totalDocCountCommand.CommandText = "SELECT COUNT(1) FROM QuoteBlobFiles WHERE QuoteId = $quoteId;";
+        totalDocCountCommand.Parameters.AddWithValue("$quoteId", quoteId);
+        var totalDocCount = Convert.ToInt32(await totalDocCountCommand.ExecuteScalarAsync());
+
+        return (true, $"Quote {quoteId} file linkage verified ({totalDocCount} file(s) accessible and linked).");
+    }
+
     public static bool HasBlobType(Quote quote, QuoteBlobType blobType)
         => quote.LineItems.SelectMany(li => li.BlobAttachments).Any(blob => blob.BlobType == blobType);
 
