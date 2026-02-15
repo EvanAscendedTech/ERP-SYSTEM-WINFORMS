@@ -9,10 +9,9 @@ public partial class ERPMainForm
 
     private PictureBox picCompanyLogo = null!;
     private Label lblAppTitle = null!;
-    private Label lblSection = null!;
+    private ModernButton btnSettingsMenu = null!;
     private Label lblSyncClock = null!;
     private Label lblSaveClock = null!;
-    private ModernButton btnThemeToggle = null!;
     private FlowLayoutPanel onlineUsersPanel = null!;
 
     private FlowLayoutPanel navButtonsPanel = null!;
@@ -23,8 +22,6 @@ public partial class ERPMainForm
     private ModernButton btnQuality = null!;
     private ModernButton btnInspection = null!;
     private ModernButton btnShipping = null!;
-    private ModernButton btnUsers = null!;
-    private ModernButton btnSettings = null!;
 
     private void InitializeComponent()
     {
@@ -35,10 +32,9 @@ public partial class ERPMainForm
 
         picCompanyLogo = new PictureBox();
         lblAppTitle = new Label();
-        lblSection = new Label();
+        btnSettingsMenu = new ModernButton();
         lblSyncClock = new Label();
         lblSaveClock = new Label();
-        btnThemeToggle = new ModernButton();
         onlineUsersPanel = new FlowLayoutPanel();
 
         navButtonsPanel = new FlowLayoutPanel();
@@ -49,8 +45,6 @@ public partial class ERPMainForm
         btnQuality = new ModernButton();
         btnInspection = new ModernButton();
         btnShipping = new ModernButton();
-        btnUsers = new ModernButton();
-        btnSettings = new ModernButton();
 
         SuspendLayout();
 
@@ -81,10 +75,11 @@ public partial class ERPMainForm
         lblAppTitle.Font = new Font("Segoe UI", 14F, FontStyle.Bold);
         lblAppTitle.Location = new Point(84, 16);
 
-        lblSection.AutoSize = true;
-        lblSection.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
-        lblSection.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        lblSection.Location = new Point(540, 14);
+        btnSettingsMenu.Text = "Settings";
+        btnSettingsMenu.Size = new Size(120, 36);
+        btnSettingsMenu.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        btnSettingsMenu.Location = new Point(648, 14);
+        btnSettingsMenu.CornerRadius = 8;
 
         lblSyncClock.AutoSize = true;
         lblSyncClock.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
@@ -98,12 +93,6 @@ public partial class ERPMainForm
         lblSaveClock.Location = new Point(430, 30);
         lblSaveClock.TextAlign = ContentAlignment.MiddleRight;
 
-        btnThemeToggle.Text = "☾ Dark";
-        btnThemeToggle.Size = new Size(108, 36);
-        btnThemeToggle.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        btnThemeToggle.Location = new Point(660, 14);
-        btnThemeToggle.CornerRadius = 8;
-
         onlineUsersPanel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         onlineUsersPanel.AutoScroll = true;
         onlineUsersPanel.WrapContents = false;
@@ -113,20 +102,18 @@ public partial class ERPMainForm
 
         headerPanel.Resize += (_, _) =>
         {
-            btnThemeToggle.Left = headerPanel.Width - btnThemeToggle.Width - 20;
-            lblSection.Left = btnThemeToggle.Left - lblSection.Width - 16;
-            lblSyncClock.Left = lblSection.Left - Math.Max(lblSyncClock.Width, lblSaveClock.Width) - 20;
+            btnSettingsMenu.Left = headerPanel.Width - btnSettingsMenu.Width - 20;
+            lblSyncClock.Left = btnSettingsMenu.Left - Math.Max(lblSyncClock.Width, lblSaveClock.Width) - 20;
             lblSaveClock.Left = lblSyncClock.Left;
             onlineUsersPanel.Left = lblSyncClock.Left;
-            onlineUsersPanel.Width = btnThemeToggle.Left - onlineUsersPanel.Left - 20;
+            onlineUsersPanel.Width = btnSettingsMenu.Left - onlineUsersPanel.Left - 20;
         };
 
         headerPanel.Controls.Add(picCompanyLogo);
         headerPanel.Controls.Add(lblAppTitle);
         headerPanel.Controls.Add(lblSyncClock);
         headerPanel.Controls.Add(lblSaveClock);
-        headerPanel.Controls.Add(lblSection);
-        headerPanel.Controls.Add(btnThemeToggle);
+        headerPanel.Controls.Add(btnSettingsMenu);
         headerPanel.Controls.Add(onlineUsersPanel);
 
         tabStripPanel.Dock = DockStyle.Fill;
@@ -144,8 +131,6 @@ public partial class ERPMainForm
         ConfigureNavButton(btnQuality, "Quality");
         ConfigureNavButton(btnInspection, "Inspection");
         ConfigureNavButton(btnShipping, "Shipping");
-        ConfigureNavButton(btnUsers, "Users");
-        ConfigureNavButton(btnSettings, "Settings");
 
         navButtonsPanel.Controls.Add(btnDashboard);
         navButtonsPanel.Controls.Add(btnQuotes);
@@ -154,8 +139,6 @@ public partial class ERPMainForm
         navButtonsPanel.Controls.Add(btnInspection);
         navButtonsPanel.Controls.Add(btnShipping);
         navButtonsPanel.Controls.Add(btnCRM);
-        navButtonsPanel.Controls.Add(btnUsers);
-        navButtonsPanel.Controls.Add(btnSettings);
         tabStripPanel.Controls.Add(navButtonsPanel);
 
         mainContentPanel.Dock = DockStyle.Fill;
