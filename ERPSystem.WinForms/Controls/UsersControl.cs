@@ -28,14 +28,17 @@ public class UsersControl : UserControl, IRealtimeDataControl
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true };
         var addUserButton = new Button { Text = "Create User", AutoSize = true, Enabled = canManageUsers };
+        var assignRolesButton = new Button { Text = "Assign Role(s)", AutoSize = true, Enabled = canManageUsers };
         var deactivateButton = new Button { Text = "Kick / Deactivate", AutoSize = true, Enabled = canManageUsers };
         var uploadIconButton = new Button { Text = "Upload My Icon", AutoSize = true };
 
         addUserButton.Click += async (_, _) => await CreateUserAsync();
+        assignRolesButton.Click += async (_, _) => await AssignRolesToSelectedAsync();
         deactivateButton.Click += async (_, _) => await DeactivateSelectedAsync();
         uploadIconButton.Click += async (_, _) => await UploadCurrentUserIconAsync();
 
         actions.Controls.Add(addUserButton);
+        actions.Controls.Add(assignRolesButton);
         actions.Controls.Add(deactivateButton);
         actions.Controls.Add(uploadIconButton);
 
@@ -56,6 +59,7 @@ public class UsersControl : UserControl, IRealtimeDataControl
         _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Id", DataPropertyName = nameof(UserAccount.Id), Width = 50 });
         _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Username", DataPropertyName = nameof(UserAccount.Username), Width = 180 });
         _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Display Name", DataPropertyName = nameof(UserAccount.DisplayName), Width = 200 });
+        _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Roles", DataPropertyName = "Roles", Width = 260 });
         _usersGrid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Active", DataPropertyName = nameof(UserAccount.IsActive), Width = 70 });
         _usersGrid.Columns.Add(new DataGridViewImageColumn { HeaderText = "Icon", DataPropertyName = nameof(UserAccount.IconBlob), Width = 52, ImageLayout = DataGridViewImageCellLayout.Zoom });
     }
@@ -88,6 +92,7 @@ public class UsersControl : UserControl, IRealtimeDataControl
             user.Id,
             user.Username,
             user.DisplayName,
+            Roles = string.Join(", ", user.Roles.Select(r => r.Name)),
             user.IsActive,
             IconBlob = icon
         };
@@ -107,7 +112,11 @@ public class UsersControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        var roleInput = Prompt.Show("Roles (comma separated: Operator, Foreman, Purchasing, Inspection, Shipping and Receiving, Admin, Quoting)");
+        var selectedRoles = Prompt.SelectRoles("Assign role(s)", RoleCatalog.AccountLevels, new[] { RoleCatalog.Production });
+        if (selectedRoles.Count == 0)
+        {
+            selectedRoles.Add(RoleCatalog.Production);
+        }
 
         await _userRepository.SaveUserAsync(new UserAccount
         {
@@ -115,9 +124,39 @@ public class UsersControl : UserControl, IRealtimeDataControl
             DisplayName = username.Trim(),
             PasswordHash = AuthorizationService.HashPassword(password),
             IsActive = true,
-            Roles = BuildRoles(roleInput)
+            Roles = BuildRoles(selectedRoles)
         });
 
+        await ReloadAsync();
+        _onUsersChanged();
+    }
+
+    private async Task AssignRolesToSelectedAsync()
+    {
+        if (_usersGrid.CurrentRow?.Cells[1].Value?.ToString() is not { } username || string.IsNullOrWhiteSpace(username))
+        {
+            return;
+        }
+
+        var users = await _userRepository.GetUsersAsync();
+        var selected = users.FirstOrDefault(u => string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase));
+        if (selected is null)
+        {
+            return;
+        }
+
+        var chosen = Prompt.SelectRoles(
+            $"Assign role(s) for {selected.Username}",
+            RoleCatalog.AccountLevels,
+            selected.Roles.Select(r => r.Name));
+
+        if (chosen.Count == 0)
+        {
+            return;
+        }
+
+        selected.Roles = BuildRoles(chosen);
+        await _userRepository.SaveUserAsync(selected);
         await ReloadAsync();
         _onUsersChanged();
     }
@@ -163,38 +202,12 @@ public class UsersControl : UserControl, IRealtimeDataControl
         await ReloadAsync();
     }
 
-    private static List<RoleDefinition> BuildRoles(string roleInput)
+    private static List<RoleDefinition> BuildRoles(IEnumerable<string> roleNames)
     {
-        var entries = string.IsNullOrWhiteSpace(roleInput)
-            ? new[] { "Operator" }
-            : roleInput.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        var roles = new List<RoleDefinition>();
-        foreach (var name in entries.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            var permissions = new List<UserPermission>();
-            if (name.Equals("Admin", StringComparison.OrdinalIgnoreCase))
-            {
-                permissions.AddRange(Enum.GetValues<UserPermission>());
-            }
-            else
-            {
-                permissions.Add(UserPermission.ViewProduction);
-                permissions.Add(UserPermission.ViewInspection);
-                if (name.Equals("Purchasing", StringComparison.OrdinalIgnoreCase) || name.Equals("Quoting", StringComparison.OrdinalIgnoreCase))
-                {
-                    permissions.Add(UserPermission.ViewPricing);
-                }
-            }
-
-            roles.Add(new RoleDefinition
-            {
-                Name = name,
-                Permissions = permissions.Distinct().ToList()
-            });
-        }
-
-        return roles;
+        return roleNames
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(AuthorizationService.BuildRole)
+            .ToList();
     }
 
     private static class Prompt
@@ -208,6 +221,31 @@ public class UsersControl : UserControl, IRealtimeDataControl
             form.Controls.Add(ok);
             form.AcceptButton = ok;
             return form.ShowDialog() == DialogResult.OK ? box.Text : string.Empty;
+        }
+
+        public static List<string> SelectRoles(string caption, IEnumerable<string> allRoles, IEnumerable<string> selectedRoles)
+        {
+            using var form = new Form { Width = 380, Height = 320, Text = caption, StartPosition = FormStartPosition.CenterParent };
+            var roleDropDown = new CheckedListBox { Left = 12, Top = 12, Width = 340, Height = 220, CheckOnClick = true };
+            var selectedSet = new HashSet<string>(selectedRoles, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var role in allRoles)
+            {
+                var index = roleDropDown.Items.Add(role);
+                roleDropDown.SetItemChecked(index, selectedSet.Contains(role));
+            }
+
+            var ok = new Button { Text = "OK", Left = 272, Top = 240, Width = 80, DialogResult = DialogResult.OK };
+            form.Controls.Add(roleDropDown);
+            form.Controls.Add(ok);
+            form.AcceptButton = ok;
+
+            if (form.ShowDialog() != DialogResult.OK)
+            {
+                return new List<string>();
+            }
+
+            return roleDropDown.CheckedItems.Cast<string>().ToList();
         }
     }
 

@@ -10,6 +10,7 @@ public class ProductionControl : UserControl, IRealtimeDataControl
     private readonly JobFlowService _flowService;
     private readonly Action<string> _openSection;
     private readonly bool _isAdmin;
+    private readonly bool _canEdit;
 
     private readonly TabControl _tabs = new() { Dock = DockStyle.Fill };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
@@ -31,11 +32,12 @@ public class ProductionControl : UserControl, IRealtimeDataControl
     private string? _selectedMachineCode;
     private List<MachineSchedule> _selectedMachineSchedules = new();
 
-    public ProductionControl(ProductionRepository productionRepository, JobFlowService flowService, Models.UserAccount currentUser, Action<string> openSection)
+    public ProductionControl(ProductionRepository productionRepository, JobFlowService flowService, Models.UserAccount currentUser, Action<string> openSection, bool canEdit)
     {
         _productionRepository = productionRepository;
         _flowService = flowService;
         _openSection = openSection;
+        _canEdit = canEdit;
         _isAdmin = currentUser.Roles.Any(r => string.Equals(r.Name, "Admin", StringComparison.OrdinalIgnoreCase)
                                            || string.Equals(r.Name, "Administrator", StringComparison.OrdinalIgnoreCase));
         Dock = DockStyle.Fill;
@@ -58,9 +60,9 @@ public class ProductionControl : UserControl, IRealtimeDataControl
 
         var actionsPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
         var refreshButton = new Button { Text = "Refresh Jobs", AutoSize = true };
-        var startButton = new Button { Text = "Start Production", AutoSize = true };
-        var completeButton = new Button { Text = "Complete Production", AutoSize = true };
-        var qualityButton = new Button { Text = "Move to Quality", AutoSize = true };
+        var startButton = new Button { Text = "Start Production", AutoSize = true, Enabled = _canEdit };
+        var completeButton = new Button { Text = "Complete Production", AutoSize = true, Enabled = _canEdit };
+        var qualityButton = new Button { Text = "Move to Quality", AutoSize = true, Enabled = _canEdit };
         var openDetailsButton = new Button { Text = "Open Production View", AutoSize = true };
         var advanceButton = new Button { Text = "Admin: Push Forward", AutoSize = true, Visible = _isAdmin };
         var rewindButton = new Button { Text = "Admin: Push Backward", AutoSize = true, Visible = _isAdmin };
@@ -132,6 +134,7 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         _machineDescriptionInput.Enabled = false;
         _machineCapacityInput.Enabled = false;
 
+        _editMachinesButton.Enabled = _canEdit;
         _editMachinesButton.Click += (_, _) => ToggleMachineEditMode();
         _addMachineButton.Click += async (_, _) => await AddMachineAsync();
 
