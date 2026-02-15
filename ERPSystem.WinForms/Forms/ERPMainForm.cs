@@ -470,6 +470,9 @@ public partial class ERPMainForm : Form
             case Controls.QuotesControl quotesControl when target.QuoteId.HasValue:
                 await quotesControl.OpenFromDashboardAsync(target.QuoteId.Value, openDetails: true);
                 break;
+            case PurchasingControl purchasingControl when target.QuoteId.HasValue:
+                await purchasingControl.OpenFromDashboardAsync(target.QuoteId.Value);
+                break;
             case ProductionControl productionControl when !string.IsNullOrWhiteSpace(target.JobNumber):
                 await productionControl.OpenFromDashboardAsync(target.JobNumber, openDetails: true);
                 break;
@@ -517,7 +520,7 @@ public partial class ERPMainForm : Form
         {
             "Dashboard" => new DashboardControl(_quoteRepo, _prodRepo, _jobFlow, OpenDashboardTarget),
             "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, _currentUser, LoadSection),
-            "Purchasing" => BuildPlaceholder("Purchasing", "Placeholder for material and tooling purchasing workflows."),
+            "Purchasing" => new PurchasingControl(_quoteRepo, _prodRepo, _currentUser, LoadSection),
             "Production" => new ProductionControl(_prodRepo, _jobFlow, _currentUser, LoadSection),
             "CRM" => new CRMControl(_quoteRepo),
             "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, _currentUser, LoadSection),

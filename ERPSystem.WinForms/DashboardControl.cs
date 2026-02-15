@@ -578,7 +578,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             .ToHashSet();
 
         return quotes
-            .Where(quote => quote.Status == QuoteStatus.Won && !sourcedQuoteIds.Contains(quote.Id))
+            .Where(quote => quote.Status == QuoteStatus.Won && quote.PassedToPurchasingUtc.HasValue && !sourcedQuoteIds.Contains(quote.Id))
             .OrderBy(quote => quote.LastUpdatedUtc)
             .ToList();
     }
@@ -589,7 +589,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             .Take(20)
             .Select(quote => new StageTaskItem(
                 $"Q{quote.Id} • {quote.CustomerName} • Purchasing incomplete",
-                new DashboardNavigationTarget("Quotes", quote.Id, OpenDetails: true)))
+                new DashboardNavigationTarget("Purchasing", quote.Id, OpenDetails: true)))
             .ToList();
 
         return CreateQueueCard(title, details, "Purchasing", Color.FromArgb(176, 131, 72));
@@ -643,7 +643,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         var snapshotItems = new List<(string Text, DashboardNavigationTarget Target)>();
 
         snapshotItems.AddRange(inProgressQuotes.Take(3).Select(quote =>
-            ($"QUOTES • Q{quote.Id} • {quote.CustomerName}", new DashboardNavigationTarget("Quotes", quote.Id, OpenDetails: true))));
+            ($"QUOTES • Q{quote.Id} • {quote.CustomerName}", new DashboardNavigationTarget("Purchasing", quote.Id, OpenDetails: true))));
 
         snapshotItems.AddRange(productionInProgress.Take(3).Select(job =>
             ($"PRODUCTION • {job.JobNumber} • {job.ProductName}", new DashboardNavigationTarget("Production", JobNumber: job.JobNumber, OpenDetails: true))));
@@ -869,7 +869,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
                 var expiryText = includeExpiryWarning ? $" • est. expires in {Math.Max(0, QuoteExpiryDays - (int)ageDays)}d" : string.Empty;
                 return new StageTaskItem(
                     $"Q{quote.Id} • {quote.CustomerName} • updated {quote.LastUpdatedUtc:g}{expiryText}",
-                    new DashboardNavigationTarget("Quotes", quote.Id, OpenDetails: true));
+                    new DashboardNavigationTarget("Purchasing", quote.Id, OpenDetails: true));
             })
             .ToList();
 

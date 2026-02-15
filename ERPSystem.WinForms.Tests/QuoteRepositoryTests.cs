@@ -209,6 +209,66 @@ public class QuoteRepositoryTests
         File.Delete(dbPath);
     }
 
+
+    [Fact]
+    public async Task PassToPurchasingAsync_RequiresWonAndSetsPurchasingFields()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-purchasing-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+        var quote = new Quote
+        {
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            LifecycleQuoteId = "Q-PUR-001",
+            Status = QuoteStatus.Won,
+            LineItems = [new QuoteLineItem { Description = "Part", Quantity = 1 }]
+        };
+
+        var id = await repository.SaveQuoteAsync(quote);
+        var result = await repository.PassToPurchasingAsync(id, "buyer.user");
+
+        Assert.True(result.Success);
+
+        var loaded = await repository.GetQuoteAsync(id);
+        Assert.NotNull(loaded);
+        Assert.NotNull(loaded!.PassedToPurchasingUtc);
+        Assert.Equal("buyer.user", loaded.PassedToPurchasingByUserId);
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task PassToPurchasingAsync_FailsWhenQuoteNotWon()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-purchasing-invalid-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+        var quote = new Quote
+        {
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            LifecycleQuoteId = "Q-PUR-002",
+            Status = QuoteStatus.Completed,
+            LineItems = [new QuoteLineItem { Description = "Part", Quantity = 1 }]
+        };
+
+        var id = await repository.SaveQuoteAsync(quote);
+        var result = await repository.PassToPurchasingAsync(id, "buyer.user");
+
+        Assert.False(result.Success);
+
+        var loaded = await repository.GetQuoteAsync(id);
+        Assert.NotNull(loaded);
+        Assert.Null(loaded!.PassedToPurchasingUtc);
+
+        File.Delete(dbPath);
+    }
+
     [Fact]
     public async Task InitializeDatabaseAsync_BackfillsLegacyCustomerNameIntoCustomers()
     {

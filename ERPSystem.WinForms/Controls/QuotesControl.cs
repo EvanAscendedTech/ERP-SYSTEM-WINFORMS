@@ -165,7 +165,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             await AutoArchiveExpiredQuotesAsync();
 
             var allQuotes = await _quoteRepository.GetQuotesAsync();
-            _activeQuotesCache = allQuotes.Where(q => q.Status != QuoteStatus.Expired).ToList();
+            _activeQuotesCache = allQuotes.Where(q => q.Status != QuoteStatus.Expired && !q.PassedToPurchasingUtc.HasValue).ToList();
             var expiredQuotes = allQuotes.Where(q => q.Status == QuoteStatus.Expired)
                 .OrderByDescending(q => q.ExpiredUtc ?? q.LastUpdatedUtc)
                 .Select(CreateQuoteRow)
@@ -308,8 +308,15 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
         _selectedCustomer = null;
 
+        var result = await _quoteRepository.PassToPurchasingAsync(fullQuote.Id, _currentUser.Username);
+        if (!result.Success)
+        {
+            _feedback.Text = result.Message;
+            return;
+        }
+
         await _quoteRepository.ResetLastInteractionOnQuoteAsync(fullQuote.CustomerId);
-        _feedback.Text = $"Quote {fullQuote.Id} passed to Purchasing.";
+        _feedback.Text = result.Message;
         await LoadActiveQuotesAsync();
         _openSection("Purchasing");
     }

@@ -59,7 +59,9 @@ public class QuoteRepository
                 ExpiredUtc TEXT NULL,
                 ExpiredByUserId TEXT NULL,
                 CompletedUtc TEXT NULL,
-                CompletedByUserId TEXT NULL
+                CompletedByUserId TEXT NULL,
+                PassedToPurchasingUtc TEXT NULL,
+                PassedToPurchasingByUserId TEXT NULL
             );
 
             CREATE TABLE IF NOT EXISTS QuoteLineItems (
@@ -181,6 +183,8 @@ public class QuoteRepository
         await EnsureColumnExistsAsync(connection, "Quotes", "ExpiredByUserId", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "Quotes", "CompletedUtc", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "Quotes", "CompletedByUserId", "TEXT NULL");
+        await EnsureColumnExistsAsync(connection, "Quotes", "PassedToPurchasingUtc", "TEXT NULL");
+        await EnsureColumnExistsAsync(connection, "Quotes", "PassedToPurchasingByUserId", "TEXT NULL");
 
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "UnitPrice", "REAL NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "LeadTimeDays", "INTEGER NOT NULL DEFAULT 0");
@@ -301,7 +305,9 @@ public class QuoteRepository
                         ExpiredUtc,
                         ExpiredByUserId,
                         CompletedUtc,
-                        CompletedByUserId)
+                        CompletedByUserId,
+                        PassedToPurchasingUtc,
+                        PassedToPurchasingByUserId)
                     VALUES (
                         $customerId,
                         $name,
@@ -316,7 +322,9 @@ public class QuoteRepository
                         $expiredUtc,
                         $expiredByUserId,
                         $completedUtc,
-                        $completedByUserId);
+                        $completedByUserId,
+                        $passedToPurchasingUtc,
+                        $passedToPurchasingByUserId);
                     SELECT last_insert_rowid();";
                 insertQuote.Parameters.AddWithValue("$customerId", quote.CustomerId == 0 ? DBNull.Value : quote.CustomerId);
                 insertQuote.Parameters.AddWithValue("$name", quote.CustomerName);
@@ -332,6 +340,8 @@ public class QuoteRepository
                 AddNullableString(insertQuote, "$expiredByUserId", quote.ExpiredByUserId);
                 AddNullableString(insertQuote, "$completedUtc", quote.CompletedUtc?.ToString("O"));
                 AddNullableString(insertQuote, "$completedByUserId", quote.CompletedByUserId);
+                AddNullableString(insertQuote, "$passedToPurchasingUtc", quote.PassedToPurchasingUtc?.ToString("O"));
+                AddNullableString(insertQuote, "$passedToPurchasingByUserId", quote.PassedToPurchasingByUserId);
 
                 quote.Id = Convert.ToInt32(await insertQuote.ExecuteScalarAsync());
             }
@@ -359,7 +369,9 @@ public class QuoteRepository
                         ExpiredUtc = $expiredUtc,
                         ExpiredByUserId = $expiredByUserId,
                         CompletedUtc = $completedUtc,
-                        CompletedByUserId = $completedByUserId
+                        CompletedByUserId = $completedByUserId,
+                        PassedToPurchasingUtc = $passedToPurchasingUtc,
+                        PassedToPurchasingByUserId = $passedToPurchasingByUserId
                     WHERE Id = $id;";
                 updateQuote.Parameters.AddWithValue("$id", quote.Id);
                 updateQuote.Parameters.AddWithValue("$customerId", quote.CustomerId == 0 ? DBNull.Value : quote.CustomerId);
@@ -375,6 +387,8 @@ public class QuoteRepository
                 AddNullableString(updateQuote, "$expiredByUserId", quote.ExpiredByUserId);
                 AddNullableString(updateQuote, "$completedUtc", quote.CompletedUtc?.ToString("O"));
                 AddNullableString(updateQuote, "$completedByUserId", quote.CompletedByUserId);
+                AddNullableString(updateQuote, "$passedToPurchasingUtc", quote.PassedToPurchasingUtc?.ToString("O"));
+                AddNullableString(updateQuote, "$passedToPurchasingByUserId", quote.PassedToPurchasingByUserId);
                 await updateQuote.ExecuteNonQueryAsync();
 
                 await DeleteLineItemsForQuoteAsync(connection, transaction, quote.Id);
@@ -648,6 +662,46 @@ public class QuoteRepository
         return (true, $"Quote {quoteId} moved to {nextStatus}.");
     }
 
+    public async Task<(bool Success, string Message)> PassToPurchasingAsync(int quoteId, string actorUserId)
+    {
+        var quote = await GetQuoteAsync(quoteId);
+        if (quote is null)
+        {
+            return (false, $"Quote {quoteId} does not exist.");
+        }
+
+        if (quote.Status != QuoteStatus.Won)
+        {
+            return (false, $"Only Won quotes can be passed to Purchasing. Current status: {quote.Status}.");
+        }
+
+        if (quote.PassedToPurchasingUtc.HasValue)
+        {
+            return (true, $"Quote {quoteId} is already in Purchasing.");
+        }
+
+        quote.PassedToPurchasingUtc = DateTime.UtcNow;
+        quote.PassedToPurchasingByUserId = actorUserId;
+        await SaveQuoteAsync(quote);
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
+
+        await AppendAuditEventAsync(
+            connection,
+            transaction,
+            quoteId,
+            eventType: "purchasing_handoff",
+            operationMode: "update",
+            lineItemCount: quote.LineItems.Count,
+            details: $"actor={actorUserId};status={(int)quote.Status}");
+
+        await transaction.CommitAsync();
+
+        return (true, $"Quote {quoteId} passed to Purchasing.");
+    }
+
     private static async Task DeleteLineItemsForQuoteAsync(SqliteConnection connection, SqliteTransaction transaction, int quoteId)
     {
         await using var deleteFiles = connection.CreateCommand();
@@ -734,6 +788,8 @@ public class QuoteRepository
                    q.ExpiredByUserId,
                    q.CompletedUtc,
                    q.CompletedByUserId,
+                   q.PassedToPurchasingUtc,
+                   q.PassedToPurchasingByUserId,
                    c.Name
             FROM Quotes q
             LEFT JOIN Customers c ON c.Id = q.CustomerId
@@ -746,7 +802,7 @@ public class QuoteRepository
             return null;
         }
 
-        var customerName = reader.IsDBNull(15) ? reader.GetString(2) : reader.GetString(15);
+        var customerName = reader.IsDBNull(17) ? reader.GetString(2) : reader.GetString(17);
         return new Quote
         {
             Id = reader.GetInt32(0),
@@ -763,7 +819,9 @@ public class QuoteRepository
             ExpiredUtc = reader.IsDBNull(11) ? null : DateTime.Parse(reader.GetString(11)),
             ExpiredByUserId = reader.IsDBNull(12) ? null : reader.GetString(12),
             CompletedUtc = reader.IsDBNull(13) ? null : DateTime.Parse(reader.GetString(13)),
-            CompletedByUserId = reader.IsDBNull(14) ? null : reader.GetString(14)
+            CompletedByUserId = reader.IsDBNull(14) ? null : reader.GetString(14),
+            PassedToPurchasingUtc = reader.IsDBNull(15) ? null : DateTime.Parse(reader.GetString(15)),
+            PassedToPurchasingByUserId = reader.IsDBNull(16) ? null : reader.GetString(16)
         };
     }
 
@@ -1488,6 +1546,19 @@ public class QuoteRepository
 
         return lineItems;
     }
+
+
+    public async Task<IReadOnlyList<Quote>> GetPurchasingQuotesAsync()
+    {
+        var all = await GetQuotesAsync();
+        return all
+            .Where(q => q.Status == QuoteStatus.Won && q.PassedToPurchasingUtc.HasValue)
+            .OrderBy(q => q.PassedToPurchasingUtc)
+            .ToList();
+    }
+
+    public static bool HasBlobType(Quote quote, QuoteBlobType blobType)
+        => quote.LineItems.SelectMany(li => li.BlobAttachments).Any(blob => blob.BlobType == blobType);
 
     private static async Task EnsureDefaultCustomerAsync(SqliteConnection connection)
     {
