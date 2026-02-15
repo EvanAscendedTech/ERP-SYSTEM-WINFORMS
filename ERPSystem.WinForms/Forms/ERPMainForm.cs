@@ -334,7 +334,7 @@ public partial class ERPMainForm : Form
     {
         _appSettings = settings;
         ApplyThemeFromSettings(settings.Theme);
-        lblAppTitle.Text = string.IsNullOrWhiteSpace(settings.CompanyName) ? "Company" : settings.CompanyName;
+        lblAppTitle.Text = string.IsNullOrWhiteSpace(settings.CompanyName) ? "Ignition" : settings.CompanyName;
         picCompanyLogo.Image?.Dispose();
         picCompanyLogo.Image = null;
         if (settings.CompanyLogo is { Length: > 0 })
@@ -520,7 +520,7 @@ public partial class ERPMainForm : Form
         {
             "Dashboard" => new DashboardControl(_quoteRepo, _prodRepo, _jobFlow, OpenDashboardTarget),
             "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, _currentUser, LoadSection),
-            "Purchasing" => new PurchasingControl(_quoteRepo, _prodRepo, _currentUser, LoadSection),
+            "Purchasing" => new PurchasingControl(_quoteRepo, _prodRepo, _userRepo, _currentUser, LoadSection),
             "Production" => new ProductionControl(_prodRepo, _jobFlow, _currentUser, LoadSection),
             "CRM" => new CRMControl(_quoteRepo),
             "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, _currentUser, LoadSection),

@@ -1,25 +1,35 @@
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
+using System.Text.Json;
 
 namespace ERPSystem.WinForms.Controls;
 
 public class PurchasingControl : UserControl, IRealtimeDataControl
 {
     private readonly QuoteRepository _quoteRepository;
+    private const string PurchasingLayoutPreferenceKey = "purchasing.layout";
+
     private readonly ProductionRepository _productionRepository;
+    private readonly UserManagementRepository _userRepository;
     private readonly Action<string> _openSection;
     private readonly string _actorUserId;
+    private readonly int _currentUserId;
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _technicalDocsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _purchaseDocsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Label _checklistLabel = new() { Dock = DockStyle.Top, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
+    private readonly SplitContainer _mainSplit = new() { Dock = DockStyle.Fill, Orientation = Orientation.Vertical };
+    private readonly SplitContainer _docsSplit = new() { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
+    private bool _restoringLayout;
 
-    public PurchasingControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, Models.UserAccount currentUser, Action<string> openSection)
+    public PurchasingControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, UserManagementRepository userRepository, Models.UserAccount currentUser, Action<string> openSection)
     {
         _quoteRepository = quoteRepository;
         _productionRepository = productionRepository;
+        _userRepository = userRepository;
         _actorUserId = currentUser.Username;
+        _currentUserId = currentUser.Id;
         _openSection = openSection;
         Dock = DockStyle.Fill;
 
@@ -38,15 +48,10 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         actionsPanel.Controls.Add(uploadPurchaseDocButton);
         actionsPanel.Controls.Add(passToProductionButton);
 
-        var docsSplit = new SplitContainer
-        {
-            Dock = DockStyle.Fill,
-            Orientation = Orientation.Horizontal
-        };
-        ConfigureSafeSplitterDistance(docsSplit, preferredDistance: 190, panel1MinSize: 130, panel2MinSize: 130);
+        ConfigureSafeSplitterDistance(_docsSplit, preferredDistance: 190, panel1MinSize: 130, panel2MinSize: 130);
 
-        docsSplit.Panel1.Controls.Add(_technicalDocsGrid);
-        docsSplit.Panel1.Controls.Add(new Label
+        _docsSplit.Panel1.Controls.Add(_technicalDocsGrid);
+        _docsSplit.Panel1.Controls.Add(new Label
         {
             Text = "Technical documentation from quote",
             Dock = DockStyle.Top,
@@ -54,8 +59,8 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
             Font = new Font(Font, FontStyle.Bold)
         });
 
-        docsSplit.Panel2.Controls.Add(_purchaseDocsGrid);
-        docsSplit.Panel2.Controls.Add(new Label
+        _docsSplit.Panel2.Controls.Add(_purchaseDocsGrid);
+        _docsSplit.Panel2.Controls.Add(new Label
         {
             Text = "Purchase documentation (required before Production)",
             Dock = DockStyle.Top,
@@ -64,18 +69,13 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         });
 
         var rightPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8, 0, 0, 0) };
-        rightPanel.Controls.Add(docsSplit);
+        rightPanel.Controls.Add(_docsSplit);
         rightPanel.Controls.Add(_checklistLabel);
 
-        var mainSplit = new SplitContainer
-        {
-            Dock = DockStyle.Fill,
-            Orientation = Orientation.Vertical
-        };
-        ConfigureSafeSplitterDistance(mainSplit, preferredDistance: 560, panel1MinSize: 350, panel2MinSize: 320);
+        ConfigureSafeSplitterDistance(_mainSplit, preferredDistance: 560, panel1MinSize: 350, panel2MinSize: 320);
 
-        mainSplit.Panel1.Controls.Add(_quotesGrid);
-        mainSplit.Panel1.Controls.Add(new Label
+        _mainSplit.Panel1.Controls.Add(_quotesGrid);
+        _mainSplit.Panel1.Controls.Add(new Label
         {
             Text = "Purchasing queue (Won quotes passed from Quotes)",
             Dock = DockStyle.Top,
@@ -83,16 +83,67 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
             Font = new Font(Font, FontStyle.Bold)
         });
 
-        mainSplit.Panel2.Controls.Add(rightPanel);
+        _mainSplit.Panel2.Controls.Add(rightPanel);
 
-        Controls.Add(mainSplit);
+        Controls.Add(_mainSplit);
         Controls.Add(actionsPanel);
         Controls.Add(_feedback);
 
         _quotesGrid.SelectionChanged += (_, _) => ShowSelectedQuoteDocuments();
+        _mainSplit.SplitterMoved += async (_, _) => await SaveLayoutPreferenceAsync();
+        _docsSplit.SplitterMoved += async (_, _) => await SaveLayoutPreferenceAsync();
+        Load += async (_, _) => await RestoreLayoutPreferenceAsync();
 
         _ = LoadPurchasingQuotesAsync();
     }
+
+    private async Task RestoreLayoutPreferenceAsync()
+    {
+        try
+        {
+            var serialized = await _userRepository.GetUserPreferenceAsync(_currentUserId, PurchasingLayoutPreferenceKey);
+            if (string.IsNullOrWhiteSpace(serialized))
+            {
+                return;
+            }
+
+            var layout = JsonSerializer.Deserialize<PurchasingLayoutPreference>(serialized);
+            if (layout is null)
+            {
+                return;
+            }
+
+            _restoringLayout = true;
+            ApplySafeSplitterDistance(_mainSplit, layout.MainSplitterDistance, _mainSplit.Panel1MinSize, _mainSplit.Panel2MinSize);
+            ApplySafeSplitterDistance(_docsSplit, layout.DocsSplitterDistance, _docsSplit.Panel1MinSize, _docsSplit.Panel2MinSize);
+        }
+        catch
+        {
+            // Ignore malformed preference values and keep defaults.
+        }
+        finally
+        {
+            _restoringLayout = false;
+        }
+    }
+
+    private async Task SaveLayoutPreferenceAsync()
+    {
+        if (_restoringLayout || !IsHandleCreated)
+        {
+            return;
+        }
+
+        var preference = new PurchasingLayoutPreference
+        {
+            MainSplitterDistance = _mainSplit.SplitterDistance,
+            DocsSplitterDistance = _docsSplit.SplitterDistance
+        };
+
+        var serialized = JsonSerializer.Serialize(preference);
+        await _userRepository.SaveUserPreferenceAsync(_currentUserId, PurchasingLayoutPreferenceKey, serialized);
+    }
+
 
     private static void ConfigureSafeSplitterDistance(SplitContainer splitContainer, int preferredDistance, int panel1MinSize, int panel2MinSize)
     {
@@ -327,4 +378,10 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
     }
 
     public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => LoadPurchasingQuotesAsync();
+
+    private sealed class PurchasingLayoutPreference
+    {
+        public int MainSplitterDistance { get; set; }
+        public int DocsSplitterDistance { get; set; }
+    }
 }

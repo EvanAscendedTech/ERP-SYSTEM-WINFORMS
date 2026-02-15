@@ -2,7 +2,7 @@ namespace ERPSystem.WinForms.Models;
 
 public class AppSettings
 {
-    public string CompanyName { get; set; } = "Your Company";
+    public string CompanyName { get; set; } = "Ignition";
     public byte[]? CompanyLogo { get; set; }
     public string Theme { get; set; } = "Light";
     public bool EnableNotifications { get; set; } = true;

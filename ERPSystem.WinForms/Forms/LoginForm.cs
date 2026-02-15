@@ -23,7 +23,7 @@ public class LoginForm : Form
         _userRepository = userRepository;
         _settingsService = settingsService;
 
-        Text = "INGNITON";
+        Text = "Ignition";
         FormBorderStyle = FormBorderStyle.FixedSingle;
         StartPosition = FormStartPosition.CenterScreen;
         WindowState = FormWindowState.Maximized;
@@ -73,7 +73,7 @@ public class LoginForm : Form
         _heroLogo.Margin = new Padding(0, 0, 16, 0);
 
         var textLayout = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = new Padding(0) };
-        _heroTitle.Text = "ERP Command Center";
+        _heroTitle.Text = "Ignition";
         _heroTitle.Font = new Font("Segoe UI", 30F, FontStyle.Bold);
         _heroTitle.ForeColor = Color.White;
         _heroTitle.AutoSize = true;
@@ -96,7 +96,7 @@ public class LoginForm : Form
     private async Task LoadSettingsAsync()
     {
         var settings = await _settingsService.LoadAsync();
-        var companyName = string.IsNullOrWhiteSpace(settings.CompanyName) ? "Company" : settings.CompanyName;
+        var companyName = string.IsNullOrWhiteSpace(settings.CompanyName) ? "Ignition" : settings.CompanyName;
         _heroTitle.Text = companyName;
         _heroSubtitle.Text = companyName;
 

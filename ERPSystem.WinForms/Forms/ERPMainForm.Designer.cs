@@ -50,7 +50,7 @@ public partial class ERPMainForm
 
         AutoScaleMode = AutoScaleMode.Dpi;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
-        Text = "INGNITON";
+        Text = "Ignition";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(1200, 760);
         WindowState = FormWindowState.Maximized;
@@ -71,7 +71,7 @@ public partial class ERPMainForm
         picCompanyLogo.SizeMode = PictureBoxSizeMode.Zoom;
 
         lblAppTitle.AutoSize = true;
-        lblAppTitle.Text = "ERP Command Center";
+        lblAppTitle.Text = "Ignition";
         lblAppTitle.Font = new Font("Segoe UI", 14F, FontStyle.Bold);
         lblAppTitle.Location = new Point(84, 16);
 

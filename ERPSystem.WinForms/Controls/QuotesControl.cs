@@ -10,7 +10,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 {
     private const int QuoteExpiryDays = 60;
     private const int NearExpiryThresholdDays = 2;
-    private const string MoveToWonColumnName = "MoveToWon";
 
     private readonly QuoteRepository _quoteRepository;
     private readonly ProductionRepository _productionRepository;
@@ -21,6 +20,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _expiredQuotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
+    private readonly Button _markWonButton;
     private readonly Button _passToPurchasingButton;
     private List<Quote> _activeQuotesCache = new();
     private string? _selectedCustomer;
@@ -40,7 +40,8 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         var refreshButton = new Button { Text = "Refresh Active Quotes", AutoSize = true };
         var newQuoteButton = new Button { Text = "Create New Quote", AutoSize = true };
         var deleteQuoteButton = new Button { Text = "Delete Quote", AutoSize = true };
-        var markCompletedButton = new Button { Text = "Mark Completed", AutoSize = true };
+        var markCompletedButton = new Button { Text = "Mark as Completed", AutoSize = true };
+        _markWonButton = new Button { Text = "Mark as Won", AutoSize = true };
         _passToPurchasingButton = new Button { Text = "Pass to Purchasing", AutoSize = true, Enabled = false };
         var archivedQuotesButton = new Button { Text = "Archived Quotes", AutoSize = true };
 
@@ -48,9 +49,9 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         newQuoteButton.Click += async (_, _) => await CreateNewQuoteAsync();
         deleteQuoteButton.Click += async (_, _) => await DeleteSelectedQuoteAsync();
         markCompletedButton.Click += async (_, _) => await MarkSelectedCompletedAsync();
+        _markWonButton.Click += async (_, _) => await MarkSelectedWonAsync();
         _passToPurchasingButton.Click += async (_, _) => await PassSelectedToPurchasingAsync();
         _quotesGrid.SelectionChanged += (_, _) => RefreshActionStateForSelection();
-        _quotesGrid.CellContentClick += async (_, e) => await HandleQuotesGridCellContentClickAsync(e.RowIndex, e.ColumnIndex);
         archivedQuotesButton.Click += (_, _) => OpenArchivedQuotesWindow();
         _quotesGrid.CellDoubleClick += async (_, _) => await OpenSelectedQuoteDetailsAsync();
 
@@ -58,6 +59,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         actionsPanel.Controls.Add(newQuoteButton);
         actionsPanel.Controls.Add(deleteQuoteButton);
         actionsPanel.Controls.Add(markCompletedButton);
+        actionsPanel.Controls.Add(_markWonButton);
         actionsPanel.Controls.Add(_passToPurchasingButton);
 
         var bottomRightPanel = new FlowLayoutPanel
@@ -131,36 +133,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuotedAt", HeaderText = "Quoted", DataPropertyName = nameof(QuoteGridRow.QuotedAtDisplay), Width = 180, ReadOnly = true });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "TimeSinceQuoted", HeaderText = "Timeframe Since Quoted", DataPropertyName = nameof(QuoteGridRow.TimeSinceQuotedDisplay), Width = 220, ReadOnly = true });
-        if (includeLifecycleColumn)
-        {
-            grid.Columns.Add(new DataGridViewButtonColumn
-            {
-                Name = MoveToWonColumnName,
-                HeaderText = "Actions",
-                Text = "Move to Won",
-                UseColumnTextForButtonValue = false,
-                Width = 120,
-                ReadOnly = true
-            });
-
-            grid.CellFormatting += (_, e) =>
-            {
-                if (e.RowIndex < 0 || grid.Columns[e.ColumnIndex].Name != MoveToWonColumnName)
-                {
-                    return;
-                }
-
-                if (grid.Rows[e.RowIndex].DataBoundItem is not QuoteGridRow row)
-                {
-                    e.Value = string.Empty;
-                    e.FormattingApplied = true;
-                    return;
-                }
-
-                e.Value = row.Status == QuoteStatus.Completed ? "Move to Won" : string.Empty;
-                e.FormattingApplied = true;
-            };
-        }
         grid.RowPrePaint += (_, e) =>
         {
             if (e.RowIndex < 0 || grid.Rows[e.RowIndex].DataBoundItem is not QuoteGridRow row)
@@ -517,32 +489,19 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             : $"Customer Hub / {_selectedCustomer}";
     }
 
-    private async Task HandleQuotesGridCellContentClickAsync(int rowIndex, int columnIndex)
-    {
-        if (rowIndex < 0 || columnIndex < 0 || _quotesGrid.Columns[columnIndex].Name != MoveToWonColumnName)
-        {
-            return;
-        }
-
-        if (_quotesGrid.Rows[rowIndex].DataBoundItem is not QuoteGridRow row || row.Status != QuoteStatus.Completed || row.QuoteId is not int quoteId)
-        {
-            return;
-        }
-
-        _quotesGrid.CurrentCell = _quotesGrid.Rows[rowIndex].Cells[0];
-        await MarkSelectedWonAsync();
-        SelectQuoteRow(quoteId);
-    }
 
     private void RefreshActionStateForSelection()
     {
         if (_quotesGrid.CurrentRow?.DataBoundItem is not QuoteGridRow row)
         {
+            _markWonButton.Enabled = false;
             _passToPurchasingButton.Enabled = false;
             return;
         }
 
-        _passToPurchasingButton.Enabled = row.Status == QuoteStatus.Won && row.QuoteId.HasValue;
+        var hasQuote = row.QuoteId.HasValue;
+        _markWonButton.Enabled = hasQuote && row.Status == QuoteStatus.Completed;
+        _passToPurchasingButton.Enabled = hasQuote && row.Status == QuoteStatus.Won;
     }
 
     private void BuildCustomerCards()

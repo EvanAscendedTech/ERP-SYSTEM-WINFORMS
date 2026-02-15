@@ -90,7 +90,7 @@ internal static class Program
     {
         MessageBox.Show(
             $"{title}.{Environment.NewLine}{Environment.NewLine}{ex}",
-            "INGNITON Error",
+            "Ignition Error",
             MessageBoxButtons.OK,
             MessageBoxIcon.Error);
     }

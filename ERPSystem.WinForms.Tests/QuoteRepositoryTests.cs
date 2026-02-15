@@ -701,6 +701,58 @@ public class QuoteRepositoryTests
         File.Delete(dbPath);
     }
 
+
+    [Fact]
+    public async Task PassToPurchasingAsync_RetainsLineItemsAndBlobAttachments()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-purchasing-linkage-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+        var quote = new Quote
+        {
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            LifecycleQuoteId = "Q-PUR-LINK-001",
+            Status = QuoteStatus.Won,
+            LineItems =
+            [
+                new QuoteLineItem
+                {
+                    Description = "Assembly",
+                    Quantity = 1,
+                    BlobAttachments =
+                    [
+                        new QuoteBlobAttachment
+                        {
+                            BlobType = QuoteBlobType.Technical,
+                            FileName = "assembly.pdf",
+                            Extension = ".pdf",
+                            BlobData = [1, 2, 3, 4],
+                            UploadedUtc = DateTime.UtcNow
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var id = await repository.SaveQuoteAsync(quote);
+        var handoff = await repository.PassToPurchasingAsync(id, "buyer.user");
+
+        Assert.True(handoff.Success);
+
+        var loaded = await repository.GetQuoteAsync(id);
+        Assert.NotNull(loaded);
+        var line = Assert.Single(loaded!.LineItems);
+        Assert.Single(line.BlobAttachments);
+
+        var linkage = await repository.ValidateQuoteFileLinkageAsync(id);
+        Assert.True(linkage.Success);
+
+        File.Delete(dbPath);
+    }
+
     private static async Task<int> CountByQuoteIdAsync(SqliteConnection connection, string tableName, int quoteId)
     {
         await using var command = connection.CreateCommand();
