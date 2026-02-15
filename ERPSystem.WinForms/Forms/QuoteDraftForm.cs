@@ -17,13 +17,14 @@ public class QuoteDraftForm : Form
     private const float MaxScaledFontSize = 13f;
     private const int ResizeGripSize = 16;
     private const int MinimumTextBoxHeight = 28;
+    private const int StandardGap = 8;
     private readonly QuoteRepository _quoteRepository;
     private readonly bool _canViewPricing;
     private readonly string _uploadedBy;
     private readonly ComboBox _customerPicker = new() { Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox _customerPartPo = new() { Width = 220, PlaceholderText = "Customer Part PO" };
     private readonly TextBox _quoteLifecycleId = new() { Width = 220, ReadOnly = true };
-    private readonly FlowLayoutPanel _lineItemsPanel = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(4) };
+    private readonly FlowLayoutPanel _lineItemsPanel = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(StandardGap) };
     private readonly Label _totalHoursValue = new() { AutoSize = true, Text = "0.00" };
     private readonly Label _masterTotalValue = new() { AutoSize = true, Text = "$0.00" };
     private readonly Quote? _editingQuote;
@@ -48,7 +49,7 @@ public class QuoteDraftForm : Form
         WindowState = FormWindowState.Maximized;
         StartPosition = FormStartPosition.CenterParent;
 
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(10) };
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(12) };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -60,7 +61,7 @@ public class QuoteDraftForm : Form
             AutoSize = true,
             ColumnCount = 4,
             RowCount = 2,
-            Margin = new Padding(0, 0, 0, 8)
+            Margin = new Padding(0, 0, 0, StandardGap)
         };
         for (var i = 0; i < header.ColumnCount; i++)
         {
@@ -71,7 +72,8 @@ public class QuoteDraftForm : Form
             header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         }
 
-        var addLineButton = new Button { Text = "Add Line Item", AutoSize = true, Anchor = AnchorStyles.Left };
+        var addLineButton = BuildCompactIconButton("➕ Add", Color.FromArgb(37, 99, 235));
+        addLineButton.Anchor = AnchorStyles.Left;
         addLineButton.Click += (_, _) => AddLineItemCard();
         header.Controls.Add(NewFieldPanel("Customer", _customerPicker), 0, 0);
         header.Controls.Add(NewFieldPanel("Customer Part PO", _customerPartPo), 1, 0);
@@ -85,19 +87,20 @@ public class QuoteDraftForm : Form
         totalsPanel.Controls.Add(new Label { Text = "Total Cost:", AutoSize = true, Margin = new Padding(20, 8, 0, 0) });
         totalsPanel.Controls.Add(_masterTotalValue);
 
-        var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, AutoSize = true };
-        var saveButton = new Button { Text = "Save Quote", AutoSize = true };
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Margin = new Padding(0, StandardGap, 0, 0) };
+        var saveButton = BuildCompactIconButton("💾 Save", Color.FromArgb(22, 163, 74));
         saveButton.Click += async (_, _) => await SaveQuoteAsync();
         buttons.Controls.Add(saveButton);
 
         if (_editingQuote is not null)
         {
-            var deleteButton = new Button { Text = "Delete Quote", AutoSize = true, BackColor = Color.Firebrick, ForeColor = Color.White };
+            var deleteButton = BuildCompactIconButton("🗑 Delete", Color.Firebrick);
             deleteButton.Click += async (_, _) => await DeleteQuoteAsync();
             buttons.Controls.Add(deleteButton);
         }
 
-        root.Controls.Add(header, 0, 0);
+        var quoteInfoSection = BuildSectionGroup("Quote Header", header);
+        root.Controls.Add(quoteInfoSection, 0, 0);
         root.Controls.Add(_lineItemsPanel, 0, 1);
         root.Controls.Add(totalsPanel, 0, 2);
         root.Controls.Add(buttons, 0, 3);
@@ -211,8 +214,8 @@ public class QuoteDraftForm : Form
         {
             AutoSize = false,
             BorderStyle = BorderStyle.FixedSingle,
-            Margin = new Padding(0, 0, 0, 10),
-            Padding = new Padding(6),
+            Margin = new Padding(0, 0, 0, StandardGap),
+            Padding = new Padding(StandardGap),
             BackColor = index % 2 == 0 ? Color.FromArgb(245, 248, 252) : Color.FromArgb(234, 243, 250),
             MinimumSize = new Size(MinimumLineItemWidth, MinimumLineItemHeight)
         };
@@ -227,7 +230,7 @@ public class QuoteDraftForm : Form
         var title = new Label { AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
         layout.Controls.Add(title, 0, 0);
 
-        var detailsGrid = new TableLayoutPanel { AutoSize = false, ColumnCount = 4, Dock = DockStyle.Fill, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 2, 0, 2) };
+        var detailsGrid = new TableLayoutPanel { AutoSize = false, ColumnCount = 4, Dock = DockStyle.Fill, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, StandardGap / 2, 0, StandardGap / 2) };
         detailsGrid.RowCount = 1;
         detailsGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         for (var i = 0; i < 4; i++) detailsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
@@ -235,7 +238,7 @@ public class QuoteDraftForm : Form
         var drawingNumber = NewDecimalDisabledField(model.DrawingNumber);
         var drawingName = NewDecimalDisabledField(model.DrawingName);
         var revision = NewDecimalDisabledField(model.Revision);
-        var removeButton = new Button { Text = "Remove Line Item", AutoSize = true, BackColor = Color.FromArgb(214, 77, 77), ForeColor = Color.White };
+        var removeButton = BuildCompactIconButton("🗑 Remove", Color.FromArgb(214, 77, 77));
         removeButton.Click += async (_, _) => await RemoveLineItemAsync(model, cardPanel);
 
         detailsGrid.Controls.Add(NewFieldPanel("Drawing Number", drawingNumber), 0, 0);
@@ -301,29 +304,22 @@ public class QuoteDraftForm : Form
         var detailsSection = BuildCompactSection("Details", detailsGrid);
         var costsSection = BuildCompactSection("Costs", costsRow);
 
-        var blobGrid = new TableLayoutPanel
+        var attachmentsFlow = new FlowLayoutPanel
         {
-            AutoSize = false,
-            ColumnCount = 5,
-            RowCount = 2,
             Dock = DockStyle.Fill,
-            Margin = new Padding(0, 2, 0, 2),
-            GrowStyle = TableLayoutPanelGrowStyle.FixedSize
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            Margin = new Padding(0, StandardGap / 2, 0, StandardGap / 2),
+            Padding = Padding.Empty
         };
-        for (var i = 0; i < 5; i++)
-        {
-            blobGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f));
-        }
+        attachmentsFlow.Controls.Add(drawingDocs.SectionPanel);
+        attachmentsFlow.Controls.Add(modelDocs.SectionPanel);
+        attachmentsFlow.Controls.Add(materialDocs.SectionPanel);
+        attachmentsFlow.Controls.Add(toolingDocs.SectionPanel);
+        attachmentsFlow.Controls.Add(postOpDocs.SectionPanel);
 
-        blobGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        blobGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        blobGrid.Controls.Add(drawingDocs.SectionPanel, 0, 0);
-        blobGrid.Controls.Add(modelDocs.SectionPanel, 1, 0);
-        blobGrid.Controls.Add(materialDocs.SectionPanel, 2, 0);
-        blobGrid.Controls.Add(toolingDocs.SectionPanel, 3, 0);
-        blobGrid.Controls.Add(postOpDocs.SectionPanel, 4, 0);
-
-        var attachmentsSection = BuildCompactSection("Attachments", blobGrid);
+        var attachmentsSection = BuildCompactSection("Attachments", attachmentsFlow);
 
         contentGrid.Controls.Add(detailsSection, 0, 0);
         contentGrid.Controls.Add(costsSection, 0, 1);
@@ -489,23 +485,30 @@ public class QuoteDraftForm : Form
         {
             AutoSize = false,
             BorderStyle = BorderStyle.FixedSingle,
-            Padding = new Padding(3),
-            Margin = new Padding(1),
+            Padding = new Padding(StandardGap / 2),
+            Margin = new Padding(StandardGap / 2),
             Dock = DockStyle.Fill,
             MinimumSize = new Size(MinimumBlobAreaWidth, MinimumBlobAreaHeight)
         };
         panel.SuspendLayout();
-        var titleLabel = new Label { Text = title, AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
-        var list = new ListView { Dock = DockStyle.Fill, View = View.List, HeaderStyle = ColumnHeaderStyle.None };
+        var titleLabel = new Label { Text = title, AutoSize = true, Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 0, 0, 4) };
+        var list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = false, HeaderStyle = ColumnHeaderStyle.Nonclickable, HideSelection = false };
+        list.Columns.Add("File", 180);
+        list.Columns.Add("Size", 90, HorizontalAlignment.Right);
 
-        var buttons = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = new Padding(0, 2, 0, 0) };
-        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34f));
-        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33f));
-        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33f));
-        buttons.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        var upload = new Button { Text = "Upload", Dock = DockStyle.Fill, BackColor = Color.FromArgb(52, 152, 219), ForeColor = Color.White, Margin = new Padding(0, 0, 2, 0) };
-        var delete = new Button { Text = "Delete", Dock = DockStyle.Fill, Margin = new Padding(2, 0, 2, 0) };
-        var download = new Button { Text = "Download", Dock = DockStyle.Fill, Margin = new Padding(2, 0, 0, 0) };
+        list.Resize += (_, _) => ResizeBlobListColumns(list);
+
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            AutoSize = true,
+            Margin = new Padding(0, 4, 0, 0)
+        };
+        var upload = BuildCompactIconButton("📤 Upload", Color.FromArgb(52, 152, 219));
+        var delete = BuildCompactIconButton("🗑 Delete", Color.FromArgb(107, 114, 128));
+        var download = BuildCompactIconButton("📥 Download", Color.FromArgb(71, 85, 105));
 
         upload.Click += async (_, _) => await UploadBlobAsync(model, blobType);
         delete.Click += async (_, _) => await DeleteBlobAsync(model, blobType, list.SelectedItems.Count > 0 ? list.SelectedItems[0].Tag as QuoteBlobAttachment : null);
@@ -520,11 +523,11 @@ public class QuoteDraftForm : Form
         };
         list.DragDrop += async (_, e) => await HandleBlobDropAsync(model, blobType, e.Data?.GetData(DataFormats.FileDrop) as string[]);
 
-        buttons.Controls.Add(upload, 0, 0);
-        buttons.Controls.Add(delete, 1, 0);
-        buttons.Controls.Add(download, 2, 0);
+        buttons.Controls.Add(upload);
+        buttons.Controls.Add(delete);
+        buttons.Controls.Add(download);
 
-        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty };
+        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty, Padding = Padding.Empty };
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -650,16 +653,76 @@ public class QuoteDraftForm : Form
             list.Items.Clear();
             foreach (var attachment in card.Model.BlobAttachments.Where(x => x.BlobType == blobType).OrderBy(x => x.FileName))
             {
-                list.Items.Add(new ListViewItem(attachment.FileName) { Tag = attachment });
+                var item = new ListViewItem(attachment.FileName) { Tag = attachment };
+                item.SubItems.Add(FormatFileSize(attachment.FileSizeBytes));
+                list.Items.Add(item);
             }
 
+            ResizeBlobListColumns(list);
             list.EndUpdate();
         }
     }
 
+
+    private static string FormatFileSize(long bytes)
+    {
+        var units = new[] { "B", "KB", "MB", "GB" };
+        double size = bytes;
+        var unit = 0;
+        while (size >= 1024 && unit < units.Length - 1)
+        {
+            size /= 1024;
+            unit++;
+        }
+
+        return $"{size:0.##} {units[unit]}";
+    }
+
+    private static void ResizeBlobListColumns(ListView list)
+    {
+        if (list.Columns.Count < 2)
+        {
+            return;
+        }
+
+        const int sizeColWidth = 90;
+        var fileColumn = Math.Max(120, list.ClientSize.Width - sizeColWidth - 4);
+        list.Columns[0].Width = fileColumn;
+        list.Columns[1].Width = sizeColWidth;
+    }
+
+    private static Button BuildCompactIconButton(string text, Color backColor)
+        => new()
+        {
+            Text = text,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(8, 4, 8, 4),
+            Margin = new Padding(4, 0, 4, 0),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = backColor,
+            ForeColor = Color.White,
+            MinimumSize = new Size(88, 30)
+        };
+
+    private Control BuildSectionGroup(string title, Control body)
+    {
+        var group = new GroupBox
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            Text = title,
+            Padding = new Padding(StandardGap),
+            Margin = new Padding(0, 0, 0, StandardGap)
+        };
+        body.Dock = DockStyle.Fill;
+        group.Controls.Add(body);
+        return group;
+    }
+
     private Panel BuildCompactSection(string title, Control content)
     {
-        var sectionPanel = new Panel { Dock = DockStyle.Top, AutoSize = true, Margin = new Padding(0, 0, 0, 3), Padding = Padding.Empty };
+        var sectionPanel = new Panel { Dock = DockStyle.Top, AutoSize = true, Margin = new Padding(0, 0, 0, StandardGap), Padding = Padding.Empty };
         var sectionGrid = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty, Padding = Padding.Empty };
         sectionGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         sectionGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
