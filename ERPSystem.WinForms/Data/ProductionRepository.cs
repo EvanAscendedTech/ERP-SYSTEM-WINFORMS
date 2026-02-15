@@ -58,7 +58,8 @@ public class ProductionRepository
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 MachineCode TEXT NOT NULL UNIQUE,
                 Description TEXT NOT NULL,
-                DailyCapacityHours INTEGER NOT NULL DEFAULT 8
+                DailyCapacityHours INTEGER NOT NULL DEFAULT 8,
+                MachineType TEXT NOT NULL DEFAULT 'Other'
             );
 
             CREATE TABLE IF NOT EXISTS JobMachineAssignments (
@@ -111,6 +112,7 @@ public class ProductionRepository
         await EnsureColumnExistsAsync(connection, "ProductionJobs", "CompletedUtc", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "ProductionJobs", "CompletedByUserId", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "ProductionJobs", "EstimatedDurationHours", "INTEGER NOT NULL DEFAULT 8");
+        await EnsureColumnExistsAsync(connection, "Machines", "MachineType", "TEXT NOT NULL DEFAULT 'Other'");
 
         await EnsureIndexesAsync(connection);
         await EnsureTriggersAsync(connection);
@@ -298,7 +300,7 @@ public class ProductionRepository
         await connection.OpenAsync();
 
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id, MachineCode, Description, DailyCapacityHours FROM Machines ORDER BY MachineCode";
+        command.CommandText = "SELECT Id, MachineCode, Description, DailyCapacityHours, MachineType FROM Machines ORDER BY MachineCode";
 
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
@@ -308,7 +310,8 @@ public class ProductionRepository
                 Id = reader.GetInt32(0),
                 MachineCode = reader.GetString(1),
                 Description = reader.GetString(2),
-                DailyCapacityHours = reader.GetInt32(3)
+                DailyCapacityHours = reader.GetInt32(3),
+                MachineType = reader.IsDBNull(4) ? "Other" : reader.GetString(4)
             });
         }
 
@@ -322,15 +325,17 @@ public class ProductionRepository
 
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            INSERT INTO Machines (MachineCode, Description, DailyCapacityHours)
-            VALUES ($code, $description, $capacity)
+            INSERT INTO Machines (MachineCode, Description, DailyCapacityHours, MachineType)
+            VALUES ($code, $description, $capacity, $machineType)
             ON CONFLICT(MachineCode) DO UPDATE SET
                 Description = excluded.Description,
-                DailyCapacityHours = excluded.DailyCapacityHours;";
+                DailyCapacityHours = excluded.DailyCapacityHours,
+                MachineType = excluded.MachineType;";
 
         command.Parameters.AddWithValue("$code", machine.MachineCode.Trim());
         command.Parameters.AddWithValue("$description", machine.Description.Trim());
         command.Parameters.AddWithValue("$capacity", Math.Clamp(machine.DailyCapacityHours, 0, 24));
+        command.Parameters.AddWithValue("$machineType", string.IsNullOrWhiteSpace(machine.MachineType) ? "Other" : machine.MachineType.Trim());
         await command.ExecuteNonQueryAsync();
 
         if (_realtimeDataService is not null)
@@ -369,6 +374,44 @@ public class ProductionRepository
         }
 
         return schedules;
+    }
+
+    public async Task<string> GenerateNextMachineCodeAsync()
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT MachineCode
+            FROM Machines
+            WHERE MachineCode LIKE 'MI-%';";
+
+        var usedNumbers = new HashSet<int>();
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var code = reader.GetString(0);
+            if (!code.StartsWith("MI-", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var suffix = code[3..];
+            if (suffix.Length == 6 && int.TryParse(suffix, NumberStyles.None, CultureInfo.InvariantCulture, out var number) && number > 0)
+            {
+                usedNumbers.Add(number);
+            }
+        }
+
+        var next = 1;
+        while (usedNumbers.Contains(next))
+        {
+            next++;
+        }
+
+        return $"MI-{next:D6}";
     }
 
     public async Task<(bool Success, string Message)> AssignJobToMachineAsync(string jobNumber, string machineCode, int durationHours)

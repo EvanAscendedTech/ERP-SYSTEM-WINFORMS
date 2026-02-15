@@ -86,7 +86,8 @@ public class ProductionRepositoryTests
         {
             MachineCode = "MC-01",
             Description = "CNC A",
-            DailyCapacityHours = 8
+            DailyCapacityHours = 8,
+            MachineType = "Mill"
         });
 
         await repository.SaveJobAsync(new ProductionJob
@@ -110,6 +111,47 @@ public class ProductionRepositoryTests
 
         File.Delete(dbPath);
     }
+
+
+    [Fact]
+    public async Task GenerateNextMachineCodeAsync_ReturnsSequentialMiCodeWithoutDuplicates()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-prod-machinecode-{Guid.NewGuid():N}.db");
+        var repository = new ProductionRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        await repository.SaveMachineAsync(new Machine { MachineCode = "MI-000001", Description = "First", DailyCapacityHours = 8, MachineType = "Mill" });
+        await repository.SaveMachineAsync(new Machine { MachineCode = "MI-000002", Description = "Second", DailyCapacityHours = 8, MachineType = "Lathe" });
+        await repository.SaveMachineAsync(new Machine { MachineCode = "MI-000004", Description = "Fourth", DailyCapacityHours = 8, MachineType = "Wire EDM" });
+
+        var next = await repository.GenerateNextMachineCodeAsync();
+
+        Assert.Equal("MI-000003", next);
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task SaveMachineAsync_PersistsMachineType()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-prod-machinetype-{Guid.NewGuid():N}.db");
+        var repository = new ProductionRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        await repository.SaveMachineAsync(new Machine
+        {
+            MachineCode = "MI-000101",
+            Description = "5-axis machining center",
+            DailyCapacityHours = 10,
+            MachineType = "5-Axis Machining Center"
+        });
+
+        var loaded = Assert.Single(await repository.GetMachinesAsync());
+        Assert.Equal("5-Axis Machining Center", loaded.MachineType);
+
+        File.Delete(dbPath);
+    }
+
 
 
     [Fact]
