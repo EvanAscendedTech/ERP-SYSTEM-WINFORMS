@@ -1,3 +1,4 @@
+using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
 
@@ -8,30 +9,70 @@ public class SettingsControl : UserControl, IRealtimeDataControl
     private readonly AppSettingsService _settingsService;
     private readonly bool _canManageSettings;
     private readonly Action<AppSettings>? _settingsChanged;
+    private readonly Action<AppTheme>? _themeChanged;
 
     private readonly TextBox _companyNameInput = new() { Width = 320 };
     private readonly NumericUpDown _autoRefreshInput = new() { Minimum = 5, Maximum = 600, Width = 120 };
     private readonly CheckBox _notificationsInput = new() { Text = "Enable notifications", AutoSize = true };
-    private readonly TextBox _themeInput = new() { Width = 160 };
     private readonly TextBox _archivePathInput = new() { Width = 320 };
     private readonly PictureBox _companyLogoPreview = new() { Width = 88, Height = 88, SizeMode = PictureBoxSizeMode.Zoom, BorderStyle = BorderStyle.FixedSingle };
     private readonly Label _feedback = new() { AutoSize = true };
+    private readonly Label _themeValueLabel = new() { AutoSize = true, Margin = new Padding(0, 8, 8, 0) };
+    private readonly Button _toggleThemeButton = new() { AutoSize = true };
+    private readonly UsersControl _usersControl;
 
     private AppSettings _settings = new();
+    private AppTheme _currentTheme;
 
-    public SettingsControl(AppSettingsService settingsService, bool canManageSettings, Action<AppSettings>? settingsChanged = null)
+    public SettingsControl(
+        AppSettingsService settingsService,
+        UserManagementRepository userRepository,
+        UserAccount currentUser,
+        bool canManageSettings,
+        Action<AppSettings>? settingsChanged = null,
+        AppTheme currentTheme = AppTheme.Dark,
+        Action<AppTheme>? themeChanged = null)
     {
         _settingsService = settingsService;
         _canManageSettings = canManageSettings;
         _settingsChanged = settingsChanged;
+        _currentTheme = currentTheme;
+        _themeChanged = themeChanged;
         Dock = DockStyle.Fill;
 
+        _usersControl = new UsersControl(userRepository, currentUser, () => { }) { Dock = DockStyle.Fill };
+
+        var tabs = new TabControl { Dock = DockStyle.Fill };
+        var generalTab = new TabPage("General Settings");
+        var accessTab = new TabPage("User Access");
+
+        generalTab.Controls.Add(BuildGeneralSettingsPanel());
+        accessTab.Controls.Add(_usersControl);
+
+        tabs.TabPages.Add(generalTab);
+        tabs.TabPages.Add(accessTab);
+
+        Controls.Add(tabs);
+
+        _ = LoadSettingsAsync();
+        UpdateThemeControls();
+    }
+
+    private Control BuildGeneralSettingsPanel()
+    {
+        var panel = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
         var form = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(12), ColumnCount = 2 };
         form.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         form.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
         AddRow(form, 0, "Company Name", _companyNameInput);
-        AddRow(form, 1, "Theme", _themeInput);
+
+        _toggleThemeButton.Click += (_, _) => ToggleTheme();
+        var themeRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
+        themeRow.Controls.Add(_themeValueLabel);
+        themeRow.Controls.Add(_toggleThemeButton);
+        AddRow(form, 1, "Theme", themeRow);
+
         AddRow(form, 2, "Auto Refresh Seconds", _autoRefreshInput);
         AddRow(form, 3, "Archive Path", _archivePathInput);
         AddRow(form, 4, "", _notificationsInput);
@@ -61,8 +102,8 @@ public class SettingsControl : UserControl, IRealtimeDataControl
             }
         }
 
-        Controls.Add(form);
-        _ = LoadSettingsAsync();
+        panel.Controls.Add(form);
+        return panel;
     }
 
     private static void AddRow(TableLayoutPanel panel, int row, string label, Control control)
@@ -76,11 +117,33 @@ public class SettingsControl : UserControl, IRealtimeDataControl
     {
         _settings = await _settingsService.LoadAsync();
         _companyNameInput.Text = _settings.CompanyName;
-        _themeInput.Text = _settings.Theme;
         _autoRefreshInput.Value = Math.Clamp(_settings.AutoRefreshSeconds, (int)_autoRefreshInput.Minimum, (int)_autoRefreshInput.Maximum);
         _archivePathInput.Text = _settings.DefaultArchivePath;
         _notificationsInput.Checked = _settings.EnableNotifications;
         SetLogoPreview(_settings.CompanyLogo);
+
+        _currentTheme = ParseTheme(_settings.Theme);
+        UpdateThemeControls();
+    }
+
+    private void ToggleTheme()
+    {
+        _currentTheme = _currentTheme == AppTheme.Dark ? AppTheme.Light : AppTheme.Dark;
+        _settings.Theme = _currentTheme == AppTheme.Dark ? "Dark" : "Light";
+        UpdateThemeControls();
+        _themeChanged?.Invoke(_currentTheme);
+    }
+
+    private void UpdateThemeControls()
+    {
+        _themeValueLabel.Text = _currentTheme == AppTheme.Dark ? "Dark" : "Light";
+        _toggleThemeButton.Text = _currentTheme == AppTheme.Dark ? "Switch to Light" : "Switch to Dark";
+        _toggleThemeButton.Enabled = _canManageSettings;
+    }
+
+    private static AppTheme ParseTheme(string? theme)
+    {
+        return string.Equals(theme, "dark", StringComparison.OrdinalIgnoreCase) ? AppTheme.Dark : AppTheme.Light;
     }
 
     private void UploadCompanyLogo()
@@ -112,15 +175,20 @@ public class SettingsControl : UserControl, IRealtimeDataControl
     private async Task SaveSettingsAsync()
     {
         _settings.CompanyName = _companyNameInput.Text.Trim();
-        _settings.Theme = _themeInput.Text.Trim();
+        _settings.Theme = _currentTheme == AppTheme.Dark ? "Dark" : "Light";
         _settings.AutoRefreshSeconds = (int)_autoRefreshInput.Value;
         _settings.DefaultArchivePath = _archivePathInput.Text.Trim();
         _settings.EnableNotifications = _notificationsInput.Checked;
 
         await _settingsService.SaveAsync(_settings);
         _settingsChanged?.Invoke(_settings);
+        _themeChanged?.Invoke(_currentTheme);
         _feedback.Text = "Settings saved.";
     }
 
-    public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => LoadSettingsAsync();
+    public async Task RefreshDataAsync(bool fromFailSafeCheckpoint)
+    {
+        await LoadSettingsAsync();
+        await _usersControl.RefreshDataAsync(fromFailSafeCheckpoint);
+    }
 }

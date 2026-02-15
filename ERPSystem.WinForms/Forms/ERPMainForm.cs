@@ -57,12 +57,10 @@ public partial class ERPMainForm : Form
             ["Quality"] = btnQuality,
             ["Inspection"] = btnInspection,
             ["Shipping"] = btnShipping,
-            ["Users"] = btnUsers,
-            ["Settings"] = btnSettings
+            ["Settings"] = btnSettingsMenu
         };
 
         _themeManager.ThemeChanged += (_, _) => ApplyTheme();
-        btnUsers.Visible = _currentUser.Roles.Any(r => string.Equals(r.Name, "Admin", StringComparison.OrdinalIgnoreCase) || string.Equals(r.Name, "Administrator", StringComparison.OrdinalIgnoreCase));
         WireEvents();
         _ = LoadAndApplySettingsAsync();
         InitializeSyncClock();
@@ -334,6 +332,7 @@ public partial class ERPMainForm : Form
     private void ApplySettings(Models.AppSettings settings)
     {
         _appSettings = settings;
+        ApplyThemeFromSettings(settings.Theme);
         lblAppTitle.Text = string.IsNullOrWhiteSpace(settings.CompanyName) ? "Company" : settings.CompanyName;
         picCompanyLogo.Image?.Dispose();
         picCompanyLogo.Image = null;
@@ -345,6 +344,22 @@ public partial class ERPMainForm : Form
         }
     }
 
+    private void OnThemeChanged(AppTheme theme)
+    {
+        ApplyThemeFromSettings(theme == AppTheme.Dark ? "Dark" : "Light");
+    }
+
+    private void ApplyThemeFromSettings(string? themeName)
+    {
+        var targetTheme = string.Equals(themeName, "dark", StringComparison.OrdinalIgnoreCase) ? AppTheme.Dark : AppTheme.Light;
+        if (_themeManager.CurrentTheme == targetTheme)
+        {
+            return;
+        }
+
+        _themeManager.ToggleTheme();
+    }
+
     private void WireEvents()
     {
         btnDashboard.Click += (_, _) => LoadSection("Dashboard");
@@ -354,14 +369,7 @@ public partial class ERPMainForm : Form
         btnQuality.Click += (_, _) => LoadSection("Quality");
         btnInspection.Click += (_, _) => LoadSection("Inspection");
         btnShipping.Click += (_, _) => LoadSection("Shipping");
-        btnUsers.Click += (_, _) => LoadSection("Users");
-        btnSettings.Click += (_, _) => LoadSection("Settings");
-
-        btnThemeToggle.Click += (_, _) =>
-        {
-            _themeManager.ToggleTheme();
-            btnThemeToggle.Text = _themeManager.CurrentTheme == AppTheme.Dark ? "☾ Dark" : "☀ Light";
-        };
+        btnSettingsMenu.Click += (_, _) => LoadSection("Settings");
     }
 
     private void OpenDashboardTarget(DashboardNavigationTarget target)
@@ -414,7 +422,6 @@ public partial class ERPMainForm : Form
         mainContentPanel.Controls.Add(control);
         mainContentPanel.ResumeLayout();
 
-        lblSection.Text = key;
         MarkActiveButton(key);
         ApplyTheme();
     }
@@ -430,8 +437,14 @@ public partial class ERPMainForm : Form
             "Quality" => new QualityControl(_prodRepo, _jobFlow, _currentUser, LoadSection),
             "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, _currentUser, LoadSection),
             "Shipping" => new ShippingControl(_prodRepo, _jobFlow, _currentUser, LoadSection),
-            "Users" => new UsersControl(_userRepo, _currentUser, () => { }),
-            "Settings" => new SettingsControl(_settings, canManageSettings: true, settingsChanged: ApplySettings),
+            "Settings" => new SettingsControl(
+                _settings,
+                _userRepo,
+                _currentUser,
+                canManageSettings: true,
+                settingsChanged: ApplySettings,
+                currentTheme: _themeManager.CurrentTheme,
+                themeChanged: OnThemeChanged),
             _ => BuildPlaceholder("Not Found", "The requested section is not available.")
         };
     }
@@ -491,7 +504,6 @@ public partial class ERPMainForm : Form
         tabStripPanel.BackColor = palette.Panel;
         mainContentPanel.BackColor = palette.Background;
         lblAppTitle.ForeColor = palette.TextPrimary;
-        lblSection.ForeColor = palette.TextPrimary;
         lblSyncClock.ForeColor = palette.TextSecondary;
         lblSaveClock.ForeColor = palette.TextSecondary;
         foreach (Control c in onlineUsersPanel.Controls)
