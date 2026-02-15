@@ -34,7 +34,8 @@ public class ProductionRepository
                 StartedUtc TEXT NULL,
                 StartedByUserId TEXT NULL,
                 CompletedUtc TEXT NULL,
-                CompletedByUserId TEXT NULL
+                CompletedByUserId TEXT NULL,
+                EstimatedDurationHours INTEGER NOT NULL DEFAULT 8
             );
 
             CREATE TABLE IF NOT EXISTS MachineSchedules (
@@ -44,6 +45,23 @@ public class ProductionRepository
                 ShiftStartUtc TEXT NOT NULL,
                 ShiftEndUtc TEXT NOT NULL,
                 IsMaintenanceWindow INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS Machines (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                MachineCode TEXT NOT NULL UNIQUE,
+                Description TEXT NOT NULL,
+                DailyCapacityHours INTEGER NOT NULL DEFAULT 8
+            );
+
+            CREATE TABLE IF NOT EXISTS JobMachineAssignments (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                JobNumber TEXT NOT NULL UNIQUE,
+                MachineCode TEXT NOT NULL,
+                AssignedUtc TEXT NOT NULL,
+                StartUtc TEXT NOT NULL,
+                EndUtc TEXT NOT NULL,
+                DurationHours INTEGER NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS InventoryItems (
@@ -65,6 +83,7 @@ public class ProductionRepository
         await EnsureColumnExistsAsync(connection, "ProductionJobs", "StartedByUserId", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "ProductionJobs", "CompletedUtc", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "ProductionJobs", "CompletedByUserId", "TEXT NULL");
+        await EnsureColumnExistsAsync(connection, "ProductionJobs", "EstimatedDurationHours", "INTEGER NOT NULL DEFAULT 8");
     }
 
     public async Task<int> SaveJobAsync(ProductionJob job)
@@ -74,8 +93,8 @@ public class ProductionRepository
 
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            INSERT INTO ProductionJobs (JobNumber, ProductName, PlannedQuantity, ProducedQuantity, DueDateUtc, Status, SourceQuoteId, QuoteLifecycleId, StartedUtc, StartedByUserId, CompletedUtc, CompletedByUserId)
-            VALUES ($jobNumber, $productName, $plannedQty, $producedQty, $dueDateUtc, $status, $sourceQuoteId, $quoteLifecycleId, $startedUtc, $startedByUserId, $completedUtc, $completedByUserId)
+            INSERT INTO ProductionJobs (JobNumber, ProductName, PlannedQuantity, ProducedQuantity, DueDateUtc, Status, SourceQuoteId, QuoteLifecycleId, StartedUtc, StartedByUserId, CompletedUtc, CompletedByUserId, EstimatedDurationHours)
+            VALUES ($jobNumber, $productName, $plannedQty, $producedQty, $dueDateUtc, $status, $sourceQuoteId, $quoteLifecycleId, $startedUtc, $startedByUserId, $completedUtc, $completedByUserId, $estimatedDurationHours)
             ON CONFLICT(JobNumber) DO UPDATE SET
                 ProductName = excluded.ProductName,
                 PlannedQuantity = excluded.PlannedQuantity,
@@ -87,7 +106,8 @@ public class ProductionRepository
                 StartedUtc = excluded.StartedUtc,
                 StartedByUserId = excluded.StartedByUserId,
                 CompletedUtc = excluded.CompletedUtc,
-                CompletedByUserId = excluded.CompletedByUserId;
+                CompletedByUserId = excluded.CompletedByUserId,
+                EstimatedDurationHours = excluded.EstimatedDurationHours;
 
             SELECT Id FROM ProductionJobs WHERE JobNumber = $jobNumber;";
         command.Parameters.AddWithValue("$jobNumber", job.JobNumber);
@@ -102,6 +122,7 @@ public class ProductionRepository
         command.Parameters.AddWithValue("$startedByUserId", job.StartedByUserId ?? (object)DBNull.Value);
         command.Parameters.AddWithValue("$completedUtc", job.CompletedUtc?.ToString("O") ?? (object)DBNull.Value);
         command.Parameters.AddWithValue("$completedByUserId", job.CompletedByUserId ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$estimatedDurationHours", Math.Clamp(job.EstimatedDurationHours, 1, 24 * 14));
 
         var id = Convert.ToInt32(await command.ExecuteScalarAsync());
 
@@ -122,7 +143,7 @@ public class ProductionRepository
 
         await using var command = connection.CreateCommand();
         command.CommandText = @"SELECT Id, JobNumber, ProductName, PlannedQuantity, ProducedQuantity, DueDateUtc, Status,
-                                       SourceQuoteId, QuoteLifecycleId, StartedUtc, StartedByUserId, CompletedUtc, CompletedByUserId
+                                       SourceQuoteId, QuoteLifecycleId, StartedUtc, StartedByUserId, CompletedUtc, CompletedByUserId, EstimatedDurationHours
                                 FROM ProductionJobs ORDER BY DueDateUtc";
 
         await using var reader = await command.ExecuteReaderAsync();
@@ -142,11 +163,211 @@ public class ProductionRepository
                 StartedUtc = reader.IsDBNull(9) ? null : DateTime.Parse(reader.GetString(9)),
                 StartedByUserId = reader.IsDBNull(10) ? null : reader.GetString(10),
                 CompletedUtc = reader.IsDBNull(11) ? null : DateTime.Parse(reader.GetString(11)),
-                CompletedByUserId = reader.IsDBNull(12) ? null : reader.GetString(12)
+                CompletedByUserId = reader.IsDBNull(12) ? null : reader.GetString(12),
+                EstimatedDurationHours = reader.IsDBNull(13) ? 8 : reader.GetInt32(13)
             });
         }
 
         return jobs;
+    }
+
+    public async Task<IReadOnlyList<Machine>> GetMachinesAsync()
+    {
+        var machines = new List<Machine>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Id, MachineCode, Description, DailyCapacityHours FROM Machines ORDER BY MachineCode";
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            machines.Add(new Machine
+            {
+                Id = reader.GetInt32(0),
+                MachineCode = reader.GetString(1),
+                Description = reader.GetString(2),
+                DailyCapacityHours = reader.GetInt32(3)
+            });
+        }
+
+        return machines;
+    }
+
+    public async Task SaveMachineAsync(Machine machine)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO Machines (MachineCode, Description, DailyCapacityHours)
+            VALUES ($code, $description, $capacity)
+            ON CONFLICT(MachineCode) DO UPDATE SET
+                Description = excluded.Description,
+                DailyCapacityHours = excluded.DailyCapacityHours;";
+
+        command.Parameters.AddWithValue("$code", machine.MachineCode.Trim());
+        command.Parameters.AddWithValue("$description", machine.Description.Trim());
+        command.Parameters.AddWithValue("$capacity", Math.Clamp(machine.DailyCapacityHours, 0, 24));
+        await command.ExecuteNonQueryAsync();
+
+        if (_realtimeDataService is not null)
+        {
+            await _realtimeDataService.PublishChangeAsync("Machines", "save");
+        }
+    }
+
+    public async Task<IReadOnlyList<MachineSchedule>> GetMachineSchedulesAsync(string machineCode)
+    {
+        var schedules = new List<MachineSchedule>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT Id, MachineCode, AssignedJobNumber, ShiftStartUtc, ShiftEndUtc, IsMaintenanceWindow
+            FROM MachineSchedules
+            WHERE MachineCode = $machineCode
+            ORDER BY ShiftStartUtc;";
+        command.Parameters.AddWithValue("$machineCode", machineCode);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            schedules.Add(new MachineSchedule
+            {
+                Id = reader.GetInt32(0),
+                MachineCode = reader.GetString(1),
+                AssignedJobNumber = reader.GetString(2),
+                ShiftStartUtc = DateTime.Parse(reader.GetString(3)),
+                ShiftEndUtc = DateTime.Parse(reader.GetString(4)),
+                IsMaintenanceWindow = reader.GetInt32(5) == 1
+            });
+        }
+
+        return schedules;
+    }
+
+    public async Task<(bool Success, string Message)> AssignJobToMachineAsync(string jobNumber, string machineCode, int durationHours)
+    {
+        var machines = await GetMachinesAsync();
+        var machine = machines.FirstOrDefault(x => string.Equals(x.MachineCode, machineCode, StringComparison.OrdinalIgnoreCase));
+        if (machine is null)
+        {
+            return (false, $"Machine {machineCode} was not found.");
+        }
+
+        if (machine.DailyCapacityHours <= 0)
+        {
+            return (false, $"Machine {machineCode} has no daily capacity configured.");
+        }
+
+        var jobs = await GetJobsAsync();
+        var job = jobs.FirstOrDefault(x => string.Equals(x.JobNumber, jobNumber, StringComparison.OrdinalIgnoreCase));
+        if (job is null)
+        {
+            return (false, $"Production job {jobNumber} was not found.");
+        }
+
+        var remainingHours = Math.Max(1, durationHours);
+        var scheduleRows = new List<(DateTime startUtc, DateTime endUtc)>();
+        var day = DateTime.UtcNow.Date;
+        var safetyCounter = 0;
+
+        var existingMachineSlots = (await GetMachineSchedulesAsync(machine.MachineCode)).ToList();
+
+        while (remainingHours > 0 && safetyCounter < 365)
+        {
+            safetyCounter++;
+            var dayStart = day;
+            var dayEnd = day.AddDays(1);
+
+            var usedHours = existingMachineSlots
+                .Where(slot => slot.ShiftStartUtc < dayEnd && slot.ShiftEndUtc > dayStart)
+                .Sum(slot => (slot.ShiftEndUtc - slot.ShiftStartUtc).TotalHours);
+
+            var availableHours = Math.Max(0, machine.DailyCapacityHours - (int)Math.Round(usedHours));
+            if (availableHours > 0)
+            {
+                var startOffset = Math.Min(machine.DailyCapacityHours, (int)Math.Round(usedHours));
+                var alloc = Math.Min(availableHours, remainingHours);
+                var startUtc = dayStart.AddHours(startOffset);
+                var endUtc = startUtc.AddHours(alloc);
+
+                scheduleRows.Add((startUtc, endUtc));
+                existingMachineSlots.Add(new MachineSchedule
+                {
+                    MachineCode = machine.MachineCode,
+                    AssignedJobNumber = jobNumber,
+                    ShiftStartUtc = startUtc,
+                    ShiftEndUtc = endUtc,
+                    IsMaintenanceWindow = false
+                });
+
+                remainingHours -= alloc;
+            }
+
+            day = day.AddDays(1);
+        }
+
+        if (remainingHours > 0 || scheduleRows.Count == 0)
+        {
+            return (false, $"Unable to allocate capacity for {jobNumber} on {machineCode}.");
+        }
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+
+        async Task ExecuteAsync(string sql, params (string name, object? value)[] parameters)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = sql;
+            foreach (var parameter in parameters)
+            {
+                cmd.Parameters.AddWithValue(parameter.name, parameter.value ?? DBNull.Value);
+            }
+
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        await ExecuteAsync("DELETE FROM MachineSchedules WHERE AssignedJobNumber = $jobNumber", ("$jobNumber", jobNumber));
+        await ExecuteAsync("DELETE FROM JobMachineAssignments WHERE JobNumber = $jobNumber", ("$jobNumber", jobNumber));
+
+        foreach (var slot in scheduleRows)
+        {
+            await ExecuteAsync(@"
+                INSERT INTO MachineSchedules (MachineCode, AssignedJobNumber, ShiftStartUtc, ShiftEndUtc, IsMaintenanceWindow)
+                VALUES ($machineCode, $jobNumber, $startUtc, $endUtc, 0)",
+                ("$machineCode", machine.MachineCode),
+                ("$jobNumber", jobNumber),
+                ("$startUtc", slot.startUtc.ToString("O")),
+                ("$endUtc", slot.endUtc.ToString("O")));
+        }
+
+        await ExecuteAsync(@"
+            INSERT INTO JobMachineAssignments (JobNumber, MachineCode, AssignedUtc, StartUtc, EndUtc, DurationHours)
+            VALUES ($jobNumber, $machineCode, $assignedUtc, $startUtc, $endUtc, $durationHours)",
+            ("$jobNumber", jobNumber),
+            ("$machineCode", machine.MachineCode),
+            ("$assignedUtc", DateTime.UtcNow.ToString("O")),
+            ("$startUtc", scheduleRows.Min(x => x.startUtc).ToString("O")),
+            ("$endUtc", scheduleRows.Max(x => x.endUtc).ToString("O")),
+            ("$durationHours", durationHours));
+
+        await transaction.CommitAsync();
+
+        if (_realtimeDataService is not null)
+        {
+            await _realtimeDataService.PublishChangeAsync("MachineSchedules", "save");
+        }
+
+        return (true, $"Assigned {jobNumber} to {machineCode} for {durationHours} hour(s).");
     }
 
     public async Task<(bool Success, string Message)> StartJobAsync(string jobNumber, QuoteStatus sourceQuoteStatus, int sourceQuoteId, string actorUserId)

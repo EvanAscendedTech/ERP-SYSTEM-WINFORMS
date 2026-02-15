@@ -63,4 +63,40 @@ public class ProductionRepositoryTests
 
         File.Delete(dbPath);
     }
+
+    [Fact]
+    public async Task AssignJobToMachineAsync_PersistsMachineAndCapacitySlots()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-prod-machine-{Guid.NewGuid():N}.db");
+        var repository = new ProductionRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        await repository.SaveMachineAsync(new Machine
+        {
+            MachineCode = "MC-01",
+            Description = "CNC A",
+            DailyCapacityHours = 8
+        });
+
+        await repository.SaveJobAsync(new ProductionJob
+        {
+            JobNumber = "JOB-300",
+            ProductName = "Valve",
+            PlannedQuantity = 12,
+            ProducedQuantity = 0,
+            DueDateUtc = DateTime.UtcNow.AddDays(2),
+            Status = ProductionJobStatus.Planned,
+            EstimatedDurationHours = 16
+        });
+
+        var result = await repository.AssignJobToMachineAsync("JOB-300", "MC-01", 16);
+        Assert.True(result.Success);
+
+        var schedules = await repository.GetMachineSchedulesAsync("MC-01");
+        Assert.Equal(2, schedules.Count);
+        Assert.All(schedules, slot => Assert.Equal("JOB-300", slot.AssignedJobNumber));
+        Assert.Equal(16, schedules.Sum(slot => (int)(slot.ShiftEndUtc - slot.ShiftStartUtc).TotalHours));
+
+        File.Delete(dbPath);
+    }
 }
