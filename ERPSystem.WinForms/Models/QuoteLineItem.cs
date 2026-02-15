@@ -5,7 +5,9 @@ public enum QuoteBlobType
     Technical = 0,
     MaterialPricing = 1,
     PostOpPricing = 2,
-    PurchaseDocumentation = 3
+    PurchaseDocumentation = 3,
+    ThreeDModel = 4,
+    ToolingDocumentation = 5
 }
 
 public class QuoteBlobAttachment
@@ -21,6 +23,7 @@ public class QuoteBlobAttachment
     public long FileSizeBytes { get; set; }
     public byte[] Sha256 { get; set; } = Array.Empty<byte>();
     public string UploadedBy { get; set; } = string.Empty;
+    public string StorageRelativePath { get; set; } = string.Empty;
     public byte[] BlobData { get; set; } = Array.Empty<byte>();
     public DateTime UploadedUtc { get; set; } = DateTime.UtcNow;
 }
