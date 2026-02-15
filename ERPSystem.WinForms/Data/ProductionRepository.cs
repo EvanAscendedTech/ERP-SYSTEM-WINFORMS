@@ -321,7 +321,7 @@ public class ProductionRepository
 
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
-        await using var transaction = await connection.BeginTransactionAsync();
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
 
         async Task ExecuteAsync(string sql, params (string name, object? value)[] parameters)
         {
