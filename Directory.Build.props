@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup Condition="'$(OS)' == 'Windows_NT' and '$(UseLocalAppDataBuildPaths)' != 'false'">
+    <!--
+      Avoid build failures like CS2012 when repositories live in OneDrive-synced folders.
+      Redirecting obj/bin to LocalAppData keeps compiler outputs out of synchronized paths
+      that may transiently lock files.
+    -->
+    <BaseIntermediateOutputPath>$(LocalAppData)\ERPSystemBuild\obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(LocalAppData)\ERPSystemBuild\bin\$(MSBuildProjectName)\</BaseOutputPath>
+  </PropertyGroup>
+</Project>
