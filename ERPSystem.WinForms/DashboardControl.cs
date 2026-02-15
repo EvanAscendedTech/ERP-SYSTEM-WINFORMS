@@ -143,6 +143,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         }
 
         var inProgressQuotes = quotes.Where(q => q.Status == QuoteStatus.InProgress).OrderBy(q => q.LastUpdatedUtc).ToList();
+        var completedQuotes = quotes.Where(q => q.Status == QuoteStatus.Completed).OrderByDescending(q => q.LastUpdatedUtc).ToList();
         var quoteExpiringSoon = inProgressQuotes.Where(IsQuoteExpiringSoon).ToList();
 
         var productionInProgress = jobs
@@ -156,6 +157,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         _glanceCards.SuspendLayout();
         _glanceCards.Controls.Clear();
         _glanceCards.Controls.Add(CreateGlanceCard("Quotes in progress", inProgressQuotes.Count.ToString()));
+        _glanceCards.Controls.Add(CreateGlanceCard("Quotes completed (awaiting customer)", completedQuotes.Count.ToString()));
         _glanceCards.Controls.Add(CreateGlanceCard("Quotes expiring soon", quoteExpiringSoon.Count.ToString()));
         _glanceCards.Controls.Add(CreateGlanceCard("Production in progress", productionInProgress.Count.ToString()));
         _glanceCards.Controls.Add(CreateGlanceCard("Jobs near/over due", productionNearDue.Count.ToString()));
@@ -174,6 +176,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         _workQueues.Controls.Add(CreateModuleSnapshotTable("Inspection in-progress snapshot", inspectionQueue, "Orders currently in inspection.", showInspectionState: true));
         _workQueues.Controls.Add(CreateModuleSnapshotTable("Shipping in-progress snapshot", shippingQueue, "Orders staged in shipping."));
         _workQueues.Controls.Add(CreateQuoteQueuePanel("In-progress quotes", inProgressQuotes, includeExpiryWarning: false));
+        _workQueues.Controls.Add(CreateQuoteQueuePanel("Completed quotes awaiting confirmation", completedQuotes, includeExpiryWarning: false));
         _workQueues.Controls.Add(CreateQuoteQueuePanel("Quotes about to expire", quoteExpiringSoon, includeExpiryWarning: true));
         _workQueues.Controls.Add(CreateProductionQueuePanel("In-progress production orders", productionInProgress));
         _workQueues.Controls.Add(CreateQualityQueuePanel("Quality queue", qualityQueue));
@@ -305,6 +308,11 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
 
     private static string BuildQuoteProgressText(Quote quote)
     {
+        if (quote.Status == QuoteStatus.Completed)
+        {
+            return "Completed - Awaiting customer confirmation";
+        }
+
         if (quote.LineItems.Count == 0)
         {
             return "Draft";

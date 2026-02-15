@@ -13,13 +13,14 @@ public static class QuoteWorkflowService
 
         return currentStatus switch
         {
-            QuoteStatus.InProgress when nextStatus is QuoteStatus.Won or QuoteStatus.Lost or QuoteStatus.Expired => true,
+            QuoteStatus.InProgress when nextStatus is QuoteStatus.Completed or QuoteStatus.Won or QuoteStatus.Lost or QuoteStatus.Expired => true,
+            QuoteStatus.Completed when nextStatus is QuoteStatus.Won or QuoteStatus.Lost => true,
             _ => false
         };
     }
 
     public static string BuildTransitionErrorMessage(QuoteStatus currentStatus, QuoteStatus nextStatus)
     {
-        return $"Invalid quote transition: {currentStatus} -> {nextStatus}. Allowed transitions are InProgress -> Won/Lost/Expired.";
+        return $"Invalid quote transition: {currentStatus} -> {nextStatus}. Allowed transitions are InProgress -> Completed/Won/Lost/Expired and Completed -> Won/Lost.";
     }
 }
