@@ -292,6 +292,41 @@ public class ProductionRepository
         return jobs;
     }
 
+    public async Task<IReadOnlyList<InventoryItem>> GetInventoryItemsAsync()
+    {
+        var inventory = new List<InventoryItem>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT Id,
+                   Sku,
+                   Description,
+                   QuantityOnHand,
+                   ReorderThreshold,
+                   UnitOfMeasure
+            FROM InventoryItems
+            ORDER BY Sku;";
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            inventory.Add(new InventoryItem
+            {
+                Id = reader.GetInt32(0),
+                Sku = reader.GetString(1),
+                Description = reader.GetString(2),
+                QuantityOnHand = Convert.ToDecimal(reader.GetDouble(3), CultureInfo.InvariantCulture),
+                ReorderThreshold = Convert.ToDecimal(reader.GetDouble(4), CultureInfo.InvariantCulture),
+                UnitOfMeasure = reader.GetString(5)
+            });
+        }
+
+        return inventory;
+    }
+
     public async Task<IReadOnlyList<Machine>> GetMachinesAsync()
     {
         var machines = new List<Machine>();
