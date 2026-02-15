@@ -105,7 +105,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
 
         var flowTitle = new Label
         {
-            Text = "Workflow progression",
+            Text = "Production progression",
             Font = new Font("Segoe UI", 12F, FontStyle.Bold),
             Dock = DockStyle.Top,
             Height = 28

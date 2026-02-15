@@ -127,7 +127,7 @@ public partial class ERPMainForm
         ConfigureNavButton(btnDashboard, "Dashboard");
         ConfigureNavButton(btnQuotes, "Quotes");
         ConfigureNavButton(btnPurchasing, "Purchasing");
-        ConfigureNavButton(btnProduction, "Workflow");
+        ConfigureNavButton(btnProduction, "Production");
         ConfigureNavButton(btnCRM, "CRM");
         ConfigureNavButton(btnInspection, "Inspection");
         ConfigureNavButton(btnShipping, "Shipping");
