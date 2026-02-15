@@ -19,7 +19,7 @@ public class ProductionControl : UserControl, IRealtimeDataControl
     private readonly ListBox _unassignedJobsList = new() { Dock = DockStyle.Fill };
     private readonly ListBox _machinesList = new() { Dock = DockStyle.Fill, AllowDrop = true };
     private readonly Panel _scheduleCanvas = new() { Dock = DockStyle.Fill, BackColor = Color.WhiteSmoke };
-    private readonly SplitContainer _workflowSplit = new() { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 320 };
+    private readonly SplitContainer _productionSplit = new() { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 320 };
 
     private readonly DataGridView _machinesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly TextBox _machineIdInput = new() { Width = 180 };
@@ -42,7 +42,7 @@ public class ProductionControl : UserControl, IRealtimeDataControl
                                            || string.Equals(r.Name, "Administrator", StringComparison.OrdinalIgnoreCase));
         Dock = DockStyle.Fill;
 
-        BuildWorkflowTab();
+        BuildProductionTab();
         BuildMachinesTab();
 
         Controls.Add(_tabs);
@@ -52,9 +52,9 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         _ = LoadMachinesAsync();
     }
 
-    private void BuildWorkflowTab()
+    private void BuildProductionTab()
     {
-        var workflowTab = new TabPage("Workflow");
+        var productionTab = new TabPage("Production");
 
         ConfigureGrid();
 
@@ -96,22 +96,22 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         topSplit.Panel1.Controls.Add(jobsPanel);
         topSplit.Panel2.Controls.Add(machinesPanel);
 
-        _workflowSplit.Panel1.Controls.Add(topSplit);
-        _workflowSplit.Panel1.Controls.Add(_jobsGrid);
-        _workflowSplit.Panel1.Controls.Add(actionsPanel);
-        _workflowSplit.Panel2.Controls.Add(_scheduleCanvas);
-        _workflowSplit.Panel2.Controls.Add(new Label { Text = "Machine Schedule", Dock = DockStyle.Top, Height = 28, Font = new Font("Segoe UI", 10F, FontStyle.Bold) });
+        _productionSplit.Panel1.Controls.Add(topSplit);
+        _productionSplit.Panel1.Controls.Add(_jobsGrid);
+        _productionSplit.Panel1.Controls.Add(actionsPanel);
+        _productionSplit.Panel2.Controls.Add(_scheduleCanvas);
+        _productionSplit.Panel2.Controls.Add(new Label { Text = "Machine Schedule", Dock = DockStyle.Top, Height = 28, Font = new Font("Segoe UI", 10F, FontStyle.Bold) });
 
         _scheduleCanvas.Paint += ScheduleCanvasOnPaint;
-        _workflowSplit.Panel2Collapsed = true;
+        _productionSplit.Panel2Collapsed = true;
 
         _unassignedJobsList.MouseDown += UnassignedJobsListOnMouseDown;
         _machinesList.DoubleClick += async (_, _) => await OpenSelectedMachineScheduleAsync();
         _machinesList.DragEnter += MachinesListOnDragEnter;
         _machinesList.DragDrop += async (_, e) => await MachinesListOnDragDropAsync(e);
 
-        workflowTab.Controls.Add(_workflowSplit);
-        _tabs.TabPages.Add(workflowTab);
+        productionTab.Controls.Add(_productionSplit);
+        _tabs.TabPages.Add(productionTab);
     }
 
     private void BuildMachinesTab()
@@ -281,8 +281,8 @@ public class ProductionControl : UserControl, IRealtimeDataControl
             await LoadJobsAsync();
             _selectedMachineCode = machine.MachineCode;
             _selectedMachineSchedules = (await _productionRepository.GetMachineSchedulesAsync(machine.MachineCode)).ToList();
-            _workflowSplit.Panel2Collapsed = false;
-            _workflowSplit.SplitterDistance = Math.Max(260, Height / 2);
+            _productionSplit.Panel2Collapsed = false;
+            _productionSplit.SplitterDistance = Math.Max(260, Height / 2);
             _scheduleCanvas.Invalidate();
         }
     }
@@ -297,8 +297,8 @@ public class ProductionControl : UserControl, IRealtimeDataControl
 
         _selectedMachineCode = machine.MachineCode;
         _selectedMachineSchedules = (await _productionRepository.GetMachineSchedulesAsync(machine.MachineCode)).ToList();
-        _workflowSplit.Panel2Collapsed = false;
-        _workflowSplit.SplitterDistance = Math.Max(260, Height / 2);
+        _productionSplit.Panel2Collapsed = false;
+        _productionSplit.SplitterDistance = Math.Max(260, Height / 2);
         _scheduleCanvas.Invalidate();
         _feedback.Text = $"Loaded schedule for machine {machine.MachineCode}.";
     }
