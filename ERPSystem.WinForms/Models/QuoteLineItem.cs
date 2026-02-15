@@ -4,7 +4,8 @@ public enum QuoteBlobType
 {
     Technical = 0,
     MaterialPricing = 1,
-    PostOpPricing = 2
+    PostOpPricing = 2,
+    PurchaseDocumentation = 3
 }
 
 public class QuoteBlobAttachment

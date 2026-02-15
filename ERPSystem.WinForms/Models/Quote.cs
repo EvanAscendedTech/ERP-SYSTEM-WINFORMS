@@ -17,5 +17,7 @@ public class Quote
     public string? ExpiredByUserId { get; set; }
     public DateTime? CompletedUtc { get; set; }
     public string? CompletedByUserId { get; set; }
+    public DateTime? PassedToPurchasingUtc { get; set; }
+    public string? PassedToPurchasingByUserId { get; set; }
     public List<QuoteLineItem> LineItems { get; set; } = new();
 }
