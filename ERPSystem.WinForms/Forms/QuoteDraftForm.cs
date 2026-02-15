@@ -8,9 +8,9 @@ namespace ERPSystem.WinForms.Forms;
 public class QuoteDraftForm : Form
 {
     private const int DefaultLineItemWidth = 860;
-    private const int DefaultLineItemHeight = 430;
+    private const int DefaultLineItemHeight = 360;
     private const int MinimumLineItemWidth = 620;
-    private const int MinimumLineItemHeight = 320;
+    private const int MinimumLineItemHeight = 280;
     private const int MinimumBlobAreaWidth = 210;
     private const int MinimumBlobAreaHeight = 130;
     private const float MinScaledFontSize = 8f;
@@ -21,10 +21,7 @@ public class QuoteDraftForm : Form
     private readonly bool _canViewPricing;
     private readonly string _uploadedBy;
     private readonly ComboBox _customerPicker = new() { Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
-    private readonly TextBox _customerAddress = new() { Width = 300, ReadOnly = true };
     private readonly TextBox _customerPartPo = new() { Width = 220, PlaceholderText = "Customer Part PO" };
-    private readonly TextBox _cycleTime = new() { Width = 120, PlaceholderText = "Cycle Time" };
-    private readonly TextBox _ipNotes = new() { Width = 180, PlaceholderText = "IP Fields" };
     private readonly TextBox _quoteLifecycleId = new() { Width = 220, ReadOnly = true };
     private readonly FlowLayoutPanel _lineItemsPanel = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(4) };
     private readonly Label _totalHoursValue = new() { AutoSize = true, Text = "0.00" };
@@ -57,30 +54,29 @@ public class QuoteDraftForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var header = new FlowLayoutPanel
+        var header = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             AutoSize = true,
-            WrapContents = true,
-            AutoScroll = true,
+            ColumnCount = 4,
+            RowCount = 2,
             Margin = new Padding(0, 0, 0, 8)
         };
-        header.Controls.Add(new Label { Text = "Customer Name", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
-        header.Controls.Add(_customerPicker);
-        header.Controls.Add(new Label { Text = "Customer Address", AutoSize = true, Margin = new Padding(10, 8, 0, 0) });
-        header.Controls.Add(_customerAddress);
-        header.Controls.Add(new Label { Text = "Customer Part PO", AutoSize = true, Margin = new Padding(10, 8, 0, 0) });
-        header.Controls.Add(_customerPartPo);
-        header.Controls.Add(new Label { Text = "Cycle Time", AutoSize = true, Margin = new Padding(10, 8, 0, 0) });
-        header.Controls.Add(_cycleTime);
-        header.Controls.Add(new Label { Text = "IP Fields", AutoSize = true, Margin = new Padding(10, 8, 0, 0) });
-        header.Controls.Add(_ipNotes);
-        header.Controls.Add(new Label { Text = "Lifecycle ID", AutoSize = true, Margin = new Padding(10, 8, 0, 0) });
-        header.Controls.Add(_quoteLifecycleId);
+        for (var i = 0; i < header.ColumnCount; i++)
+        {
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25f));
+        }
+        for (var i = 0; i < header.RowCount; i++)
+        {
+            header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        }
 
-        var addLineButton = new Button { Text = "Add Line Item", AutoSize = true, Margin = new Padding(20, 4, 0, 0) };
+        var addLineButton = new Button { Text = "Add Line Item", AutoSize = true, Anchor = AnchorStyles.Left };
         addLineButton.Click += (_, _) => AddLineItemCard();
-        header.Controls.Add(addLineButton);
+        header.Controls.Add(NewFieldPanel("Customer", _customerPicker), 0, 0);
+        header.Controls.Add(NewFieldPanel("Customer Part PO", _customerPartPo), 1, 0);
+        header.Controls.Add(NewFieldPanel("Lifecycle ID", _quoteLifecycleId), 2, 0);
+        header.Controls.Add(addLineButton, 3, 0);
 
         var totalsPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = true, Padding = new Padding(0, 4, 0, 4) };
         totalsPanel.Controls.Add(new Label { Text = "In-Process Quote Summary:", AutoSize = true, Margin = new Padding(0, 8, 8, 0), Font = new Font(Font, FontStyle.Bold) });
@@ -107,7 +103,6 @@ public class QuoteDraftForm : Form
         root.Controls.Add(buttons, 0, 3);
         Controls.Add(root);
 
-        _customerPicker.SelectedIndexChanged += (_, _) => OnCustomerSelected();
         _lineItemsPanel.Resize += (_, _) => ResizeCards();
         Resize += (_, _) => ResizeCards();
         _ = InitializeAsync();
@@ -142,20 +137,10 @@ public class QuoteDraftForm : Form
         RecalculateQuoteTotals();
     }
 
-    private void OnCustomerSelected()
-    {
-        if (_customerPicker.SelectedItem is Customer customer)
-        {
-            _customerAddress.Text = customer.Address;
-        }
-    }
-
     private void PopulateFromQuote(Quote quote)
     {
         _customerPicker.SelectedValue = quote.CustomerId;
         _customerPartPo.Text = ParseMetadata(quote.LineItems.FirstOrDefault()?.Notes).GetValueOrDefault("Customer Part PO", string.Empty);
-        _cycleTime.Text = ParseMetadata(quote.LineItems.FirstOrDefault()?.Notes).GetValueOrDefault("Cycle Time", string.Empty);
-        _ipNotes.Text = ParseMetadata(quote.LineItems.FirstOrDefault()?.Notes).GetValueOrDefault("IP Fields", string.Empty);
         _shopHourlyRate = quote.ShopHourlyRateSnapshot > 0 ? quote.ShopHourlyRateSnapshot : _shopHourlyRate;
 
         _lineItemsPanel.Controls.Clear();
@@ -233,13 +218,11 @@ public class QuoteDraftForm : Form
         };
         cardPanel.SuspendLayout();
 
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, ColumnCount = 1, RowCount = 5, Margin = Padding.Empty };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty };
         layout.SuspendLayout();
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 8f));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 18f));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 16f));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 48f));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 10f));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var title = new Label { AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
         layout.Controls.Add(title, 0, 0);
@@ -265,7 +248,12 @@ public class QuoteDraftForm : Form
         removeButton.Dock = DockStyle.Bottom;
         removeButtonHost.Controls.Add(removeButton, 0, 1);
         topFields.Controls.Add(removeButtonHost, 3, 0);
-        layout.Controls.Add(topFields, 0, 1);
+        var sectionTabs = new TabControl { Dock = DockStyle.Fill };
+        var detailsTab = new TabPage("Details") { Padding = new Padding(6) };
+        var costTab = new TabPage("Costs") { Padding = new Padding(6) };
+        var attachmentsTab = new TabPage("Attachments") { Padding = new Padding(6) };
+        detailsTab.Controls.Add(topFields);
+        topFields.Dock = DockStyle.Fill;
 
         var drawingDocs = BuildBlobArea(model, QuoteBlobType.Technical, "Drawings (PDF / STEP)");
         var modelDocs = BuildBlobArea(model, QuoteBlobType.ThreeDModel, "3D Models");
@@ -290,11 +278,12 @@ public class QuoteDraftForm : Form
         costsRow.Controls.Add(NewFieldPanel("Material Cost", materialCost), 2, 0);
         costsRow.Controls.Add(NewFieldPanel("Tooling Cost", toolingCost), 3, 0);
         costsRow.Controls.Add(NewFieldPanel("Secondary Operations Cost", secondaryCost), 4, 0);
-        layout.Controls.Add(costsRow, 0, 2);
+        costsRow.Dock = DockStyle.Fill;
+        costTab.Controls.Add(costsRow);
 
-        var materialDocs = BuildBlobArea(model, QuoteBlobType.MaterialPricing, "Material Blob Area");
-        var toolingDocs = BuildBlobArea(model, QuoteBlobType.ToolingDocumentation, "Tooling Blob Area");
-        var postOpDocs = BuildBlobArea(model, QuoteBlobType.PostOpPricing, "Secondary Operations Blob Area");
+        var materialDocs = BuildBlobArea(model, QuoteBlobType.MaterialPricing, "Material");
+        var toolingDocs = BuildBlobArea(model, QuoteBlobType.ToolingDocumentation, "Tooling");
+        var postOpDocs = BuildBlobArea(model, QuoteBlobType.PostOpPricing, "Post-Operation");
 
         var blobGrid = new TableLayoutPanel
         {
@@ -303,8 +292,7 @@ public class QuoteDraftForm : Form
             RowCount = 2,
             Dock = DockStyle.Fill,
             Margin = new Padding(0, 4, 0, 4),
-            GrowStyle = TableLayoutPanelGrowStyle.FixedSize,
-            MinimumSize = new Size(MinimumBlobAreaWidth * 3, MinimumBlobAreaHeight * 2)
+            GrowStyle = TableLayoutPanelGrowStyle.FixedSize
         };
         for (var i = 0; i < 3; i++)
         {
@@ -318,9 +306,14 @@ public class QuoteDraftForm : Form
         blobGrid.Controls.Add(materialDocs.SectionPanel, 2, 0);
         blobGrid.Controls.Add(toolingDocs.SectionPanel, 0, 1);
         blobGrid.Controls.Add(postOpDocs.SectionPanel, 1, 1);
-        var spacer = new Panel { Dock = DockStyle.Fill, MinimumSize = new Size(MinimumBlobAreaWidth, MinimumBlobAreaHeight), Margin = new Padding(3) };
+        var spacer = new Panel { Dock = DockStyle.Fill, Margin = new Padding(3) };
         blobGrid.Controls.Add(spacer, 2, 1);
-        layout.Controls.Add(blobGrid, 0, 3);
+        attachmentsTab.Controls.Add(blobGrid);
+
+        sectionTabs.TabPages.Add(detailsTab);
+        sectionTabs.TabPages.Add(costTab);
+        sectionTabs.TabPages.Add(attachmentsTab);
+        layout.Controls.Add(sectionTabs, 0, 1);
 
         var footer = new TableLayoutPanel { ColumnCount = 2, RowCount = 1, Dock = DockStyle.Fill, Margin = Padding.Empty };
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60f));
@@ -336,7 +329,7 @@ public class QuoteDraftForm : Form
         };
         footer.Controls.Add(new Label { Text = "Line Item Total", AutoSize = true, Anchor = AnchorStyles.Left, Font = new Font(Font, FontStyle.Bold) }, 0, 0);
         footer.Controls.Add(totalBox, 1, 0);
-        layout.Controls.Add(footer, 0, 4);
+        layout.Controls.Add(footer, 0, 2);
 
         cardPanel.Controls.Add(layout);
         var resizeGrip = CreateResizeGrip(cardPanel);
@@ -820,7 +813,7 @@ public class QuoteDraftForm : Form
             line.Description = string.IsNullOrWhiteSpace(line.DrawingName) ? card.Title.Text : line.DrawingName;
             line.Quantity = 1;
             line.UnitPrice = line.LineItemTotal;
-            line.Notes = BuildLineNotes(_customerPartPo.Text.Trim(), _cycleTime.Text.Trim(), _ipNotes.Text.Trim());
+            line.Notes = BuildLineNotes(_customerPartPo.Text.Trim());
             quote.LineItems.Add(line);
         }
 
@@ -838,8 +831,8 @@ public class QuoteDraftForm : Form
         }
     }
 
-    private static string BuildLineNotes(string customerPartPo, string cycleTime, string ipFields)
-        => $"Customer Part PO: {customerPartPo}\nCycle Time: {cycleTime}\nIP Fields: {ipFields}";
+    private static string BuildLineNotes(string customerPartPo)
+        => $"Customer Part PO: {customerPartPo}";
 
     private static Dictionary<string, string> ParseMetadata(string? notes)
     {
