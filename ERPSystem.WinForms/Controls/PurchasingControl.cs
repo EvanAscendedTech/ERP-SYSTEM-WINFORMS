@@ -42,10 +42,10 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         {
             Dock = DockStyle.Fill,
             Orientation = Orientation.Horizontal,
-            SplitterDistance = 190,
             Panel1MinSize = 130,
             Panel2MinSize = 130
         };
+        ConfigureSafeSplitterDistance(docsSplit, 190);
 
         docsSplit.Panel1.Controls.Add(_technicalDocsGrid);
         docsSplit.Panel1.Controls.Add(new Label
@@ -73,10 +73,10 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         {
             Dock = DockStyle.Fill,
             Orientation = Orientation.Vertical,
-            SplitterDistance = 560,
             Panel1MinSize = 350,
             Panel2MinSize = 320
         };
+        ConfigureSafeSplitterDistance(mainSplit, 560);
 
         mainSplit.Panel1.Controls.Add(_quotesGrid);
         mainSplit.Panel1.Controls.Add(new Label
@@ -96,6 +96,30 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         _quotesGrid.SelectionChanged += (_, _) => ShowSelectedQuoteDocuments();
 
         _ = LoadPurchasingQuotesAsync();
+    }
+
+    private static void ConfigureSafeSplitterDistance(SplitContainer splitContainer, int preferredDistance)
+    {
+        splitContainer.SplitterMoved += (_, _) => ApplySafeSplitterDistance(splitContainer, splitContainer.SplitterDistance);
+        splitContainer.SizeChanged += (_, _) => ApplySafeSplitterDistance(splitContainer, preferredDistance);
+        splitContainer.HandleCreated += (_, _) => ApplySafeSplitterDistance(splitContainer, preferredDistance);
+    }
+
+    private static void ApplySafeSplitterDistance(SplitContainer splitContainer, int preferredDistance)
+    {
+        var totalSize = splitContainer.Orientation == Orientation.Vertical
+            ? splitContainer.ClientSize.Width
+            : splitContainer.ClientSize.Height;
+
+        var minDistance = splitContainer.Panel1MinSize;
+        var maxDistance = totalSize - splitContainer.Panel2MinSize - splitContainer.SplitterWidth;
+
+        if (maxDistance < minDistance)
+        {
+            return;
+        }
+
+        splitContainer.SplitterDistance = Math.Clamp(preferredDistance, minDistance, maxDistance);
     }
 
     private void ConfigureGrids()
