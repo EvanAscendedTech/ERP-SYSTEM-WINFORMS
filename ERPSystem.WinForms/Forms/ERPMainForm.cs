@@ -22,6 +22,8 @@ public partial class ERPMainForm : Form
     private readonly Models.UserAccount _currentUser;
 
     private readonly Dictionary<string, ModernButton> _navButtons;
+    private readonly Stack<string> _backHistory = new();
+    private readonly Stack<string> _forwardHistory = new();
     private readonly System.Windows.Forms.Timer _syncClockTimer = new();
     private DateTime _nextFailSafeAt;
     private DateTime _lastAutosaveAt;
@@ -31,6 +33,8 @@ public partial class ERPMainForm : Form
     private long _lastSeenRealtimeEventId;
     private bool _syncTickRunning;
     private bool _refreshRunning;
+    private bool _isProgrammaticNavigation;
+    private string _activeSectionKey = string.Empty;
     private Models.AppSettings _appSettings = new();
 
     public ERPMainForm(QuoteRepository quoteRepo, ProductionRepository prodRepo, UserManagementRepository userRepo,
@@ -370,6 +374,56 @@ public partial class ERPMainForm : Form
         btnInspection.Click += (_, _) => LoadSection("Inspection");
         btnShipping.Click += (_, _) => LoadSection("Shipping");
         btnSettingsMenu.Click += (_, _) => LoadSection("Settings");
+        btnBack.Click += (_, _) => NavigateBack();
+        btnForward.Click += (_, _) => NavigateForward();
+    }
+
+    private void NavigateBack()
+    {
+        if (_backHistory.Count == 0)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_activeSectionKey))
+        {
+            _forwardHistory.Push(_activeSectionKey);
+        }
+
+        var target = _backHistory.Pop();
+        _isProgrammaticNavigation = true;
+        try
+        {
+            LoadSection(target);
+        }
+        finally
+        {
+            _isProgrammaticNavigation = false;
+        }
+    }
+
+    private void NavigateForward()
+    {
+        if (_forwardHistory.Count == 0)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_activeSectionKey))
+        {
+            _backHistory.Push(_activeSectionKey);
+        }
+
+        var target = _forwardHistory.Pop();
+        _isProgrammaticNavigation = true;
+        try
+        {
+            LoadSection(target);
+        }
+        finally
+        {
+            _isProgrammaticNavigation = false;
+        }
     }
 
     private void OpenDashboardTarget(DashboardNavigationTarget target)
@@ -412,6 +466,13 @@ public partial class ERPMainForm : Form
 
     private void LoadSection(string key)
     {
+        if (!string.IsNullOrWhiteSpace(_activeSectionKey) && !_isProgrammaticNavigation &&
+            !string.Equals(_activeSectionKey, key, StringComparison.OrdinalIgnoreCase))
+        {
+            _backHistory.Push(_activeSectionKey);
+            _forwardHistory.Clear();
+        }
+
         var control = CreateControlForKey(key);
         mainContentPanel.SuspendLayout();
         mainContentPanel.Controls.Clear();
@@ -419,8 +480,17 @@ public partial class ERPMainForm : Form
         mainContentPanel.Controls.Add(control);
         mainContentPanel.ResumeLayout();
 
+        _activeSectionKey = key;
         MarkActiveButton(key);
         ApplyTheme();
+        UpdateNavigationButtonState();
+        _ = RefreshActiveSectionAsync(fromFailSafeCheckpoint: false);
+    }
+
+    private void UpdateNavigationButtonState()
+    {
+        btnBack.Enabled = _backHistory.Count > 0;
+        btnForward.Enabled = _forwardHistory.Count > 0;
     }
 
     private UserControl CreateControlForKey(string key)
@@ -517,5 +587,17 @@ public partial class ERPMainForm : Form
             button.ForeColor = active ? Color.White : palette.TextPrimary;
             button.Invalidate();
         }
+
+        var navButtons = new[] { btnBack, btnForward, btnSettingsMenu };
+        foreach (var button in navButtons)
+        {
+            button.OverrideBaseColor = palette.Panel;
+            button.OverrideBorderColor = palette.Border;
+            button.ForeColor = palette.TextPrimary;
+            button.Invalidate();
+        }
+
+        btnBack.ForeColor = btnBack.Enabled ? palette.TextPrimary : palette.TextSecondary;
+        btnForward.ForeColor = btnForward.Enabled ? palette.TextPrimary : palette.TextSecondary;
     }
 }
