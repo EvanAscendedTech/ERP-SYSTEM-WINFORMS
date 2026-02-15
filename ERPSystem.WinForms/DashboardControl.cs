@@ -13,6 +13,8 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
     private const int QuoteExpiryDays = 30;
     private const int QuoteExpiringSoonDays = 7;
     private const int ProductionDueSoonDays = 2;
+    private const float QueueBaseFontSize = 9F;
+    private const float QueueMinFontSize = 5.5F;
 
     private readonly QuoteRepository _quoteRepository;
     private readonly ProductionRepository _productionRepository;
@@ -848,6 +850,16 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             list.Items.Add(CreateEmptyQueueMessage(title));
         }
 
+        ApplyQueueListSizing(list, Math.Max(1, list.Items.Count));
+        list.Resize += (_, _) => ApplyQueueListSizing(list, Math.Max(1, list.Items.Count));
+        panel.Disposed += (_, _) =>
+        {
+            if (list.Tag is Font queueFont)
+            {
+                queueFont.Dispose();
+            }
+        };
+
         list.DrawItem += (_, args) => DrawStageTask(list, args);
         list.DoubleClick += (_, _) => OpenStageTask(list, sectionKey);
         list.KeyDown += (_, args) =>
@@ -864,6 +876,33 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         panel.Controls.Add(list);
         panel.Controls.Add(titleRow);
         return panel;
+    }
+
+    private static void ApplyQueueListSizing(ListBox list, int itemCount)
+    {
+        if (list.IsDisposed)
+        {
+            return;
+        }
+
+        var safeCount = Math.Max(1, itemCount);
+        var itemHeight = Math.Max(1, list.ClientSize.Height / safeCount);
+        list.ItemHeight = itemHeight;
+
+        var targetFontSize = Math.Clamp(itemHeight * 0.46F, QueueMinFontSize, QueueBaseFontSize);
+        if (Math.Abs(list.Font.SizeInPoints - targetFontSize) < 0.15F)
+        {
+            return;
+        }
+
+        if (list.Tag is Font oldFont)
+        {
+            oldFont.Dispose();
+        }
+
+        var updatedFont = new Font("Segoe UI", targetFontSize, FontStyle.Regular);
+        list.Font = updatedFont;
+        list.Tag = updatedFont;
     }
 
     private Panel CreateQuoteQueuePanel(string title, IReadOnlyCollection<Quote> quotes, bool includeExpiryWarning)
