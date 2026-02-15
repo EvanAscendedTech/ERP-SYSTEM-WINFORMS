@@ -39,14 +39,14 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         var newQuoteButton = new Button { Text = "Create New Quote", AutoSize = true };
         var deleteQuoteButton = new Button { Text = "Delete Quote", AutoSize = true };
         var markCompletedButton = new Button { Text = "Mark Completed", AutoSize = true };
-        var passToProductionButton = new Button { Text = "Pass to Production", AutoSize = true };
+        var passToPurchasingButton = new Button { Text = "Pass to Purchasing", AutoSize = true };
         var archivedQuotesButton = new Button { Text = "Archived Quotes", AutoSize = true };
 
         refreshButton.Click += async (_, _) => await LoadActiveQuotesAsync();
         newQuoteButton.Click += async (_, _) => await CreateNewQuoteAsync();
         deleteQuoteButton.Click += async (_, _) => await DeleteSelectedQuoteAsync();
         markCompletedButton.Click += async (_, _) => await MarkSelectedCompletedAsync();
-        passToProductionButton.Click += async (_, _) => await PassSelectedToProductionAsync();
+        passToPurchasingButton.Click += async (_, _) => await PassSelectedToPurchasingAsync();
         archivedQuotesButton.Click += (_, _) => OpenArchivedQuotesWindow();
         _quotesGrid.CellDoubleClick += async (_, _) => await OpenSelectedQuoteDetailsAsync();
 
@@ -54,7 +54,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         actionsPanel.Controls.Add(newQuoteButton);
         actionsPanel.Controls.Add(deleteQuoteButton);
         actionsPanel.Controls.Add(markCompletedButton);
-        actionsPanel.Controls.Add(passToProductionButton);
+        actionsPanel.Controls.Add(passToPurchasingButton);
 
         var bottomRightPanel = new FlowLayoutPanel
         {
@@ -285,7 +285,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         await LoadActiveQuotesAsync();
     }
 
-    private async Task PassSelectedToProductionAsync()
+    private async Task PassSelectedToPurchasingAsync()
     {
         if (TryGetSelectedQuoteId() is not int selectedId)
         {
@@ -300,45 +300,18 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        if (fullQuote.Status != QuoteStatus.Completed)
+        if (fullQuote.Status != QuoteStatus.Won)
         {
-            _feedback.Text = "Only Completed quotes can be moved to production after customer confirmation.";
+            _feedback.Text = $"Only Won quotes can be passed to Purchasing. Current status: {fullQuote.Status}.";
             return;
         }
-
-        var moveToWon = await _quoteRepository.UpdateStatusAsync(fullQuote.Id, QuoteStatus.Won, _currentUser.Username);
-        if (!moveToWon.Success)
-        {
-            _feedback.Text = moveToWon.Message;
-            return;
-        }
-
-        fullQuote = await _quoteRepository.GetQuoteAsync(selectedId);
-        if (fullQuote is null)
-        {
-            _feedback.Text = "Quote could not be reloaded.";
-            return;
-        }
-
-        var firstLine = fullQuote.LineItems.FirstOrDefault();
-        await _productionRepository.SaveJobAsync(new ProductionJob
-        {
-            JobNumber = $"JOB-{fullQuote.Id:0000}",
-            QuoteLifecycleId = fullQuote.LifecycleQuoteId,
-            ProductName = firstLine?.Description ?? $"Quote {fullQuote.Id}",
-            PlannedQuantity = (int)Math.Max(1, firstLine?.Quantity ?? 1),
-            ProducedQuantity = 0,
-            DueDateUtc = DateTime.UtcNow.AddDays(Math.Max(1, firstLine?.LeadTimeDays ?? 7)),
-            SourceQuoteId = fullQuote.Id,
-            Status = ProductionJobStatus.Planned
-        });
 
         _selectedCustomer = null;
 
         await _quoteRepository.ResetLastInteractionOnQuoteAsync(fullQuote.CustomerId);
-        _feedback.Text = $"Quote {fullQuote.Id} passed to production and archived as won.";
+        _feedback.Text = $"Quote {fullQuote.Id} passed to Purchasing.";
         await LoadActiveQuotesAsync();
-        _openSection("Production");
+        _openSection("Purchasing");
     }
 
 
@@ -434,7 +407,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             {
                 QuoteStatus.InProgress => "CREATED / UNFINISHED",
                 QuoteStatus.Completed => "FINISHED / COMPLETED",
-                QuoteStatus.Won => "CUSTOMER CONFIRMED / MOVED TO PRODUCTION",
+                QuoteStatus.Won => "CUSTOMER CONFIRMED / READY FOR PURCHASING",
                 QuoteStatus.Lost => "FINISHED / LOST",
                 QuoteStatus.Expired => "EXPIRED",
                 _ => "UNKNOWN"
