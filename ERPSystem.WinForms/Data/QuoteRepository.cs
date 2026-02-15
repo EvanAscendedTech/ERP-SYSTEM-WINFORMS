@@ -110,6 +110,60 @@ public class QuoteRepository
                 LineItemCount INTEGER NOT NULL DEFAULT 0,
                 Details TEXT,
                 CreatedUtc TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS ArchivedQuotes (
+                ArchiveId INTEGER PRIMARY KEY AUTOINCREMENT,
+                OriginalQuoteId INTEGER NOT NULL,
+                CustomerId INTEGER,
+                CustomerName TEXT NOT NULL,
+                LifecycleQuoteId TEXT NOT NULL DEFAULT '',
+                Status INTEGER NOT NULL,
+                CreatedUtc TEXT NOT NULL,
+                LastUpdatedUtc TEXT NOT NULL,
+                WonUtc TEXT NULL,
+                WonByUserId TEXT NULL,
+                LostUtc TEXT NULL,
+                LostByUserId TEXT NULL,
+                ExpiredUtc TEXT NULL,
+                ExpiredByUserId TEXT NULL,
+                CompletedUtc TEXT NULL,
+                CompletedByUserId TEXT NULL,
+                ArchivedUtc TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS ArchivedQuoteLineItems (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ArchiveId INTEGER NOT NULL,
+                OriginalLineItemId INTEGER NOT NULL,
+                Description TEXT NOT NULL,
+                Quantity REAL NOT NULL,
+                UnitPrice REAL NOT NULL DEFAULT 0,
+                LeadTimeDays INTEGER NOT NULL DEFAULT 0,
+                RequiresGForce INTEGER NOT NULL DEFAULT 0,
+                RequiresSecondaryProcessing INTEGER NOT NULL DEFAULT 0,
+                RequiresPlating INTEGER NOT NULL DEFAULT 0,
+                Notes TEXT NOT NULL DEFAULT '',
+                AssociatedFiles TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY(ArchiveId) REFERENCES ArchivedQuotes(ArchiveId) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS ArchivedQuoteBlobFiles (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ArchiveId INTEGER NOT NULL,
+                OriginalBlobId INTEGER NOT NULL,
+                OriginalLineItemId INTEGER NOT NULL,
+                LifecycleId TEXT NOT NULL DEFAULT '',
+                BlobType INTEGER NOT NULL,
+                FileName TEXT NOT NULL,
+                Extension TEXT NOT NULL DEFAULT '',
+                ContentType TEXT NOT NULL DEFAULT '',
+                FileSizeBytes INTEGER NOT NULL DEFAULT 0,
+                Sha256 BLOB NOT NULL DEFAULT X'',
+                UploadedBy TEXT NOT NULL DEFAULT '',
+                BlobData BLOB NOT NULL,
+                UploadedUtc TEXT NOT NULL,
+                FOREIGN KEY(ArchiveId) REFERENCES ArchivedQuotes(ArchiveId) ON DELETE CASCADE
             );";
 
         await using var command = connection.CreateCommand();
@@ -144,6 +198,7 @@ public class QuoteRepository
 
         await EnsureCustomerIndexesAsync(connection);
         await EnsureQuoteIndexesAsync(connection);
+        await EnsureArchiveIndexesAsync(connection);
         await BackfillCustomersAsync(connection);
         await EnsureDefaultCustomerAsync(connection);
     }
@@ -947,10 +1002,21 @@ public class QuoteRepository
 
     public async Task DeleteQuoteAsync(int quoteId)
     {
+        var quote = await GetQuoteAsync(quoteId);
+        if (quote is null)
+        {
+            throw new InvalidOperationException($"Quote {quoteId} was not found.");
+        }
+
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
 
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
+
+        if (ShouldArchiveBeforeDelete(quote))
+        {
+            await ArchiveQuoteAsync(connection, transaction, quote);
+        }
 
         await using (var deleteBlobFiles = connection.CreateCommand())
         {
@@ -1009,6 +1075,110 @@ public class QuoteRepository
         }
     }
 
+    public async Task<IReadOnlyList<ArchivedQuoteSummary>> GetArchivedQuotesAsync()
+    {
+        var results = new List<ArchivedQuoteSummary>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT ArchiveId,
+                   OriginalQuoteId,
+                   LifecycleQuoteId,
+                   CustomerId,
+                   CustomerName,
+                   Status,
+                   CreatedUtc,
+                   LastUpdatedUtc,
+                   CompletedUtc,
+                   WonUtc,
+                   ArchivedUtc
+            FROM ArchivedQuotes
+            ORDER BY ArchivedUtc DESC;";
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            results.Add(new ArchivedQuoteSummary
+            {
+                ArchiveId = reader.GetInt32(0),
+                OriginalQuoteId = reader.GetInt32(1),
+                LifecycleQuoteId = reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+                CustomerId = reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
+                CustomerName = reader.GetString(4),
+                Status = (QuoteStatus)reader.GetInt32(5),
+                CreatedUtc = DateTime.Parse(reader.GetString(6), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                LastUpdatedUtc = DateTime.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                CompletedUtc = reader.IsDBNull(8) ? null : DateTime.Parse(reader.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                WonUtc = reader.IsDBNull(9) ? null : DateTime.Parse(reader.GetString(9), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                ArchivedUtc = DateTime.Parse(reader.GetString(10), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+            });
+        }
+
+        return results;
+    }
+
+    public async Task<ArchivedQuote?> GetArchivedQuoteAsync(int archiveId)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT ArchiveId,
+                   OriginalQuoteId,
+                   LifecycleQuoteId,
+                   CustomerId,
+                   CustomerName,
+                   Status,
+                   CreatedUtc,
+                   LastUpdatedUtc,
+                   WonUtc,
+                   WonByUserId,
+                   LostUtc,
+                   LostByUserId,
+                   ExpiredUtc,
+                   ExpiredByUserId,
+                   CompletedUtc,
+                   CompletedByUserId,
+                   ArchivedUtc
+            FROM ArchivedQuotes
+            WHERE ArchiveId = $archiveId;";
+        command.Parameters.AddWithValue("$archiveId", archiveId);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return null;
+        }
+
+        var archivedQuote = new ArchivedQuote
+        {
+            ArchiveId = reader.GetInt32(0),
+            OriginalQuoteId = reader.GetInt32(1),
+            LifecycleQuoteId = reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+            CustomerId = reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
+            CustomerName = reader.GetString(4),
+            Status = (QuoteStatus)reader.GetInt32(5),
+            CreatedUtc = DateTime.Parse(reader.GetString(6), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+            LastUpdatedUtc = DateTime.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+            WonUtc = reader.IsDBNull(8) ? null : DateTime.Parse(reader.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+            WonByUserId = reader.IsDBNull(9) ? null : reader.GetString(9),
+            LostUtc = reader.IsDBNull(10) ? null : DateTime.Parse(reader.GetString(10), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+            LostByUserId = reader.IsDBNull(11) ? null : reader.GetString(11),
+            ExpiredUtc = reader.IsDBNull(12) ? null : DateTime.Parse(reader.GetString(12), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+            ExpiredByUserId = reader.IsDBNull(13) ? null : reader.GetString(13),
+            CompletedUtc = reader.IsDBNull(14) ? null : DateTime.Parse(reader.GetString(14), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+            CompletedByUserId = reader.IsDBNull(15) ? null : reader.GetString(15),
+            ArchivedUtc = DateTime.Parse(reader.GetString(16), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+        };
+
+        archivedQuote.LineItems = await ReadArchivedLineItemsAsync(connection, archiveId);
+        return archivedQuote;
+    }
+
     public async Task DeleteQuoteLineItemFileAsync(int fileId)
     {
         await using var connection = new SqliteConnection(_connectionString);
@@ -1056,6 +1226,267 @@ public class QuoteRepository
             CREATE INDEX IF NOT EXISTS IX_QuoteLineItems_QuoteId ON QuoteLineItems(QuoteId);
             CREATE INDEX IF NOT EXISTS IX_QuoteBlobFiles_QuoteId_LineItemId ON QuoteBlobFiles(QuoteId, LineItemId);";
         await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task EnsureArchiveIndexesAsync(SqliteConnection connection)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            CREATE INDEX IF NOT EXISTS IX_ArchivedQuotes_OriginalQuoteId ON ArchivedQuotes(OriginalQuoteId);
+            CREATE INDEX IF NOT EXISTS IX_ArchivedQuotes_ArchivedUtc ON ArchivedQuotes(ArchivedUtc);
+            CREATE INDEX IF NOT EXISTS IX_ArchivedQuoteLineItems_ArchiveId ON ArchivedQuoteLineItems(ArchiveId);
+            CREATE INDEX IF NOT EXISTS IX_ArchivedQuoteBlobFiles_ArchiveId ON ArchivedQuoteBlobFiles(ArchiveId);";
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static bool ShouldArchiveBeforeDelete(Quote quote)
+        => quote.Status is QuoteStatus.Completed or QuoteStatus.Won
+           || quote.CompletedUtc.HasValue
+           || quote.WonUtc.HasValue;
+
+    private static async Task ArchiveQuoteAsync(SqliteConnection connection, SqliteTransaction transaction, Quote quote)
+    {
+        await using var insertArchive = connection.CreateCommand();
+        insertArchive.Transaction = transaction;
+        insertArchive.CommandText = @"
+            INSERT INTO ArchivedQuotes (
+                OriginalQuoteId,
+                CustomerId,
+                CustomerName,
+                LifecycleQuoteId,
+                Status,
+                CreatedUtc,
+                LastUpdatedUtc,
+                WonUtc,
+                WonByUserId,
+                LostUtc,
+                LostByUserId,
+                ExpiredUtc,
+                ExpiredByUserId,
+                CompletedUtc,
+                CompletedByUserId,
+                ArchivedUtc)
+            VALUES (
+                $originalQuoteId,
+                $customerId,
+                $customerName,
+                $lifecycleQuoteId,
+                $status,
+                $createdUtc,
+                $lastUpdatedUtc,
+                $wonUtc,
+                $wonByUserId,
+                $lostUtc,
+                $lostByUserId,
+                $expiredUtc,
+                $expiredByUserId,
+                $completedUtc,
+                $completedByUserId,
+                $archivedUtc);
+            SELECT last_insert_rowid();";
+
+        insertArchive.Parameters.AddWithValue("$originalQuoteId", quote.Id);
+        insertArchive.Parameters.AddWithValue("$customerId", quote.CustomerId == 0 ? DBNull.Value : quote.CustomerId);
+        insertArchive.Parameters.AddWithValue("$customerName", quote.CustomerName);
+        insertArchive.Parameters.AddWithValue("$lifecycleQuoteId", quote.LifecycleQuoteId);
+        insertArchive.Parameters.AddWithValue("$status", (int)quote.Status);
+        insertArchive.Parameters.AddWithValue("$createdUtc", quote.CreatedUtc.ToString("O"));
+        insertArchive.Parameters.AddWithValue("$lastUpdatedUtc", quote.LastUpdatedUtc.ToString("O"));
+        AddNullableString(insertArchive, "$wonUtc", quote.WonUtc?.ToString("O"));
+        AddNullableString(insertArchive, "$wonByUserId", quote.WonByUserId);
+        AddNullableString(insertArchive, "$lostUtc", quote.LostUtc?.ToString("O"));
+        AddNullableString(insertArchive, "$lostByUserId", quote.LostByUserId);
+        AddNullableString(insertArchive, "$expiredUtc", quote.ExpiredUtc?.ToString("O"));
+        AddNullableString(insertArchive, "$expiredByUserId", quote.ExpiredByUserId);
+        AddNullableString(insertArchive, "$completedUtc", quote.CompletedUtc?.ToString("O"));
+        AddNullableString(insertArchive, "$completedByUserId", quote.CompletedByUserId);
+        insertArchive.Parameters.AddWithValue("$archivedUtc", DateTime.UtcNow.ToString("O"));
+
+        var archiveId = Convert.ToInt32(await insertArchive.ExecuteScalarAsync());
+
+        foreach (var lineItem in quote.LineItems)
+        {
+            await using var insertLine = connection.CreateCommand();
+            insertLine.Transaction = transaction;
+            insertLine.CommandText = @"
+                INSERT INTO ArchivedQuoteLineItems (
+                    ArchiveId,
+                    OriginalLineItemId,
+                    Description,
+                    Quantity,
+                    UnitPrice,
+                    LeadTimeDays,
+                    RequiresGForce,
+                    RequiresSecondaryProcessing,
+                    RequiresPlating,
+                    Notes,
+                    AssociatedFiles)
+                VALUES (
+                    $archiveId,
+                    $originalLineItemId,
+                    $description,
+                    $quantity,
+                    $unitPrice,
+                    $leadTimeDays,
+                    $requiresGForce,
+                    $requiresSecondaryProcessing,
+                    $requiresPlating,
+                    $notes,
+                    $associatedFiles);";
+            insertLine.Parameters.AddWithValue("$archiveId", archiveId);
+            insertLine.Parameters.AddWithValue("$originalLineItemId", lineItem.Id);
+            insertLine.Parameters.AddWithValue("$description", lineItem.Description);
+            insertLine.Parameters.AddWithValue("$quantity", Convert.ToDouble(lineItem.Quantity));
+            insertLine.Parameters.AddWithValue("$unitPrice", Convert.ToDouble(lineItem.UnitPrice));
+            insertLine.Parameters.AddWithValue("$leadTimeDays", lineItem.LeadTimeDays);
+            insertLine.Parameters.AddWithValue("$requiresGForce", lineItem.RequiresGForce ? 1 : 0);
+            insertLine.Parameters.AddWithValue("$requiresSecondaryProcessing", lineItem.RequiresSecondaryProcessing ? 1 : 0);
+            insertLine.Parameters.AddWithValue("$requiresPlating", lineItem.RequiresPlating ? 1 : 0);
+            insertLine.Parameters.AddWithValue("$notes", lineItem.Notes ?? string.Empty);
+            insertLine.Parameters.AddWithValue("$associatedFiles", string.Join('|', lineItem.AssociatedFiles));
+            await insertLine.ExecuteNonQueryAsync();
+
+            foreach (var blob in lineItem.BlobAttachments)
+            {
+                await using var insertBlob = connection.CreateCommand();
+                insertBlob.Transaction = transaction;
+                insertBlob.CommandText = @"
+                    INSERT INTO ArchivedQuoteBlobFiles (
+                        ArchiveId,
+                        OriginalBlobId,
+                        OriginalLineItemId,
+                        LifecycleId,
+                        BlobType,
+                        FileName,
+                        Extension,
+                        ContentType,
+                        FileSizeBytes,
+                        Sha256,
+                        UploadedBy,
+                        BlobData,
+                        UploadedUtc)
+                    VALUES (
+                        $archiveId,
+                        $originalBlobId,
+                        $originalLineItemId,
+                        $lifecycleId,
+                        $blobType,
+                        $fileName,
+                        $extension,
+                        $contentType,
+                        $fileSizeBytes,
+                        $sha256,
+                        $uploadedBy,
+                        $blobData,
+                        $uploadedUtc);";
+                insertBlob.Parameters.AddWithValue("$archiveId", archiveId);
+                insertBlob.Parameters.AddWithValue("$originalBlobId", blob.Id);
+                insertBlob.Parameters.AddWithValue("$originalLineItemId", lineItem.Id);
+                insertBlob.Parameters.AddWithValue("$lifecycleId", blob.LifecycleId);
+                insertBlob.Parameters.AddWithValue("$blobType", (int)blob.BlobType);
+                insertBlob.Parameters.AddWithValue("$fileName", blob.FileName);
+                insertBlob.Parameters.AddWithValue("$extension", blob.Extension);
+                insertBlob.Parameters.AddWithValue("$contentType", blob.ContentType);
+                insertBlob.Parameters.AddWithValue("$fileSizeBytes", blob.FileSizeBytes);
+                insertBlob.Parameters.AddWithValue("$sha256", blob.Sha256);
+                insertBlob.Parameters.AddWithValue("$uploadedBy", blob.UploadedBy);
+                insertBlob.Parameters.AddWithValue("$blobData", blob.BlobData);
+                insertBlob.Parameters.AddWithValue("$uploadedUtc", blob.UploadedUtc.ToString("O"));
+                await insertBlob.ExecuteNonQueryAsync();
+            }
+        }
+    }
+
+    private static async Task<List<QuoteLineItem>> ReadArchivedLineItemsAsync(SqliteConnection connection, int archiveId)
+    {
+        var lineItems = new List<QuoteLineItem>();
+        var originalLineIds = new Dictionary<int, int>();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT Id,
+                   OriginalLineItemId,
+                   Description,
+                   Quantity,
+                   UnitPrice,
+                   LeadTimeDays,
+                   RequiresGForce,
+                   RequiresSecondaryProcessing,
+                   RequiresPlating,
+                   Notes,
+                   AssociatedFiles
+            FROM ArchivedQuoteLineItems
+            WHERE ArchiveId = $archiveId
+            ORDER BY Id;";
+        command.Parameters.AddWithValue("$archiveId", archiveId);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var lineId = reader.GetInt32(0);
+            var originalLineId = reader.GetInt32(1);
+            originalLineIds[originalLineId] = lineItems.Count;
+
+            var associatedFilesRaw = reader.IsDBNull(10) ? string.Empty : reader.GetString(10);
+            lineItems.Add(new QuoteLineItem
+            {
+                Id = lineId,
+                Description = reader.GetString(2),
+                Quantity = Convert.ToDecimal(reader.GetDouble(3)),
+                UnitPrice = Convert.ToDecimal(reader.GetDouble(4)),
+                LeadTimeDays = reader.GetInt32(5),
+                RequiresGForce = reader.GetInt32(6) == 1,
+                RequiresSecondaryProcessing = reader.GetInt32(7) == 1,
+                RequiresPlating = reader.GetInt32(8) == 1,
+                Notes = reader.IsDBNull(9) ? string.Empty : reader.GetString(9),
+                AssociatedFiles = associatedFilesRaw.Split('|', StringSplitOptions.RemoveEmptyEntries).ToList(),
+                BlobAttachments = new List<QuoteBlobAttachment>()
+            });
+        }
+
+        await using var blobsCommand = connection.CreateCommand();
+        blobsCommand.CommandText = @"
+            SELECT OriginalLineItemId,
+                   BlobType,
+                   FileName,
+                   Extension,
+                   ContentType,
+                   FileSizeBytes,
+                   Sha256,
+                   UploadedBy,
+                   BlobData,
+                   UploadedUtc,
+                   LifecycleId
+            FROM ArchivedQuoteBlobFiles
+            WHERE ArchiveId = $archiveId
+            ORDER BY Id;";
+        blobsCommand.Parameters.AddWithValue("$archiveId", archiveId);
+
+        await using var blobReader = await blobsCommand.ExecuteReaderAsync();
+        while (await blobReader.ReadAsync())
+        {
+            var originalLineId = blobReader.GetInt32(0);
+            if (!originalLineIds.TryGetValue(originalLineId, out var index))
+            {
+                continue;
+            }
+
+            lineItems[index].BlobAttachments.Add(new QuoteBlobAttachment
+            {
+                BlobType = (QuoteBlobType)blobReader.GetInt32(1),
+                FileName = blobReader.GetString(2),
+                Extension = blobReader.IsDBNull(3) ? string.Empty : blobReader.GetString(3),
+                ContentType = blobReader.IsDBNull(4) ? string.Empty : blobReader.GetString(4),
+                FileSizeBytes = blobReader.GetInt64(5),
+                Sha256 = blobReader.IsDBNull(6) ? Array.Empty<byte>() : (byte[])blobReader[6],
+                UploadedBy = blobReader.IsDBNull(7) ? string.Empty : blobReader.GetString(7),
+                BlobData = blobReader.IsDBNull(8) ? Array.Empty<byte>() : (byte[])blobReader[8],
+                UploadedUtc = DateTime.Parse(blobReader.GetString(9), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                LifecycleId = blobReader.IsDBNull(10) ? string.Empty : blobReader.GetString(10)
+            });
+        }
+
+        return lineItems;
     }
 
     private static async Task EnsureDefaultCustomerAsync(SqliteConnection connection)

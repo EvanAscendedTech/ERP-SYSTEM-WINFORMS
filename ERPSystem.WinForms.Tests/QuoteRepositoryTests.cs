@@ -303,7 +303,7 @@ public class QuoteRepositoryTests
     }
 
     [Fact]
-    public async Task DeleteQuoteAsync_DeletesWonQuoteAndRelatedRecords()
+    public async Task DeleteQuoteAsync_ArchivesWonQuoteThenDeletesActiveRecords()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-delete-won-{Guid.NewGuid():N}.db");
         var repository = new QuoteRepository(dbPath);
@@ -355,6 +355,18 @@ public class QuoteRepositoryTests
         Assert.Equal(0, await CountByQuoteIdAsync(connection, "QuoteBlobFiles", id));
         Assert.Equal(0, await CountByQuoteIdAsync(connection, "QuoteAuditEvents", id));
 
+        await using (var archived = connection.CreateCommand())
+        {
+            archived.CommandText = @"
+                SELECT COUNT(*)
+                FROM ArchivedQuotes
+                WHERE OriginalQuoteId = $quoteId AND Status = $status;";
+            archived.Parameters.AddWithValue("$quoteId", id);
+            archived.Parameters.AddWithValue("$status", (int)QuoteStatus.Won);
+            var archiveCount = Convert.ToInt32(await archived.ExecuteScalarAsync());
+            Assert.Equal(1, archiveCount);
+        }
+
         await using (var command = connection.CreateCommand())
         {
             command.CommandText = @"
@@ -378,6 +390,92 @@ public class QuoteRepositoryTests
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.DeleteQuoteAsync(123456));
         Assert.Equal("Quote 123456 was not found.", exception.Message);
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task DeleteQuoteAsync_DeletesInProgressQuoteWithoutArchiving()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-delete-active-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+        var quote = new Quote
+        {
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            LifecycleQuoteId = "Q-ACTIVE-DELETE",
+            Status = QuoteStatus.InProgress,
+            LineItems = [new QuoteLineItem { Description = "Active assembly", Quantity = 2 }]
+        };
+
+        var id = await repository.SaveQuoteAsync(quote);
+        await repository.DeleteQuoteAsync(id);
+
+        await using var connection = new SqliteConnection($"Data Source={dbPath}");
+        await connection.OpenAsync();
+
+        await using var archived = connection.CreateCommand();
+        archived.CommandText = "SELECT COUNT(*) FROM ArchivedQuotes WHERE OriginalQuoteId = $quoteId;";
+        archived.Parameters.AddWithValue("$quoteId", id);
+        var archiveCount = Convert.ToInt32(await archived.ExecuteScalarAsync());
+        Assert.Equal(0, archiveCount);
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task ArchivedQuoteReadback_ReturnsArchivedLineItemsAndBlobs()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-archive-read-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+        var quote = new Quote
+        {
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            LifecycleQuoteId = "Q-COMPLETE-ARCHIVE",
+            Status = QuoteStatus.Completed,
+            CompletedUtc = DateTime.UtcNow,
+            CompletedByUserId = "qa",
+            LineItems =
+            [
+                new QuoteLineItem
+                {
+                    Description = "Completed assembly",
+                    Quantity = 1,
+                    AssociatedFiles = ["complete.pdf"],
+                    BlobAttachments =
+                    [
+                        new QuoteBlobAttachment
+                        {
+                            BlobType = QuoteBlobType.Technical,
+                            FileName = "complete-spec.pdf",
+                            ContentType = ".pdf",
+                            BlobData = [1,2,3],
+                            UploadedUtc = DateTime.UtcNow
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var id = await repository.SaveQuoteAsync(quote);
+        await repository.DeleteQuoteAsync(id);
+
+        var archivedSummaries = await repository.GetArchivedQuotesAsync();
+        var archivedSummary = Assert.Single(archivedSummaries.Where(q => q.OriginalQuoteId == id));
+        var archivedQuote = await repository.GetArchivedQuoteAsync(archivedSummary.ArchiveId);
+
+        Assert.NotNull(archivedQuote);
+        Assert.Equal(QuoteStatus.Completed, archivedQuote!.Status);
+        var line = Assert.Single(archivedQuote.LineItems);
+        Assert.Contains("complete.pdf", line.AssociatedFiles);
+        Assert.Single(line.BlobAttachments);
 
         File.Delete(dbPath);
     }
@@ -462,4 +560,3 @@ public class QuoteRepositoryTests
     }
 
 }
-
