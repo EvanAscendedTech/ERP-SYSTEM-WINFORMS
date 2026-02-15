@@ -12,8 +12,6 @@ public partial class ERPMainForm
     private ModernButton btnSettingsMenu = null!;
     private ModernButton btnBack = null!;
     private ModernButton btnForward = null!;
-    private Label lblSyncClock = null!;
-    private Label lblSaveClock = null!;
     private FlowLayoutPanel onlineUsersPanel = null!;
 
     private FlowLayoutPanel navButtonsPanel = null!;
@@ -37,8 +35,6 @@ public partial class ERPMainForm
         btnSettingsMenu = new ModernButton();
         btnBack = new ModernButton();
         btnForward = new ModernButton();
-        lblSyncClock = new Label();
-        lblSaveClock = new Label();
         onlineUsersPanel = new FlowLayoutPanel();
 
         navButtonsPanel = new FlowLayoutPanel();
@@ -97,23 +93,11 @@ public partial class ERPMainForm
         btnForward.Location = new Point(602, 14);
         btnForward.CornerRadius = 8;
 
-        lblSyncClock.AutoSize = true;
-        lblSyncClock.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
-        lblSyncClock.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        lblSyncClock.Location = new Point(430, 10);
-        lblSyncClock.TextAlign = ContentAlignment.MiddleRight;
-
-        lblSaveClock.AutoSize = true;
-        lblSaveClock.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
-        lblSaveClock.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        lblSaveClock.Location = new Point(430, 30);
-        lblSaveClock.TextAlign = ContentAlignment.MiddleRight;
-
         onlineUsersPanel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         onlineUsersPanel.AutoScroll = true;
         onlineUsersPanel.WrapContents = false;
         onlineUsersPanel.FlowDirection = FlowDirection.LeftToRight;
-        onlineUsersPanel.Location = new Point(430, 50);
+        onlineUsersPanel.Location = new Point(430, 42);
         onlineUsersPanel.Size = new Size(420, 30);
 
         headerPanel.Resize += (_, _) =>
@@ -121,16 +105,12 @@ public partial class ERPMainForm
             btnSettingsMenu.Left = headerPanel.Width - btnSettingsMenu.Width - 20;
             btnForward.Left = btnSettingsMenu.Left - btnForward.Width - 8;
             btnBack.Left = btnForward.Left - btnBack.Width - 8;
-            lblSyncClock.Left = btnSettingsMenu.Left - Math.Max(lblSyncClock.Width, lblSaveClock.Width) - 20;
-            lblSaveClock.Left = lblSyncClock.Left;
-            onlineUsersPanel.Left = lblSyncClock.Left;
+            onlineUsersPanel.Left = btnBack.Left - onlineUsersPanel.Width - 20;
             onlineUsersPanel.Width = btnSettingsMenu.Left - onlineUsersPanel.Left - 20;
         };
 
         headerPanel.Controls.Add(picCompanyLogo);
         headerPanel.Controls.Add(lblAppTitle);
-        headerPanel.Controls.Add(lblSyncClock);
-        headerPanel.Controls.Add(lblSaveClock);
         headerPanel.Controls.Add(btnBack);
         headerPanel.Controls.Add(btnForward);
         headerPanel.Controls.Add(btnSettingsMenu);
