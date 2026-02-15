@@ -1,6 +1,8 @@
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
+using System.Globalization;
+using System.Text;
 
 namespace ERPSystem.WinForms.Forms;
 
@@ -22,6 +24,8 @@ public class QuoteDraftForm : Form
     private readonly string _uploadedBy;
     private readonly ComboBox _customerPicker = new() { Width = 320, DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox _customerQuoteNumber = new() { Width = 220, PlaceholderText = "Customer quote number" };
+    private readonly TextBox _customerAddress = new() { Width = 320, PlaceholderText = "Customer address" };
+    private readonly TextBox _pricingAdjustment = new() { Width = 160, PlaceholderText = "Pricing adjustment" };
     private readonly TextBox _quoteLifecycleId = new() { Width = 220, ReadOnly = true };
     private readonly NumericUpDown _lineCount = new() { Minimum = 1, Maximum = 20, Value = 1, Width = 100 };
     private readonly FlowLayoutPanel _lineItemsPanel = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
@@ -69,18 +73,32 @@ public class QuoteDraftForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var header = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true };
+        var headerContainer = new Panel { Dock = DockStyle.Top, Height = 42 };
+        var header = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, WrapContents = true };
         var createCustomerButton = new Button { Text = "Create New Customer", AutoSize = true };
+        var generatePdfButton = new Button { Text = "Generate Quote PDF", AutoSize = true, Anchor = AnchorStyles.Top | AnchorStyles.Right };
         createCustomerButton.Click += (_, _) => OpenCustomerCreation();
+        generatePdfButton.Click += async (_, _) => await GenerateQuotePdfAsync();
 
         header.Controls.Add(new Label { Text = "Customer:", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
         header.Controls.Add(_customerPicker);
+        header.Controls.Add(_customerAddress);
         header.Controls.Add(_customerQuoteNumber);
         header.Controls.Add(new Label { Text = "Lifecycle ID", AutoSize = true, Margin = new Padding(10, 8, 0, 0) });
         header.Controls.Add(_quoteLifecycleId);
+        header.Controls.Add(new Label { Text = "Adjustment", AutoSize = true, Margin = new Padding(8, 8, 0, 0) });
+        header.Controls.Add(_pricingAdjustment);
         header.Controls.Add(new Label { Text = "Line items:", AutoSize = true, Margin = new Padding(8, 8, 0, 0) });
         header.Controls.Add(_lineCount);
         header.Controls.Add(createCustomerButton);
+
+        headerContainer.Controls.Add(header);
+        headerContainer.Controls.Add(generatePdfButton);
+        generatePdfButton.Location = new Point(headerContainer.Width - generatePdfButton.Width - 6, 6);
+        headerContainer.Resize += (_, _) =>
+        {
+            generatePdfButton.Location = new Point(headerContainer.Width - generatePdfButton.Width - 6, 6);
+        };
 
         _lineCount.ValueChanged += (_, _) => SyncLineItems((int)_lineCount.Value);
         SyncLineItems((int)_lineCount.Value);
@@ -97,7 +115,7 @@ public class QuoteDraftForm : Form
             buttons.Controls.Add(deleteButton);
         }
 
-        root.Controls.Add(header, 0, 0);
+        root.Controls.Add(headerContainer, 0, 0);
         root.Controls.Add(_lineItemsPanel, 0, 1);
         root.Controls.Add(buttons, 0, 2);
 
@@ -159,9 +177,20 @@ public class QuoteDraftForm : Form
         var unitPrice = textboxes.FirstOrDefault(t => t.Name == "UnitPrice");
         if (unitPrice is not null) unitPrice.Text = line.UnitPrice.ToString();
 
-        if (line.Notes.StartsWith("Customer quote #:", StringComparison.OrdinalIgnoreCase))
+        var metadata = ParseMetadata(line.Notes);
+        if (metadata.TryGetValue("Customer quote #", out var quoteNumber))
         {
-            _customerQuoteNumber.Text = line.Notes[16..].Trim();
+            _customerQuoteNumber.Text = quoteNumber;
+        }
+
+        if (metadata.TryGetValue("Customer address", out var address))
+        {
+            _customerAddress.Text = address;
+        }
+
+        if (metadata.TryGetValue("Pricing adjustment", out var adjustment))
+        {
+            _pricingAdjustment.Text = adjustment;
         }
 
         foreach (var section in uploadFlow.Controls.OfType<Panel>().Select(p => p.Tag).OfType<BlobUploadSectionState>())
@@ -595,7 +624,7 @@ public class QuoteDraftForm : Form
             return;
         }
 
-        var confirm = MessageBox.Show($"Delete in-process quote #{_editingQuote.Id}? This cannot be undone.", "Delete Quote", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        var confirm = MessageBox.Show($"Delete quote #{_editingQuote.Id}? This cannot be undone.", "Delete Quote", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
         if (confirm != DialogResult.Yes)
         {
             return;
@@ -649,7 +678,7 @@ public class QuoteDraftForm : Form
                 Quantity = 1,
                 UnitPrice = decimal.TryParse(priceText, out var unitPrice) ? unitPrice : 0,
                 LeadTimeDays = 7,
-                Notes = $"Customer quote #: {_customerQuoteNumber.Text.Trim()}"
+                Notes = BuildLineNotes(_customerQuoteNumber.Text.Trim(), _customerAddress.Text.Trim(), _pricingAdjustment.Text.Trim())
             };
 
             line.BlobAttachments = uploadFlow.Controls.OfType<Panel>()
@@ -671,5 +700,177 @@ public class QuoteDraftForm : Form
         {
             MessageBox.Show($"Failed to save quote: {ex.Message}", "Quote", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private async Task GenerateQuotePdfAsync()
+    {
+        if (_customerPicker.SelectedItem is not Customer customer)
+        {
+            MessageBox.Show("Select a customer before generating the quote PDF.", "Quote PDF", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var lineSummaries = _lineItemsPanel.Controls.OfType<GroupBox>()
+            .Select(ReadLineSummary)
+            .ToList();
+
+        if (lineSummaries.Count == 0)
+        {
+            MessageBox.Show("Add at least one line item before generating the quote PDF.", "Quote PDF", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var adjustment = decimal.TryParse(_pricingAdjustment.Text, NumberStyles.Any, CultureInfo.CurrentCulture, out var parsedAdjustment)
+            ? parsedAdjustment
+            : 0m;
+
+        var lineTotal = lineSummaries.Sum(line => line.LineTotal);
+        var grandTotal = lineTotal + adjustment;
+        var leadTimeDays = lineSummaries.Max(line => line.LeadTimeDays);
+        var quoteIdentifier = _editingQuote is not null ? $"#{_editingQuote.Id} ({_quoteLifecycleId.Text})" : _quoteLifecycleId.Text;
+        var address = string.IsNullOrWhiteSpace(_customerAddress.Text) ? "Not provided" : _customerAddress.Text.Trim();
+
+        var documentLines = new List<string>
+        {
+            "Quote",
+            $"Customer Name: {customer.Name}",
+            $"Customer Address: {address}",
+            $"Quote ID: {quoteIdentifier}",
+            $"Lead Time: {leadTimeDays} days",
+            string.Empty,
+            "Line Items",
+            "Description | Quantity"
+        };
+
+        documentLines.AddRange(lineSummaries.Select(line => $"{line.Description} | {line.Quantity.ToString("0.##", CultureInfo.InvariantCulture)}"));
+        documentLines.Add(string.Empty);
+        documentLines.Add($"Total Price: {lineTotal:C}");
+        documentLines.Add($"Pricing Adjustment: {adjustment:C}");
+        documentLines.Add($"Sum Total: {grandTotal:C}");
+        documentLines.Add(string.Empty);
+        documentLines.Add("Quality Statement: We are committed to delivering consistent, traceable, and high-quality products that meet or exceed customer specifications.");
+
+        using var saver = new SaveFileDialog
+        {
+            FileName = $"Quote_{_quoteLifecycleId.Text}.pdf",
+            Filter = "PDF files (*.pdf)|*.pdf"
+        };
+
+        if (saver.ShowDialog() != DialogResult.OK)
+        {
+            return;
+        }
+
+        try
+        {
+            var pdfBytes = BuildSimplePdf(documentLines);
+            await File.WriteAllBytesAsync(saver.FileName, pdfBytes);
+            MessageBox.Show("Quote PDF generated.", "Quote PDF", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to generate PDF: {ex.Message}", "Quote PDF", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private (string Description, decimal Quantity, int LeadTimeDays, decimal LineTotal) ReadLineSummary(GroupBox item)
+    {
+        var table = item.Controls.OfType<TableLayoutPanel>().First();
+        var fields = table.Controls.OfType<FlowLayoutPanel>().First();
+        var textboxes = fields.Controls.OfType<TextBox>().ToList();
+        var description = string.IsNullOrWhiteSpace(textboxes.FirstOrDefault()?.Text)
+            ? item.Text
+            : textboxes.First().Text.Trim();
+
+        var leadTimeDays = int.TryParse(textboxes.Skip(1).FirstOrDefault()?.Text, out var parsedLeadTime)
+            ? parsedLeadTime
+            : 7;
+
+        var quantity = 1m;
+        var unitPriceText = textboxes.FirstOrDefault(t => t.Name == "UnitPrice")?.Text;
+        var unitPrice = decimal.TryParse(unitPriceText, NumberStyles.Any, CultureInfo.CurrentCulture, out var parsedPrice)
+            ? parsedPrice
+            : 0m;
+
+        return (description, quantity, leadTimeDays, quantity * unitPrice);
+    }
+
+    private static string BuildLineNotes(string customerQuoteNumber, string customerAddress, string adjustment)
+    {
+        return $"Customer quote #: {customerQuoteNumber}\nCustomer address: {customerAddress}\nPricing adjustment: {adjustment}";
+    }
+
+    private static Dictionary<string, string> ParseMetadata(string notes)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in notes.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var separator = line.IndexOf(':');
+            if (separator <= 0 || separator >= line.Length - 1)
+            {
+                continue;
+            }
+
+            metadata[line[..separator].Trim()] = line[(separator + 1)..].Trim();
+        }
+
+        return metadata;
+    }
+
+    private static byte[] BuildSimplePdf(IReadOnlyCollection<string> lines)
+    {
+        var escapedLines = lines.Select(EscapePdfText).ToList();
+        var y = 780;
+        var content = new StringBuilder("BT\n/F1 12 Tf\n");
+        foreach (var line in escapedLines)
+        {
+            content.AppendLine($"72 {y} Td ({line}) Tj");
+            content.AppendLine("0 -18 Td");
+            y -= 18;
+        }
+
+        content.Append("ET");
+        var contentBytes = Encoding.ASCII.GetBytes(content.ToString());
+
+        var objects = new List<string>
+        {
+            "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
+            "2 0 obj << /Type /Pages /Count 1 /Kids [3 0 R] >> endobj\n",
+            "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n",
+            "4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n",
+            $"5 0 obj << /Length {contentBytes.Length} >> stream\n{Encoding.ASCII.GetString(contentBytes)}\nendstream endobj\n"
+        };
+
+        using var stream = new MemoryStream();
+        var writer = new StreamWriter(stream, Encoding.ASCII) { NewLine = "\n" };
+        writer.Write("%PDF-1.4\n");
+        writer.Flush();
+
+        var offsets = new List<long> { 0 };
+        foreach (var obj in objects)
+        {
+            offsets.Add(stream.Position);
+            writer.Write(obj);
+            writer.Flush();
+        }
+
+        var xrefPosition = stream.Position;
+        writer.Write($"xref\n0 {objects.Count + 1}\n0000000000 65535 f \n");
+        foreach (var offset in offsets.Skip(1))
+        {
+            writer.Write($"{offset:0000000000} 00000 n \n");
+        }
+
+        writer.Write($"trailer << /Size {objects.Count + 1} /Root 1 0 R >>\nstartxref\n{xrefPosition}\n%%EOF");
+        writer.Flush();
+        return stream.ToArray();
+    }
+
+    private static string EscapePdfText(string value)
+    {
+        return value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("(", "\\(", StringComparison.Ordinal)
+            .Replace(")", "\\)", StringComparison.Ordinal);
     }
 }

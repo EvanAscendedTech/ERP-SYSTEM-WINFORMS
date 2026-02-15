@@ -38,14 +38,12 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         var actionsPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
         var refreshButton = new Button { Text = "Refresh Active Quotes", AutoSize = true };
         var newQuoteButton = new Button { Text = "Create New Quote", AutoSize = true };
-        var openQuotePacketButton = new Button { Text = "Open Quote Packet", AutoSize = true };
         var editQuoteButton = new Button { Text = "Open Quote Details", AutoSize = true };
-        var deleteQuoteButton = new Button { Text = "Delete In-Process Quote", AutoSize = true };
+        var deleteQuoteButton = new Button { Text = "Delete Quote", AutoSize = true };
         var passToProductionButton = new Button { Text = "Pass to Production", AutoSize = true };
 
         refreshButton.Click += async (_, _) => await LoadActiveQuotesAsync();
         newQuoteButton.Click += async (_, _) => await CreateNewQuoteAsync();
-        openQuotePacketButton.Click += async (_, _) => await OpenSelectedQuotePacketAsync();
         editQuoteButton.Click += async (_, _) => await OpenSelectedQuoteDetailsAsync();
         deleteQuoteButton.Click += async (_, _) => await DeleteSelectedQuoteAsync();
         passToProductionButton.Click += async (_, _) => await PassSelectedToProductionAsync();
@@ -58,7 +56,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
         actionsPanel.Controls.Add(refreshButton);
         actionsPanel.Controls.Add(newQuoteButton);
-        actionsPanel.Controls.Add(openQuotePacketButton);
         actionsPanel.Controls.Add(editQuoteButton);
         actionsPanel.Controls.Add(deleteQuoteButton);
         actionsPanel.Controls.Add(passToProductionButton);
@@ -170,34 +167,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         }
     }
 
-    private async Task OpenSelectedQuotePacketAsync()
-    {
-        if (TryGetSelectedQuoteId() is not int selectedId)
-        {
-            _feedback.Text = "Select a quote row first.";
-            return;
-        }
-
-        var fullQuote = await _quoteRepository.GetQuoteAsync(selectedId);
-        if (fullQuote is null)
-        {
-            _feedback.Text = $"Quote {selectedId} was not found.";
-            return;
-        }
-
-        using var packetWindow = new QuotePacketForm(fullQuote);
-        if (packetWindow.ShowDialog(this) == DialogResult.OK)
-        {
-            await _quoteRepository.SaveQuoteAsync(fullQuote);
-            _feedback.Text = $"Quote packet for quote {fullQuote.Id} saved to database.";
-            await LoadActiveQuotesAsync();
-        }
-        else
-        {
-            _feedback.Text = "Quote packet closed without saving.";
-        }
-    }
-
     private async Task OpenSelectedQuoteDetailsAsync()
     {
         if (TryGetSelectedQuoteId() is not int selectedId)
@@ -305,7 +274,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             return true;
         }
 
-        await OpenSelectedQuotePacketAsync();
+        await OpenSelectedQuoteDetailsAsync();
         return true;
     }
 
@@ -418,9 +387,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             Width = 250,
             Height = 116,
             Margin = new Padding(0, 0, 12, 0),
-            FillColor = string.Equals(_selectedCustomer, customerName, StringComparison.OrdinalIgnoreCase)
-                ? Color.FromArgb(214, 236, 255)
-                : Color.FromArgb(236, 240, 245),
+            FillColor = ResolveCustomerCardColor(customerName),
             Cursor = Cursors.Hand
         };
 
@@ -450,6 +417,25 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         return card;
     }
 
+    private Color ResolveCustomerCardColor(string customerName)
+    {
+        var palette = new[]
+        {
+            Color.FromArgb(229, 241, 255),
+            Color.FromArgb(232, 246, 235),
+            Color.FromArgb(255, 242, 224),
+            Color.FromArgb(243, 235, 255),
+            Color.FromArgb(255, 236, 240),
+            Color.FromArgb(237, 246, 248)
+        };
+
+        var hash = Math.Abs(customerName.GetHashCode());
+        var baseColor = palette[hash % palette.Length];
+        return string.Equals(_selectedCustomer, customerName, StringComparison.OrdinalIgnoreCase)
+            ? ControlPaint.Light(baseColor, 0.10f)
+            : baseColor;
+    }
+
     private sealed class CustomerCardPanel : Panel
     {
         private const int CornerRadius = 14;
@@ -476,6 +462,13 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         {
             base.OnResize(eventargs);
             UpdateRoundedRegion();
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            UpdateRoundedRegion();
+            Invalidate();
         }
 
         protected override void OnPaintBackground(PaintEventArgs e)
