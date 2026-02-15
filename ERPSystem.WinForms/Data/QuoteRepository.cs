@@ -9,6 +9,7 @@ namespace ERPSystem.WinForms.Data;
 public class QuoteRepository
 {
     private readonly string _connectionString;
+    private readonly string _blobStorageRoot;
     private readonly RealtimeDataService? _realtimeDataService;
 
     public QuoteRepository(string databasePath, RealtimeDataService? realtimeDataService = null)
@@ -19,6 +20,10 @@ public class QuoteRepository
             ForeignKeys = true
         }.ToString();
         _realtimeDataService = realtimeDataService;
+        var dbPath = new SqliteConnectionStringBuilder(_connectionString).DataSource;
+        var dbDirectory = Path.GetDirectoryName(Path.GetFullPath(dbPath)) ?? AppContext.BaseDirectory;
+        _blobStorageRoot = Path.Combine(dbDirectory, "ServerBlobStorage", "QuoteBlobs");
+        Directory.CreateDirectory(_blobStorageRoot);
     }
 
     public async Task InitializeDatabaseAsync()
@@ -117,6 +122,7 @@ public class QuoteRepository
                 FileSizeBytes INTEGER NOT NULL DEFAULT 0,
                 Sha256 BLOB NOT NULL DEFAULT X'',
                 UploadedBy TEXT NOT NULL DEFAULT '',
+                StorageRelativePath TEXT NOT NULL DEFAULT '',
                 BlobData BLOB NOT NULL,
                 UploadedUtc TEXT NOT NULL,
                 FOREIGN KEY(LineItemId) REFERENCES QuoteLineItems(Id) ON UPDATE CASCADE ON DELETE CASCADE,
@@ -219,6 +225,7 @@ public class QuoteRepository
                 FileSizeBytes INTEGER NOT NULL DEFAULT 0,
                 Sha256 BLOB NOT NULL DEFAULT X'',
                 UploadedBy TEXT NOT NULL DEFAULT '',
+                StorageRelativePath TEXT NOT NULL DEFAULT '',
                 BlobData BLOB NOT NULL,
                 UploadedUtc TEXT NOT NULL,
                 FOREIGN KEY(ArchiveId) REFERENCES ArchivedQuotes(ArchiveId) ON DELETE CASCADE
@@ -266,6 +273,7 @@ public class QuoteRepository
         await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "FileSizeBytes", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "Sha256", "BLOB NOT NULL DEFAULT X''");
         await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "UploadedBy", "TEXT NOT NULL DEFAULT ''");
+        await EnsureColumnExistsAsync(connection, "QuoteBlobFiles", "StorageRelativePath", "TEXT NOT NULL DEFAULT ''");
 
         await EnsureColumnExistsAsync(connection, "Customers", "Address", "TEXT NOT NULL DEFAULT ''");
 
@@ -285,6 +293,7 @@ public class QuoteRepository
 
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
+
 
         await using var command = connection.CreateCommand();
         command.CommandText = @"
@@ -475,6 +484,7 @@ public class QuoteRepository
                 AddNullableString(updateQuote, "$passedToPurchasingByUserId", quote.PassedToPurchasingByUserId);
                 await updateQuote.ExecuteNonQueryAsync();
 
+                await DeleteStoredFilesForQuoteAsync(connection, transaction, quote.Id);
                 await DeleteLineItemsForQuoteAsync(connection, transaction, quote.Id);
             }
 
@@ -552,6 +562,7 @@ public class QuoteRepository
                             FileSizeBytes,
                             Sha256,
                             UploadedBy,
+                            StorageRelativePath,
                             BlobData,
                             UploadedUtc)
                         VALUES (
@@ -565,6 +576,7 @@ public class QuoteRepository
                             $fileSizeBytes,
                             $sha256,
                             $uploadedBy,
+                            $storageRelativePath,
                             $blobData,
                             $uploadedUtc);";
                     insertBlob.Parameters.AddWithValue("$quoteId", quote.Id);
@@ -576,7 +588,11 @@ public class QuoteRepository
                     insertBlob.Parameters.AddWithValue("$contentType", blob.ContentType);
                     insertBlob.Parameters.AddWithValue("$fileSizeBytes", blob.FileSizeBytes);
                     insertBlob.Parameters.AddWithValue("$sha256", blob.Sha256);
+                    var storageRelativePath = string.IsNullOrWhiteSpace(blob.StorageRelativePath)
+                        ? SaveBlobToStorage(quote.Id, lineItem.Id, blob.BlobType, blob.FileName, blob.BlobData)
+                        : blob.StorageRelativePath;
                     insertBlob.Parameters.AddWithValue("$uploadedBy", blob.UploadedBy);
+                    insertBlob.Parameters.AddWithValue("$storageRelativePath", storageRelativePath);
                     insertBlob.Parameters.AddWithValue("$blobData", blob.BlobData);
                     insertBlob.Parameters.AddWithValue("$uploadedUtc", blob.UploadedUtc.ToString("O"));
                     await insertBlob.ExecuteNonQueryAsync();
@@ -1076,7 +1092,7 @@ public class QuoteRepository
 
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            SELECT Id, QuoteId, LineItemId, LifecycleId, BlobType, FileName, Extension, ContentType, FileSizeBytes, Sha256, UploadedBy, BlobData, UploadedUtc
+            SELECT Id, QuoteId, LineItemId, LifecycleId, BlobType, FileName, Extension, ContentType, FileSizeBytes, Sha256, UploadedBy, StorageRelativePath, BlobData, UploadedUtc
             FROM QuoteBlobFiles
             WHERE LineItemId = $lineItemId
             ORDER BY Id;";
@@ -1098,8 +1114,9 @@ public class QuoteRepository
                 FileSizeBytes = reader.GetInt64(8),
                 Sha256 = reader.IsDBNull(9) ? Array.Empty<byte>() : (byte[])reader[9],
                 UploadedBy = reader.IsDBNull(10) ? string.Empty : reader.GetString(10),
-                BlobData = (byte[])reader[11],
-                UploadedUtc = DateTime.Parse(reader.GetString(12), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+                StorageRelativePath = reader.IsDBNull(11) ? string.Empty : reader.GetString(11),
+                BlobData = reader.IsDBNull(12) ? Array.Empty<byte>() : (byte[])reader[12],
+                UploadedUtc = DateTime.Parse(reader.GetString(13), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
             });
         }
 
@@ -1122,6 +1139,46 @@ public class QuoteRepository
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
 
+        var overwrittenPaths = new List<string>();
+        await using (var existingCommand = connection.CreateCommand())
+        {
+            existingCommand.CommandText = @"
+                SELECT StorageRelativePath
+                FROM QuoteBlobFiles
+                WHERE LineItemId = $lineItemId
+                  AND BlobType = $blobType
+                  AND FileName = $fileName;";
+            existingCommand.Parameters.AddWithValue("$lineItemId", lineItemId);
+            existingCommand.Parameters.AddWithValue("$blobType", (int)blobType);
+            existingCommand.Parameters.AddWithValue("$fileName", fileName);
+            await using var existingReader = await existingCommand.ExecuteReaderAsync();
+            while (await existingReader.ReadAsync())
+            {
+                if (!existingReader.IsDBNull(0))
+                {
+                    overwrittenPaths.Add(existingReader.GetString(0));
+                }
+            }
+        }
+
+        await using (var overwrite = connection.CreateCommand())
+        {
+            overwrite.CommandText = @"
+                DELETE FROM QuoteBlobFiles
+                WHERE LineItemId = $lineItemId
+                  AND BlobType = $blobType
+                  AND FileName = $fileName;";
+            overwrite.Parameters.AddWithValue("$lineItemId", lineItemId);
+            overwrite.Parameters.AddWithValue("$blobType", (int)blobType);
+            overwrite.Parameters.AddWithValue("$fileName", fileName);
+            await overwrite.ExecuteNonQueryAsync();
+        }
+
+        foreach (var path in overwrittenPaths)
+        {
+            DeletePhysicalBlob(path);
+        }
+
         await using var command = connection.CreateCommand();
         command.CommandText = @"
             INSERT INTO QuoteBlobFiles (
@@ -1135,6 +1192,7 @@ public class QuoteRepository
                 FileSizeBytes,
                 Sha256,
                 UploadedBy,
+                StorageRelativePath,
                 BlobData,
                 UploadedUtc)
             VALUES (
@@ -1148,6 +1206,7 @@ public class QuoteRepository
                 $fileSizeBytes,
                 $sha256,
                 $uploadedBy,
+                $storageRelativePath,
                 $blobData,
                 $uploadedUtc);
             SELECT last_insert_rowid();";
@@ -1160,7 +1219,9 @@ public class QuoteRepository
         command.Parameters.AddWithValue("$contentType", extension);
         command.Parameters.AddWithValue("$fileSizeBytes", fileSizeBytes);
         command.Parameters.AddWithValue("$sha256", sha256);
+        var storageRelativePath = SaveBlobToStorage(quoteId, lineItemId, blobType, fileName, blobData);
         command.Parameters.AddWithValue("$uploadedBy", uploadedBy);
+        command.Parameters.AddWithValue("$storageRelativePath", storageRelativePath);
         command.Parameters.AddWithValue("$blobData", blobData);
         command.Parameters.AddWithValue("$uploadedUtc", uploadedUtc.ToString("O"));
 
@@ -1179,6 +1240,7 @@ public class QuoteRepository
             FileSizeBytes = fileSizeBytes,
             Sha256 = sha256,
             UploadedBy = uploadedBy,
+            StorageRelativePath = storageRelativePath,
             BlobData = blobData,
             UploadedUtc = uploadedUtc
         };
@@ -1201,6 +1263,8 @@ public class QuoteRepository
         {
             await ArchiveQuoteAsync(connection, transaction, quote);
         }
+
+        await DeleteStoredFilesForQuoteAsync(connection, transaction, quoteId);
 
         await using (var deleteBlobFiles = connection.CreateCommand())
         {
@@ -1368,10 +1432,138 @@ public class QuoteRepository
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
 
+        var storagePath = await GetBlobStoragePathAsync(connection, fileId);
+
         await using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM QuoteBlobFiles WHERE Id = $id;";
         command.Parameters.AddWithValue("$id", fileId);
         await command.ExecuteNonQueryAsync();
+
+        DeletePhysicalBlob(storagePath);
+    }
+
+    public async Task DeleteQuoteLineItemAsync(int lineItemId)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
+
+        await DeleteStoredFilesForLineItemAsync(connection, transaction, lineItemId);
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "DELETE FROM QuoteLineItems WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", lineItemId);
+        await command.ExecuteNonQueryAsync();
+
+        await transaction.CommitAsync();
+    }
+
+    public async Task<byte[]> GetQuoteBlobContentAsync(int blobId)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT StorageRelativePath, BlobData FROM QuoteBlobFiles WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", blobId);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Array.Empty<byte>();
+        }
+
+        var relativePath = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+        if (!string.IsNullOrWhiteSpace(relativePath))
+        {
+            var fullPath = Path.Combine(_blobStorageRoot, relativePath);
+            if (File.Exists(fullPath))
+            {
+                return await File.ReadAllBytesAsync(fullPath);
+            }
+        }
+
+        return reader.IsDBNull(1) ? Array.Empty<byte>() : (byte[])reader[1];
+    }
+
+    private async Task<string?> GetBlobStoragePathAsync(SqliteConnection connection, int blobId)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT StorageRelativePath FROM QuoteBlobFiles WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", blobId);
+        var result = await command.ExecuteScalarAsync();
+        return result is DBNull or null ? null : Convert.ToString(result, CultureInfo.InvariantCulture);
+    }
+
+    private async Task DeleteStoredFilesForQuoteAsync(SqliteConnection connection, SqliteTransaction transaction, int quoteId)
+    {
+        var paths = new List<string>();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT StorageRelativePath FROM QuoteBlobFiles WHERE QuoteId = $quoteId;";
+        command.Parameters.AddWithValue("$quoteId", quoteId);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            if (!reader.IsDBNull(0))
+            {
+                paths.Add(reader.GetString(0));
+            }
+        }
+
+        foreach (var path in paths)
+        {
+            DeletePhysicalBlob(path);
+        }
+    }
+
+    private async Task DeleteStoredFilesForLineItemAsync(SqliteConnection connection, SqliteTransaction transaction, int lineItemId)
+    {
+        var paths = new List<string>();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT StorageRelativePath FROM QuoteBlobFiles WHERE LineItemId = $lineItemId;";
+        command.Parameters.AddWithValue("$lineItemId", lineItemId);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            if (!reader.IsDBNull(0))
+            {
+                paths.Add(reader.GetString(0));
+            }
+        }
+
+        foreach (var path in paths)
+        {
+            DeletePhysicalBlob(path);
+        }
+    }
+
+    private string SaveBlobToStorage(int quoteId, int lineItemId, QuoteBlobType blobType, string fileName, byte[] blobData)
+    {
+        var safeName = Path.GetFileName(fileName);
+        var quoteFolder = Path.Combine(_blobStorageRoot, $"Q{quoteId}", $"LI{lineItemId}", blobType.ToString());
+        Directory.CreateDirectory(quoteFolder);
+        var fullPath = Path.Combine(quoteFolder, safeName);
+        File.WriteAllBytes(fullPath, blobData);
+        return Path.GetRelativePath(_blobStorageRoot, fullPath);
+    }
+
+    private void DeletePhysicalBlob(string? storageRelativePath)
+    {
+        if (string.IsNullOrWhiteSpace(storageRelativePath))
+        {
+            return;
+        }
+
+        var fullPath = Path.Combine(_blobStorageRoot, storageRelativePath);
+        if (File.Exists(fullPath))
+        {
+            File.Delete(fullPath);
+        }
     }
 
     private static async Task EnsureColumnExistsAsync(SqliteConnection connection, string tableName, string columnName, string definition)

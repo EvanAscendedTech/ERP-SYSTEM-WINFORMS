@@ -1,6 +1,7 @@
+using System.Globalization;
+using System.Security.Cryptography;
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
-using System.Globalization;
 
 namespace ERPSystem.WinForms.Forms;
 
@@ -8,16 +9,18 @@ public class QuoteDraftForm : Form
 {
     private readonly QuoteRepository _quoteRepository;
     private readonly bool _canViewPricing;
+    private readonly string _uploadedBy;
     private readonly ComboBox _customerPicker = new() { Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox _customerAddress = new() { Width = 300, ReadOnly = true };
     private readonly TextBox _customerPartPo = new() { Width = 220, PlaceholderText = "Customer Part PO" };
     private readonly TextBox _cycleTime = new() { Width = 120, PlaceholderText = "Cycle Time" };
     private readonly TextBox _ipNotes = new() { Width = 180, PlaceholderText = "IP Fields" };
     private readonly TextBox _quoteLifecycleId = new() { Width = 220, ReadOnly = true };
-    private readonly FlowLayoutPanel _lineItemsPanel = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
+    private readonly FlowLayoutPanel _lineItemsPanel = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(4) };
     private readonly Label _totalHoursValue = new() { AutoSize = true, Text = "0.00" };
     private readonly Label _masterTotalValue = new() { AutoSize = true, Text = "$0.00" };
     private readonly Quote? _editingQuote;
+    private readonly List<LineItemCard> _lineItemCards = new();
     private decimal _shopHourlyRate;
 
     public int CreatedQuoteId { get; private set; }
@@ -27,6 +30,7 @@ public class QuoteDraftForm : Form
     {
         _quoteRepository = quoteRepository;
         _canViewPricing = canViewPricing;
+        _uploadedBy = uploadedBy;
         _editingQuote = editingQuote;
         _quoteLifecycleId.Text = string.IsNullOrWhiteSpace(editingQuote?.LifecycleQuoteId) ? GenerateLifecycleQuoteId() : editingQuote.LifecycleQuoteId;
 
@@ -86,6 +90,7 @@ public class QuoteDraftForm : Form
         Controls.Add(root);
 
         _customerPicker.SelectedIndexChanged += (_, _) => OnCustomerSelected();
+        _lineItemsPanel.Resize += (_, _) => ResizeCards();
         _ = InitializeAsync();
     }
 
@@ -110,7 +115,12 @@ public class QuoteDraftForm : Form
             return;
         }
 
-        AddLineItemCard();
+        if (_lineItemCards.Count == 0)
+        {
+            AddLineItemCard();
+        }
+
+        RecalculateQuoteTotals();
     }
 
     private void OnCustomerSelected()
@@ -130,12 +140,13 @@ public class QuoteDraftForm : Form
         _shopHourlyRate = quote.ShopHourlyRateSnapshot > 0 ? quote.ShopHourlyRateSnapshot : _shopHourlyRate;
 
         _lineItemsPanel.Controls.Clear();
+        _lineItemCards.Clear();
         foreach (var line in quote.LineItems)
         {
             AddLineItemCard(line);
         }
 
-        if (_lineItemsPanel.Controls.Count == 0)
+        if (_lineItemCards.Count == 0)
         {
             AddLineItemCard();
         }
@@ -145,78 +156,350 @@ public class QuoteDraftForm : Form
 
     private void AddLineItemCard(QuoteLineItem? source = null)
     {
-        var group = new GroupBox { Text = $"Line Item {_lineItemsPanel.Controls.Count + 1}", Width = 1210, Height = 180, AutoSize = false };
-        var fields = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 3, Padding = new Padding(6) };
-        for (var i = 0; i < 5; i++) fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
+        var model = source ?? new QuoteLineItem();
+        if (source is not null)
+        {
+            model = new QuoteLineItem
+            {
+                Id = source.Id,
+                QuoteId = source.QuoteId,
+                Description = source.Description,
+                DrawingNumber = source.DrawingNumber,
+                DrawingName = source.DrawingName,
+                Revision = source.Revision,
+                ProductionHours = source.ProductionHours,
+                SetupHours = source.SetupHours,
+                MaterialCost = source.MaterialCost,
+                ToolingCost = source.ToolingCost,
+                SecondaryOperationsCost = source.SecondaryOperationsCost,
+                LineItemTotal = source.LineItemTotal,
+                BlobAttachments = source.BlobAttachments.Select(x => new QuoteBlobAttachment
+                {
+                    Id = x.Id,
+                    QuoteId = x.QuoteId,
+                    LineItemId = x.LineItemId,
+                    LifecycleId = x.LifecycleId,
+                    BlobType = x.BlobType,
+                    FileName = x.FileName,
+                    Extension = x.Extension,
+                    ContentType = x.ContentType,
+                    FileSizeBytes = x.FileSizeBytes,
+                    Sha256 = x.Sha256,
+                    UploadedBy = x.UploadedBy,
+                    StorageRelativePath = x.StorageRelativePath,
+                    BlobData = x.BlobData,
+                    UploadedUtc = x.UploadedUtc
+                }).ToList()
+            };
+        }
 
-        var drawingNumber = NewField("Drawing Number", source?.DrawingNumber);
-        var drawingName = NewField("Drawing Name", source?.DrawingName);
-        var revision = NewField("Revision", source?.Revision);
-        var productionHours = NewField("Production Hours", source?.ProductionHours.ToString(CultureInfo.CurrentCulture));
-        var setupHours = NewField("Setup Hours", source?.SetupHours.ToString(CultureInfo.CurrentCulture));
-        var materialCost = NewField("Material Cost", source?.MaterialCost.ToString(CultureInfo.CurrentCulture));
-        var toolingCost = NewField("Tooling Cost", source?.ToolingCost.ToString(CultureInfo.CurrentCulture));
-        var secondaryCost = NewField("Secondary Operations Cost", source?.SecondaryOperationsCost.ToString(CultureInfo.CurrentCulture));
-        var lineTotal = NewField("Line Item Total", source?.LineItemTotal.ToString(CultureInfo.CurrentCulture), readOnly: true);
+        var card = BuildCard(model, _lineItemCards.Count);
+        _lineItemCards.Add(card);
+        _lineItemsPanel.Controls.Add(card.Container);
+        RenumberLineItems();
+        ResizeCards();
+        RecalculateQuoteTotals();
+    }
 
-        productionHours.Name = "ProductionHours";
-        setupHours.Name = "SetupHours";
-        materialCost.Name = "MaterialCost";
-        toolingCost.Name = "ToolingCost";
-        secondaryCost.Name = "SecondaryOperationsCost";
-        lineTotal.Name = "LineItemTotal";
+    private LineItemCard BuildCard(QuoteLineItem model, int index)
+    {
+        var cardPanel = new Panel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            BorderStyle = BorderStyle.FixedSingle,
+            Margin = new Padding(0, 0, 0, 10),
+            Padding = new Padding(10),
+            BackColor = index % 2 == 0 ? Color.FromArgb(245, 248, 252) : Color.FromArgb(234, 243, 250)
+        };
 
-        drawingNumber.Name = "DrawingNumber";
-        drawingName.Name = "DrawingName";
-        revision.Name = "Revision";
+        var layout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 5 };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var title = new Label { AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
+        layout.Controls.Add(title, 0, 0);
+
+        var topFields = new TableLayoutPanel { AutoSize = true, ColumnCount = 4, Dock = DockStyle.Top };
+        for (var i = 0; i < 4; i++) topFields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+
+        var drawingNumber = NewDecimalDisabledField(model.DrawingNumber);
+        var drawingName = NewDecimalDisabledField(model.DrawingName);
+        var revision = NewDecimalDisabledField(model.Revision);
+        var removeButton = new Button { Text = "Remove Line Item", AutoSize = true, BackColor = Color.FromArgb(214, 77, 77), ForeColor = Color.White };
+        removeButton.Click += async (_, _) => await RemoveLineItemAsync(model, cardPanel);
+
+        topFields.Controls.Add(NewFieldPanel("Drawing Number", drawingNumber), 0, 0);
+        topFields.Controls.Add(NewFieldPanel("Drawing Name", drawingName), 1, 0);
+        topFields.Controls.Add(NewFieldPanel("Revision", revision), 2, 0);
+        topFields.Controls.Add(new FlowLayoutPanel { AutoSize = true, Controls = { removeButton } }, 3, 0);
+        layout.Controls.Add(topFields, 0, 1);
+
+        var drawingDocs = BuildBlobArea(model, QuoteBlobType.Technical, "Drawings (PDF / STEP)");
+        var modelDocs = BuildBlobArea(model, QuoteBlobType.ThreeDModel, "3D Models");
+        var docsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Dock = DockStyle.Top };
+        docsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        docsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        docsRow.Controls.Add(drawingDocs.SectionPanel, 0, 0);
+        docsRow.Controls.Add(modelDocs.SectionPanel, 1, 0);
+        layout.Controls.Add(docsRow, 0, 2);
+
+        var costsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 5, Dock = DockStyle.Top };
+        for (var i = 0; i < 5; i++) costsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
+
+        var productionHours = NewNumericField(model.ProductionHours);
+        var setupHours = NewNumericField(model.SetupHours);
+        var materialCost = NewNumericField(model.MaterialCost);
+        var toolingCost = NewNumericField(model.ToolingCost);
+        var secondaryCost = NewNumericField(model.SecondaryOperationsCost);
 
         foreach (var box in new[] { productionHours, setupHours, materialCost, toolingCost, secondaryCost })
         {
             box.TextChanged += (_, _) => RecalculateQuoteTotals();
         }
 
-        AddControl(fields, 0, 0, "Drawing Number", drawingNumber);
-        AddControl(fields, 1, 0, "Drawing Name", drawingName);
-        AddControl(fields, 2, 0, "Revision", revision);
-        AddControl(fields, 3, 0, "Production Hours", productionHours);
-        AddControl(fields, 4, 0, "Setup Hours", setupHours);
-        AddControl(fields, 0, 1, "Material Cost", materialCost);
-        AddControl(fields, 1, 1, "Tooling Cost", toolingCost);
-        AddControl(fields, 2, 1, "Secondary Operations Cost", secondaryCost);
-        AddControl(fields, 3, 1, "Line Item Total", lineTotal);
+        costsRow.Controls.Add(NewFieldPanel("Production Hours", productionHours), 0, 0);
+        costsRow.Controls.Add(NewFieldPanel("Setup Hours", setupHours), 1, 0);
+        costsRow.Controls.Add(NewFieldPanel("Material Cost", materialCost), 2, 0);
+        costsRow.Controls.Add(NewFieldPanel("Tooling Cost", toolingCost), 3, 0);
+        costsRow.Controls.Add(NewFieldPanel("Secondary Operations Cost", secondaryCost), 4, 0);
+        layout.Controls.Add(costsRow, 0, 3);
 
-        var removeButton = new Button { Text = "Remove", AutoSize = true };
-        removeButton.Click += (_, _) =>
+        var supportDocsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 3, Dock = DockStyle.Top };
+        supportDocsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
+        supportDocsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
+        supportDocsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
+        var materialDocs = BuildBlobArea(model, QuoteBlobType.MaterialPricing, "Material Blob Area");
+        var toolingDocs = BuildBlobArea(model, QuoteBlobType.ToolingDocumentation, "Tooling Blob Area");
+        var postOpDocs = BuildBlobArea(model, QuoteBlobType.PostOpPricing, "Secondary Operations Blob Area");
+        supportDocsRow.Controls.Add(materialDocs.SectionPanel, 0, 0);
+        supportDocsRow.Controls.Add(toolingDocs.SectionPanel, 1, 0);
+        supportDocsRow.Controls.Add(postOpDocs.SectionPanel, 2, 0);
+        layout.Controls.Add(supportDocsRow, 0, 4);
+
+        var footer = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+        var totalBox = new TextBox { ReadOnly = true, Width = 180, Text = model.LineItemTotal.ToString("0.00", CultureInfo.CurrentCulture) };
+        footer.Controls.Add(new Label { Text = "Line Item Total", AutoSize = true, Margin = new Padding(0, 8, 8, 0), Font = new Font(Font, FontStyle.Bold) });
+        footer.Controls.Add(totalBox);
+        layout.Controls.Add(footer);
+
+        cardPanel.Controls.Add(layout);
+
+        var card = new LineItemCard
         {
-            _lineItemsPanel.Controls.Remove(group);
-            RenumberLineItems();
-            RecalculateQuoteTotals();
+            Container = cardPanel,
+            Title = title,
+            Model = model,
+            DrawingNumber = drawingNumber,
+            DrawingName = drawingName,
+            Revision = revision,
+            ProductionHours = productionHours,
+            SetupHours = setupHours,
+            MaterialCost = materialCost,
+            ToolingCost = toolingCost,
+            SecondaryCost = secondaryCost,
+            Total = totalBox,
+            BlobLists = new Dictionary<QuoteBlobType, ListBox>
+            {
+                [QuoteBlobType.Technical] = drawingDocs.List,
+                [QuoteBlobType.ThreeDModel] = modelDocs.List,
+                [QuoteBlobType.MaterialPricing] = materialDocs.List,
+                [QuoteBlobType.ToolingDocumentation] = toolingDocs.List,
+                [QuoteBlobType.PostOpPricing] = postOpDocs.List
+            }
         };
-        fields.Controls.Add(removeButton, 4, 1);
 
-        group.Controls.Add(fields);
-        _lineItemsPanel.Controls.Add(group);
+        RefreshBlobLists(card);
+        return card;
+    }
+
+    private BlobArea BuildBlobArea(QuoteLineItem model, QuoteBlobType blobType, string title)
+    {
+        var panel = new Panel { AutoSize = true, BorderStyle = BorderStyle.FixedSingle, Padding = new Padding(6), Margin = new Padding(3) };
+        var titleLabel = new Label { Text = title, AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
+        var list = new ListBox { Width = 320, Height = 70 };
+
+        var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+        var upload = new Button { Text = "Upload", AutoSize = true };
+        var delete = new Button { Text = "Delete", AutoSize = true };
+        var download = new Button { Text = "Download", AutoSize = true };
+
+        upload.Click += async (_, _) => await UploadBlobAsync(model, blobType);
+        delete.Click += async (_, _) => await DeleteBlobAsync(model, blobType, list.SelectedItem as QuoteBlobAttachment);
+        download.Click += async (_, _) => await DownloadBlobAsync(list.SelectedItem as QuoteBlobAttachment);
+
+        buttons.Controls.Add(upload);
+        buttons.Controls.Add(delete);
+        buttons.Controls.Add(download);
+
+        var content = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
+        content.Controls.Add(titleLabel);
+        content.Controls.Add(list);
+        content.Controls.Add(buttons);
+        panel.Controls.Add(content);
+
+        return new BlobArea { SectionPanel = panel, List = list };
+    }
+
+    private async Task UploadBlobAsync(QuoteLineItem model, QuoteBlobType blobType)
+    {
+        using var picker = new OpenFileDialog
+        {
+            Title = "Select file",
+            Filter = "All Files (*.*)|*.*",
+            CheckFileExists = true
+        };
+
+        if (picker.ShowDialog(this) != DialogResult.OK) return;
+
+        var fileName = Path.GetFileName(picker.FileName);
+        var existing = model.BlobAttachments.FirstOrDefault(x => x.BlobType == blobType && string.Equals(x.FileName, fileName, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            if (existing.Id > 0) await _quoteRepository.DeleteQuoteLineItemFileAsync(existing.Id);
+            model.BlobAttachments.Remove(existing);
+        }
+
+        var bytes = await File.ReadAllBytesAsync(picker.FileName);
+        using var sha = SHA256.Create();
+        var attachment = new QuoteBlobAttachment
+        {
+            QuoteId = _editingQuote?.Id ?? 0,
+            LineItemId = model.Id,
+            LifecycleId = _quoteLifecycleId.Text,
+            BlobType = blobType,
+            FileName = fileName,
+            Extension = Path.GetExtension(picker.FileName),
+            ContentType = Path.GetExtension(picker.FileName),
+            FileSizeBytes = bytes.LongLength,
+            Sha256 = sha.ComputeHash(bytes),
+            UploadedBy = _uploadedBy,
+            UploadedUtc = DateTime.UtcNow,
+            BlobData = bytes
+        };
+
+        if (_editingQuote is not null && model.Id > 0)
+        {
+            attachment = await _quoteRepository.InsertQuoteLineItemFileAsync(
+                _editingQuote.Id,
+                model.Id,
+                _quoteLifecycleId.Text,
+                blobType,
+                attachment.FileName,
+                attachment.Extension,
+                attachment.FileSizeBytes,
+                attachment.Sha256,
+                _uploadedBy,
+                attachment.UploadedUtc,
+                bytes);
+        }
+
+        model.BlobAttachments.Add(attachment);
+        RefreshAllBlobLists();
+    }
+
+    private async Task DeleteBlobAsync(QuoteLineItem model, QuoteBlobType blobType, QuoteBlobAttachment? selected)
+    {
+        if (selected is null || selected.BlobType != blobType) return;
+        if (selected.Id > 0) await _quoteRepository.DeleteQuoteLineItemFileAsync(selected.Id);
+        model.BlobAttachments.Remove(selected);
+        RefreshAllBlobLists();
+    }
+
+    private async Task DownloadBlobAsync(QuoteBlobAttachment? attachment)
+    {
+        if (attachment is null) return;
+
+        using var saveDialog = new SaveFileDialog
+        {
+            FileName = attachment.FileName,
+            Filter = "All Files (*.*)|*.*"
+        };
+
+        if (saveDialog.ShowDialog(this) != DialogResult.OK) return;
+        var data = attachment.BlobData.Length > 0 ? attachment.BlobData : await _quoteRepository.GetQuoteBlobContentAsync(attachment.Id);
+        await File.WriteAllBytesAsync(saveDialog.FileName, data);
+    }
+
+    private void RefreshAllBlobLists()
+    {
+        foreach (var card in _lineItemCards)
+        {
+            RefreshBlobLists(card);
+        }
+    }
+
+    private void RefreshBlobLists(LineItemCard card)
+    {
+        foreach (var (blobType, list) in card.BlobLists)
+        {
+            list.DataSource = null;
+            list.DisplayMember = nameof(QuoteBlobAttachment.FileName);
+            list.DataSource = card.Model.BlobAttachments.Where(x => x.BlobType == blobType).OrderBy(x => x.FileName).ToList();
+        }
+    }
+
+    private async Task RemoveLineItemAsync(QuoteLineItem model, Control container)
+    {
+        if (model.Id > 0)
+        {
+            await _quoteRepository.DeleteQuoteLineItemAsync(model.Id);
+        }
+
+        var card = _lineItemCards.FirstOrDefault(x => ReferenceEquals(x.Container, container));
+        if (card is not null)
+        {
+            _lineItemCards.Remove(card);
+        }
+
+        _lineItemsPanel.Controls.Remove(container);
+        RenumberLineItems();
+        ResizeCards();
         RecalculateQuoteTotals();
     }
 
-    private static TextBox NewField(string name, string? value = null, bool readOnly = false) => new() { Width = 180, Name = name.Replace(" ", string.Empty), Text = value ?? string.Empty, ReadOnly = readOnly };
+    private static TextBox NewDecimalDisabledField(string value)
+        => new() { Width = 220, Text = value };
 
-    private static void AddControl(TableLayoutPanel panel, int col, int row, string label, Control input)
+    private static TextBox NewNumericField(decimal value)
+    {
+        var box = new TextBox { Width = 180, Text = value.ToString("0.00", CultureInfo.CurrentCulture) };
+        box.KeyPress += (_, e) =>
+        {
+            if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar) && e.KeyChar != '.' && e.KeyChar != ',')
+            {
+                e.Handled = true;
+            }
+        };
+
+        return box;
+    }
+
+    private static FlowLayoutPanel NewFieldPanel(string label, Control input)
     {
         var flow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
         flow.Controls.Add(new Label { Text = label, AutoSize = true });
         flow.Controls.Add(input);
-        panel.Controls.Add(flow, col, row);
+        return flow;
     }
 
     private void RenumberLineItems()
     {
-        for (var i = 0; i < _lineItemsPanel.Controls.Count; i++)
+        for (var i = 0; i < _lineItemCards.Count; i++)
         {
-            if (_lineItemsPanel.Controls[i] is GroupBox gb)
-            {
-                gb.Text = $"Line Item {i + 1}";
-            }
+            _lineItemCards[i].Title.Text = $"Line Item {i + 1}";
+            _lineItemCards[i].Container.BackColor = i % 2 == 0 ? Color.FromArgb(245, 248, 252) : Color.FromArgb(234, 243, 250);
+        }
+    }
+
+    private void ResizeCards()
+    {
+        foreach (var card in _lineItemCards)
+        {
+            card.Container.Width = Math.Max(600, _lineItemsPanel.ClientSize.Width - 28);
         }
     }
 
@@ -224,41 +507,36 @@ public class QuoteDraftForm : Form
     {
         decimal masterTotal = 0;
         decimal totalHours = 0;
-        foreach (var group in _lineItemsPanel.Controls.OfType<GroupBox>())
+
+        foreach (var card in _lineItemCards)
         {
-            var production = GetDecimal(group, "ProductionHours");
-            var setup = GetDecimal(group, "SetupHours");
-            var material = GetDecimal(group, "MaterialCost");
-            var tooling = GetDecimal(group, "ToolingCost");
-            var secondary = GetDecimal(group, "SecondaryOperationsCost");
+            card.Model.DrawingNumber = card.DrawingNumber.Text.Trim();
+            card.Model.DrawingName = card.DrawingName.Text.Trim();
+            card.Model.Revision = card.Revision.Text.Trim();
+            card.Model.ProductionHours = ParseDecimal(card.ProductionHours.Text);
+            card.Model.SetupHours = ParseDecimal(card.SetupHours.Text);
+            card.Model.MaterialCost = ParseDecimal(card.MaterialCost.Text);
+            card.Model.ToolingCost = ParseDecimal(card.ToolingCost.Text);
+            card.Model.SecondaryOperationsCost = ParseDecimal(card.SecondaryCost.Text);
 
-            var lineTotal = ((production + setup) * _shopHourlyRate) + material + tooling + secondary;
-            totalHours += production + setup;
+            var lineTotal = ((card.Model.ProductionHours + card.Model.SetupHours) * _shopHourlyRate)
+                            + card.Model.MaterialCost
+                            + card.Model.ToolingCost
+                            + card.Model.SecondaryOperationsCost;
+
+            card.Model.LineItemTotal = lineTotal;
+            card.Total.Text = lineTotal.ToString("0.00", CultureInfo.CurrentCulture);
+
+            totalHours += card.Model.ProductionHours + card.Model.SetupHours;
             masterTotal += lineTotal;
-
-            SetText(group, "LineItemTotal", lineTotal.ToString("0.00", CultureInfo.CurrentCulture));
         }
 
         _totalHoursValue.Text = totalHours.ToString("0.00", CultureInfo.CurrentCulture);
         _masterTotalValue.Text = masterTotal.ToString("C", CultureInfo.CurrentCulture);
     }
 
-    private static decimal GetDecimal(GroupBox group, string name)
-    {
-        var text = group.Controls.OfType<TableLayoutPanel>().SelectMany(t => t.Controls.OfType<FlowLayoutPanel>()).SelectMany(f => f.Controls.OfType<TextBox>()).FirstOrDefault(t => t.Name == name)?.Text;
-        return decimal.TryParse(text, NumberStyles.Any, CultureInfo.CurrentCulture, out var value) ? value : 0m;
-    }
-
-    private static string GetText(GroupBox group, string name)
-    {
-        return group.Controls.OfType<TableLayoutPanel>().SelectMany(t => t.Controls.OfType<FlowLayoutPanel>()).SelectMany(f => f.Controls.OfType<TextBox>()).FirstOrDefault(t => t.Name == name)?.Text?.Trim() ?? string.Empty;
-    }
-
-    private static void SetText(GroupBox group, string name, string value)
-    {
-        var box = group.Controls.OfType<TableLayoutPanel>().SelectMany(t => t.Controls.OfType<FlowLayoutPanel>()).SelectMany(f => f.Controls.OfType<TextBox>()).FirstOrDefault(t => t.Name == name);
-        if (box is not null) box.Text = value;
-    }
+    private static decimal ParseDecimal(string value)
+        => decimal.TryParse(value, NumberStyles.Any, CultureInfo.CurrentCulture, out var result) ? result : 0m;
 
     private async Task SaveQuoteAsync()
     {
@@ -267,6 +545,8 @@ public class QuoteDraftForm : Form
             MessageBox.Show("Customer is required.", "Quote", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
+
+        RecalculateQuoteTotals();
 
         var quote = new Quote
         {
@@ -280,25 +560,13 @@ public class QuoteDraftForm : Form
             LastUpdatedUtc = DateTime.UtcNow
         };
 
-        foreach (var group in _lineItemsPanel.Controls.OfType<GroupBox>())
+        foreach (var card in _lineItemCards)
         {
-            var line = new QuoteLineItem
-            {
-                Description = string.IsNullOrWhiteSpace(GetText(group, "DrawingName")) ? group.Text : GetText(group, "DrawingName"),
-                DrawingNumber = GetText(group, "DrawingNumber"),
-                DrawingName = GetText(group, "DrawingName"),
-                Revision = GetText(group, "Revision"),
-                ProductionHours = GetDecimal(group, "ProductionHours"),
-                SetupHours = GetDecimal(group, "SetupHours"),
-                MaterialCost = GetDecimal(group, "MaterialCost"),
-                ToolingCost = GetDecimal(group, "ToolingCost"),
-                SecondaryOperationsCost = GetDecimal(group, "SecondaryOperationsCost"),
-                LineItemTotal = GetDecimal(group, "LineItemTotal"),
-                Quantity = 1,
-                UnitPrice = GetDecimal(group, "LineItemTotal"),
-                Notes = BuildLineNotes(_customerPartPo.Text.Trim(), _cycleTime.Text.Trim(), _ipNotes.Text.Trim())
-            };
-
+            var line = card.Model;
+            line.Description = string.IsNullOrWhiteSpace(line.DrawingName) ? card.Title.Text : line.DrawingName;
+            line.Quantity = 1;
+            line.UnitPrice = line.LineItemTotal;
+            line.Notes = BuildLineNotes(_customerPartPo.Text.Trim(), _cycleTime.Text.Trim(), _ipNotes.Text.Trim());
             quote.LineItems.Add(line);
         }
 
@@ -317,9 +585,7 @@ public class QuoteDraftForm : Form
     }
 
     private static string BuildLineNotes(string customerPartPo, string cycleTime, string ipFields)
-    {
-        return $"Customer Part PO: {customerPartPo}\nCycle Time: {cycleTime}\nIP Fields: {ipFields}";
-    }
+        => $"Customer Part PO: {customerPartPo}\nCycle Time: {cycleTime}\nIP Fields: {ipFields}";
 
     private static Dictionary<string, string> ParseMetadata(string? notes)
     {
@@ -347,5 +613,28 @@ public class QuoteDraftForm : Form
         WasDeleted = true;
         DialogResult = DialogResult.OK;
         Close();
+    }
+
+    private sealed class BlobArea
+    {
+        public required Panel SectionPanel { get; init; }
+        public required ListBox List { get; init; }
+    }
+
+    private sealed class LineItemCard
+    {
+        public required Panel Container { get; init; }
+        public required Label Title { get; init; }
+        public required QuoteLineItem Model { get; init; }
+        public required TextBox DrawingNumber { get; init; }
+        public required TextBox DrawingName { get; init; }
+        public required TextBox Revision { get; init; }
+        public required TextBox ProductionHours { get; init; }
+        public required TextBox SetupHours { get; init; }
+        public required TextBox MaterialCost { get; init; }
+        public required TextBox ToolingCost { get; init; }
+        public required TextBox SecondaryCost { get; init; }
+        public required TextBox Total { get; init; }
+        public required Dictionary<QuoteBlobType, ListBox> BlobLists { get; init; }
     }
 }
