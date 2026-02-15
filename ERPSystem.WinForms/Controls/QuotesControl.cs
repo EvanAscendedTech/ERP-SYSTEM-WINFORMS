@@ -9,7 +9,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 {
     private const int QuoteExpiryDays = 60;
     private const int NearExpiryThresholdDays = 2;
-    private const int CustomerGroupingThresholdDays = 2;
 
     private readonly QuoteRepository _quoteRepository;
     private readonly ProductionRepository _productionRepository;
@@ -345,21 +344,15 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private List<QuoteGridRow> BuildActiveViewRows(IReadOnlyCollection<Quote> quotes)
     {
         var rows = new List<QuoteGridRow>();
-        var now = DateTime.UtcNow;
-
-        var recentQuotes = quotes
-            .Where(q => now - q.CreatedUtc <= TimeSpan.FromDays(CustomerGroupingThresholdDays))
-            .OrderByDescending(q => q.CreatedUtc)
-            .Select(CreateQuoteRow);
-        rows.AddRange(BuildQuoteRows(recentQuotes));
-
-        var olderQuotesByCustomer = quotes
-            .Where(q => now - q.CreatedUtc > TimeSpan.FromDays(CustomerGroupingThresholdDays))
+        var quotesByCustomer = quotes
             .GroupBy(q => string.IsNullOrWhiteSpace(q.CustomerName) ? "Unknown Customer" : q.CustomerName)
             .OrderBy(g => g.Key);
 
-        foreach (var customerGroup in olderQuotesByCustomer)
+        foreach (var customerGroup in quotesByCustomer)
         {
+            var openQuoteCount = customerGroup.Count(q => q.Status == QuoteStatus.InProgress);
+            var totalQuoteCount = customerGroup.Count();
+
             rows.Add(new QuoteGridRow
             {
                 IsCustomerHeader = true,
@@ -367,8 +360,8 @@ public class QuotesControl : UserControl, IRealtimeDataControl
                 CustomerGroupKey = customerGroup.Key,
                 ExpanderDisplay = _expandedCustomers.Contains(customerGroup.Key) ? "▾" : "▸",
                 CustomerDisplay = customerGroup.Key.ToUpperInvariant(),
-                StatusDisplay = $"{customerGroup.Count()} QUOTE(S)",
-                LifecycleStageDisplay = "GROUPED BY CUSTOMER"
+                StatusDisplay = $"OPEN: {openQuoteCount} / TOTAL: {totalQuoteCount}",
+                LifecycleStageDisplay = "ACCOUNT SOCKET"
             });
 
             if (_expandedCustomers.Contains(customerGroup.Key))
