@@ -35,14 +35,14 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         Margin = new Padding(0, 0, 0, 12)
     };
 
-    private readonly FlowLayoutPanel _workQueues = new()
+    private readonly TableLayoutPanel _workQueues = new()
     {
         Dock = DockStyle.Fill,
         Margin = new Padding(0),
         Padding = new Padding(0),
         AutoScroll = true,
-        WrapContents = false,
-        FlowDirection = FlowDirection.LeftToRight
+        ColumnCount = 3,
+        RowCount = 2
     };
 
     private readonly Label _lastUpdatedLabel = new()
@@ -187,7 +187,13 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
 
     private void ConfigureWorkQueueLayout()
     {
-        _workQueues.AutoScrollMinSize = new Size(0, 0);
+        _workQueues.ColumnStyles.Clear();
+        _workQueues.RowStyles.Clear();
+        _workQueues.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34F));
+        _workQueues.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33F));
+        _workQueues.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33F));
+        _workQueues.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+        _workQueues.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
     }
 
     private void PopulateGlanceCards(params (string Metric, string Value)[] cards)
@@ -226,9 +232,11 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
     {
         _workQueues.SuspendLayout();
         _workQueues.Controls.Clear();
-        foreach (var card in cards)
+        for (var index = 0; index < cards.Length; index++)
         {
-            _workQueues.Controls.Add(card);
+            var row = index / _workQueues.ColumnCount;
+            var col = index % _workQueues.ColumnCount;
+            _workQueues.Controls.Add(cards[index], col, row);
         }
 
         _workQueues.ResumeLayout();
@@ -308,6 +316,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             .OrderBy(j => j.DueDateUtc)
             .ToList();
         var productionNearDue = productionInProgress.Where(IsJobNearDueDate).ToList();
+        var purchasingQueue = BuildPurchasingQueue(quotes, jobs);
         var qualityQueue = jobs.Where(j => _jobFlowService.IsInModule(j.JobNumber, JobFlowService.WorkflowModule.Quality)).OrderBy(j => j.JobNumber).ToList();
         var inspectionQueue = jobs.Where(j => _jobFlowService.IsInModule(j.JobNumber, JobFlowService.WorkflowModule.Inspection)).OrderBy(j => j.JobNumber).ToList();
         var qualityAndInspectionQueue = qualityQueue.Concat(inspectionQueue).OrderBy(j => j.JobNumber).ToList();
@@ -316,7 +325,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             ("Quotes in progress", inProgressQuotes.Count.ToString()),
             ("Quotes completed", completedQuotes.Count.ToString()),
             ("Expiring soon", quoteExpiringSoon.Count.ToString()),
-            ("Purchasing queue", "0"),
+            ("Purchasing queue", purchasingQueue.Count.ToString()),
             ("Production in progress", productionInProgress.Count.ToString()),
             ("Near/over due", productionNearDue.Count.ToString()),
             ("Inspection queue", qualityAndInspectionQueue.Count.ToString()),
@@ -324,19 +333,18 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
 
         PopulateWorkflowStages(
             CreateStageCard("Quotes", "In progress", inProgressQuotes.Count, Color.FromArgb(45, 125, 255), "Quotes"),
-            CreateStageCard("Purchasing", "Queued", 0, Color.FromArgb(176, 131, 72), "Purchasing"),
+            CreateStageCard("Purchasing", "Pending", purchasingQueue.Count, Color.FromArgb(176, 131, 72), "Purchasing"),
             CreateStageCard("Production", "Active jobs", productionInProgress.Count, Color.FromArgb(83, 143, 94), "Production"),
             CreateStageCard("Inspection", "Queued", qualityAndInspectionQueue.Count, Color.FromArgb(205, 98, 184), "Inspection"),
             CreateStageCard("Shipping", "Staged", shippingQueue.Count, Color.FromArgb(95, 175, 193), "Shipping"),
             CreateStageCard("CRM", "Follow-up", completedQuotes.Count, Color.FromArgb(121, 111, 214), "CRM"));
 
         PopulateQueueGrid(
-            CreateQuoteQueuePanel("In-progress quotes", inProgressQuotes, includeExpiryWarning: false),
-            CreatePurchasingQueuePanel("Purchasing queue"),
-            CreateProductionQueuePanel("In-progress production orders", productionInProgress),
-            CreateInspectionQueuePanel("Inspection + quality queue", qualityAndInspectionQueue),
-            CreateQuoteQueuePanel("Quotes about to expire", quoteExpiringSoon, includeExpiryWarning: true),
-            CreateShippingQueuePanel("Shipping queue", shippingQueue));
+            CreateQuoteQueuePanel("Quotes", inProgressQuotes, includeExpiryWarning: false),
+            CreatePurchasingQueuePanel("Purchasing", purchasingQueue),
+            CreateProductionQueuePanel("Production", productionInProgress),
+            CreateInspectionQueuePanel("Inspection", qualityAndInspectionQueue),
+            CreateShippingQueuePanel("Shipping", shippingQueue));
 
         _lastUpdatedLabel.Text = $"Updated {DateTime.Now:g}";
     }
@@ -561,58 +569,67 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         return examples.Count == 0 ? "No active quotes" : string.Join(" • ", examples);
     }
 
-    private Panel CreateQuoteQueuePanel(string title, IReadOnlyCollection<Quote> quotes, bool includeExpiryWarning)
+    private static List<Quote> BuildPurchasingQueue(IReadOnlyCollection<Quote> quotes, IReadOnlyCollection<ProductionJob> jobs)
     {
-        var details = new List<string>();
-        foreach (var quote in quotes.Take(20))
-        {
-            var ageDays = (DateTime.UtcNow - quote.LastUpdatedUtc).TotalDays;
-            var expiryText = includeExpiryWarning ? $" • est. expires in {Math.Max(0, QuoteExpiryDays - (int)ageDays)}d" : string.Empty;
-            details.Add($"Q{quote.Id} • {quote.CustomerName} • updated {quote.LastUpdatedUtc:g}{expiryText}");
-        }
+        var sourcedQuoteIds = jobs
+            .Where(job => job.SourceQuoteId.HasValue)
+            .Select(job => job.SourceQuoteId!.Value)
+            .ToHashSet();
 
-        return CreateQueueCard(title, details, "Quotes", quotes.Count > 0, Color.FromArgb(45, 125, 255));
+        return quotes
+            .Where(quote => quote.Status == QuoteStatus.Won && !sourcedQuoteIds.Contains(quote.Id))
+            .OrderBy(quote => quote.LastUpdatedUtc)
+            .ToList();
     }
 
-    private Panel CreatePurchasingQueuePanel(string title)
+    private Panel CreatePurchasingQueuePanel(string title, IReadOnlyCollection<Quote> quotes)
     {
-        var details = new List<string>
-        {
-            "Material PO workflow placeholder",
-            "Tooling PO workflow placeholder"
-        };
+        var details = quotes
+            .Take(20)
+            .Select(quote => new StageTaskItem(
+                $"Q{quote.Id} • {quote.CustomerName} • Purchasing incomplete",
+                new DashboardNavigationTarget("Quotes", quote.Id, OpenDetails: true)))
+            .ToList();
 
-        return CreateQueueCard(title, details, "Purchasing", true, Color.FromArgb(176, 131, 72));
+        return CreateQueueCard(title, details, "Purchasing", Color.FromArgb(176, 131, 72));
     }
 
     private Panel CreateProductionQueuePanel(string title, IReadOnlyCollection<ProductionJob> jobs)
     {
-        var details = new List<string>();
+        var details = new List<StageTaskItem>();
         foreach (var job in jobs.Take(20))
         {
             var dueNote = job.DueDateUtc < DateTime.UtcNow ? "⚠ Overdue" : (job.DueDateUtc - DateTime.UtcNow).TotalDays <= ProductionDueSoonDays ? "⚑ Due soon" : "On track";
-            details.Add($"{job.JobNumber} • {job.ProductName} • due {job.DueDateUtc:g} • {dueNote}");
+            var isLagging = dueNote != "On track";
+            details.Add(new StageTaskItem(
+                $"{job.JobNumber} • {job.ProductName} • due {job.DueDateUtc:g} • {dueNote}",
+                new DashboardNavigationTarget("Production", JobNumber: job.JobNumber, OpenDetails: true),
+                isLagging));
         }
 
-        return CreateQueueCard(title, details, "Production", jobs.Count > 0, Color.FromArgb(83, 143, 94));
+        return CreateQueueCard(title, details, "Production", Color.FromArgb(83, 143, 94));
     }
 
     private Panel CreateInspectionQueuePanel(string title, IReadOnlyCollection<ProductionJob> jobs)
     {
         var details = jobs.Take(20)
-            .Select(job => $"{job.JobNumber} • {job.ProductName} • {(_jobFlowService.IsInspectionPassed(job.JobNumber) ? "Passed" : "Pending")}")
+            .Select(job => new StageTaskItem(
+                $"{job.JobNumber} • {job.ProductName} • {(_jobFlowService.IsInspectionPassed(job.JobNumber) ? "Passed" : "Pending")}",
+                new DashboardNavigationTarget("Inspection", JobNumber: job.JobNumber, OpenDetails: true)))
             .ToList();
 
-        return CreateQueueCard(title, details, "Inspection", jobs.Count > 0, Color.FromArgb(205, 98, 184));
+        return CreateQueueCard(title, details, "Inspection", Color.FromArgb(205, 98, 184));
     }
 
     private Panel CreateShippingQueuePanel(string title, IReadOnlyCollection<ProductionJob> jobs)
     {
         var details = jobs.Take(20)
-            .Select(job => $"{job.JobNumber} • {job.ProductName} • Ready to ship")
+            .Select(job => new StageTaskItem(
+                $"{job.JobNumber} • {job.ProductName} • Ready to ship",
+                new DashboardNavigationTarget("Shipping", JobNumber: job.JobNumber, OpenDetails: true)))
             .ToList();
 
-        return CreateQueueCard(title, details, "Shipping", jobs.Count > 0, Color.FromArgb(95, 175, 193));
+        return CreateQueueCard(title, details, "Shipping", Color.FromArgb(95, 175, 193));
     }
 
     private Panel CreateWorkSnapshotPanel(
@@ -763,13 +780,12 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         return new Panel { Dock = DockStyle.Fill, Controls = { row } };
     }
 
-    private Panel CreateQueueCard(string title, IReadOnlyList<string> items, string sectionKey, bool hasItems, Color stageColor)
+    private Panel CreateQueueCard(string title, IReadOnlyList<StageTaskItem> items, string sectionKey, Color stageColor)
     {
         var panel = CreateBasePanel();
-        panel.Width = 280;
-        panel.Height = 178;
+        panel.Height = 198;
         panel.BackColor = ControlPaint.Light(stageColor, 0.92f);
-        panel.Margin = new Padding(0, 0, 10, 0);
+        panel.Margin = new Padding(0, 0, 8, 8);
         panel.Paint += (_, args) => PaintBeveledCard(args.Graphics, panel.ClientRectangle, stageColor);
 
         var titleRow = new TableLayoutPanel
@@ -807,10 +823,11 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         {
             Dock = DockStyle.Fill,
             HorizontalScrollbar = true,
-            IntegralHeight = false
+            IntegralHeight = false,
+            DrawMode = DrawMode.OwnerDrawFixed
         };
 
-        if (hasItems)
+        if (items.Count > 0)
         {
             foreach (var item in items)
             {
@@ -822,11 +839,68 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             list.Items.Add("No items to show.");
         }
 
-        list.DoubleClick += (_, _) => _openTarget(new DashboardNavigationTarget(sectionKey));
+        list.DrawItem += (_, args) => DrawStageTask(list, args);
+        list.DoubleClick += (_, _) => OpenStageTask(list, sectionKey);
+        list.KeyDown += (_, args) =>
+        {
+            if (args.KeyCode != Keys.Enter)
+            {
+                return;
+            }
+
+            OpenStageTask(list, sectionKey);
+            args.Handled = true;
+        };
 
         panel.Controls.Add(list);
         panel.Controls.Add(titleRow);
         return panel;
+    }
+
+    private Panel CreateQuoteQueuePanel(string title, IReadOnlyCollection<Quote> quotes, bool includeExpiryWarning)
+    {
+        var details = quotes
+            .Take(20)
+            .Select(quote =>
+            {
+                var ageDays = (DateTime.UtcNow - quote.LastUpdatedUtc).TotalDays;
+                var expiryText = includeExpiryWarning ? $" • est. expires in {Math.Max(0, QuoteExpiryDays - (int)ageDays)}d" : string.Empty;
+                return new StageTaskItem(
+                    $"Q{quote.Id} • {quote.CustomerName} • updated {quote.LastUpdatedUtc:g}{expiryText}",
+                    new DashboardNavigationTarget("Quotes", quote.Id, OpenDetails: true));
+            })
+            .ToList();
+
+        return CreateQueueCard(title, details, "Quotes", Color.FromArgb(45, 125, 255));
+    }
+
+    private void OpenStageTask(ListBox list, string sectionKey)
+    {
+        if (list.SelectedItem is StageTaskItem task)
+        {
+            _openTarget(task.Target);
+            return;
+        }
+
+        _openTarget(new DashboardNavigationTarget(sectionKey));
+    }
+
+    private static void DrawStageTask(ListBox list, DrawItemEventArgs args)
+    {
+        args.DrawBackground();
+        if (args.Index < 0 || args.Index >= list.Items.Count)
+        {
+            return;
+        }
+
+        var item = list.Items[args.Index];
+        var text = item is StageTaskItem task ? task.Text : item?.ToString() ?? string.Empty;
+        var color = item is StageTaskItem highlightedTask && highlightedTask.Highlight
+            ? Color.FromArgb(181, 54, 57)
+            : args.ForeColor;
+
+        TextRenderer.DrawText(args.Graphics, text, args.Font, args.Bounds, color, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+        args.DrawFocusRectangle();
     }
 
     private static Panel CreateGlanceCard(string metric, string value)
@@ -923,6 +997,24 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         }
 
         list.SelectedIndex = index;
+    }
+
+    private sealed class StageTaskItem
+    {
+        public StageTaskItem(string text, DashboardNavigationTarget target, bool highlight = false)
+        {
+            Text = text;
+            Target = target;
+            Highlight = highlight;
+        }
+
+        public string Text { get; }
+
+        public DashboardNavigationTarget Target { get; }
+
+        public bool Highlight { get; }
+
+        public override string ToString() => Text;
     }
 
     private sealed class SnapshotListItem
