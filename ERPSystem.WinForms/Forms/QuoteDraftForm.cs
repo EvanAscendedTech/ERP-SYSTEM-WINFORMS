@@ -7,6 +7,11 @@ namespace ERPSystem.WinForms.Forms;
 
 public class QuoteDraftForm : Form
 {
+    private const int DefaultLineItemWidth = 860;
+    private const int DefaultLineItemHeight = 430;
+    private const float MinScaledFontSize = 8f;
+    private const float MaxScaledFontSize = 13f;
+    private const int ResizeGripSize = 16;
     private readonly QuoteRepository _quoteRepository;
     private readonly bool _canViewPricing;
     private readonly string _uploadedBy;
@@ -219,7 +224,7 @@ public class QuoteDraftForm : Form
             Margin = new Padding(0, 0, 0, 10),
             Padding = new Padding(10),
             BackColor = index % 2 == 0 ? Color.FromArgb(245, 248, 252) : Color.FromArgb(234, 243, 250),
-            MinimumSize = new Size(860, 430)
+            MinimumSize = new Size(DefaultLineItemWidth, DefaultLineItemHeight)
         };
 
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, ColumnCount = 1, RowCount = 6 };
@@ -297,10 +302,19 @@ public class QuoteDraftForm : Form
         layout.Controls.Add(footer);
 
         cardPanel.Controls.Add(layout);
+        var resizeGrip = CreateResizeGrip(cardPanel);
+        cardPanel.Controls.Add(resizeGrip);
+        resizeGrip.BringToFront();
+
+        var baseFonts = new Dictionary<Control, float>();
+        CaptureBaseFonts(cardPanel, baseFonts);
 
         var card = new LineItemCard
         {
             Container = cardPanel,
+            BaseSize = new Size(DefaultLineItemWidth, DefaultLineItemHeight),
+            ResizeGrip = resizeGrip,
+            BaseFonts = baseFonts,
             Title = title,
             Model = model,
             DrawingNumber = drawingNumber,
@@ -323,7 +337,103 @@ public class QuoteDraftForm : Form
         };
 
         RefreshBlobLists(card);
+        ApplyCardScaling(card);
         return card;
+    }
+
+    private Panel CreateResizeGrip(Panel cardPanel)
+    {
+        var grip = new Panel
+        {
+            Size = new Size(ResizeGripSize, ResizeGripSize),
+            Anchor = AnchorStyles.Bottom | AnchorStyles.Right,
+            Cursor = Cursors.SizeNWSE,
+            BackColor = Color.Transparent,
+            Location = new Point(cardPanel.ClientSize.Width - ResizeGripSize - 2, cardPanel.ClientSize.Height - ResizeGripSize - 2)
+        };
+
+        Point dragStart = Point.Empty;
+        Size sizeStart = Size.Empty;
+
+        grip.Paint += (_, e) =>
+        {
+            using var pen = new Pen(Color.SlateGray, 1f);
+            e.Graphics.DrawLine(pen, 4, ResizeGripSize - 1, ResizeGripSize - 1, 4);
+            e.Graphics.DrawLine(pen, 8, ResizeGripSize - 1, ResizeGripSize - 1, 8);
+            e.Graphics.DrawLine(pen, 12, ResizeGripSize - 1, ResizeGripSize - 1, 12);
+        };
+
+        grip.MouseDown += (_, e) =>
+        {
+            if (e.Button != MouseButtons.Left) return;
+            dragStart = Cursor.Position;
+            sizeStart = cardPanel.Size;
+            grip.Capture = true;
+        };
+
+        grip.MouseMove += (_, _) =>
+        {
+            if (!grip.Capture) return;
+
+            var cursor = Cursor.Position;
+            var widthDelta = cursor.X - dragStart.X;
+            var heightDelta = cursor.Y - dragStart.Y;
+            var newWidth = Math.Max(cardPanel.MinimumSize.Width, sizeStart.Width + widthDelta);
+            var newHeight = Math.Max(cardPanel.MinimumSize.Height, sizeStart.Height + heightDelta);
+            cardPanel.Size = new Size(newWidth, newHeight);
+            cardPanel.Parent?.PerformLayout();
+        };
+
+        grip.MouseUp += (_, _) =>
+        {
+            if (!grip.Capture) return;
+            grip.Capture = false;
+            if (_lineItemCards.FirstOrDefault(x => x.Container == cardPanel) is { } resizedCard)
+            {
+                resizedCard.IsUserResized = true;
+                ApplyCardScaling(resizedCard);
+            }
+        };
+
+        return grip;
+    }
+
+    private static void CaptureBaseFonts(Control parent, IDictionary<Control, float> map)
+    {
+        map[parent] = parent.Font.Size;
+        foreach (Control child in parent.Controls)
+        {
+            CaptureBaseFonts(child, map);
+        }
+    }
+
+    private static void ApplyFontScale(Control parent, IReadOnlyDictionary<Control, float> baseFonts, float scale)
+    {
+        if (baseFonts.TryGetValue(parent, out var baseSize))
+        {
+            var scaled = Math.Clamp(baseSize * scale, MinScaledFontSize, MaxScaledFontSize);
+            parent.Font = new Font(parent.Font.FontFamily, scaled, parent.Font.Style);
+        }
+
+        foreach (Control child in parent.Controls)
+        {
+            ApplyFontScale(child, baseFonts, scale);
+        }
+    }
+
+    private static void ApplyCardScaling(LineItemCard card)
+    {
+        var widthScale = card.Container.Width / (float)card.BaseSize.Width;
+        var heightScale = card.Container.Height / (float)card.BaseSize.Height;
+        var scale = Math.Clamp(Math.Min(widthScale, heightScale), 0.8f, 1.25f);
+
+        ApplyFontScale(card.Container, card.BaseFonts, scale);
+
+        foreach (var blobList in card.BlobLists.Values)
+        {
+            blobList.IntegralHeight = false;
+            blobList.ItemHeight = Math.Max(14, (int)Math.Round(18 * scale));
+        }
     }
 
     private BlobArea BuildBlobArea(QuoteLineItem model, QuoteBlobType blobType, string title)
@@ -559,8 +669,20 @@ public class QuoteDraftForm : Form
     {
         foreach (var card in _lineItemCards)
         {
-            card.Container.Width = Math.Max(860, _lineItemsPanel.ClientSize.Width - 28);
-            card.Container.Height = Math.Max(card.Container.MinimumSize.Height, card.Container.PreferredSize.Height);
+            var maximumWidth = Math.Max(DefaultLineItemWidth, _lineItemsPanel.ClientSize.Width - 28);
+            if (!card.IsUserResized)
+            {
+                card.Container.Width = maximumWidth;
+                card.Container.Height = Math.Max(card.Container.MinimumSize.Height, card.Container.PreferredSize.Height);
+            }
+            else
+            {
+                card.Container.Width = Math.Min(card.Container.Width, maximumWidth);
+                card.Container.Height = Math.Max(card.Container.MinimumSize.Height, card.Container.Height);
+            }
+
+            card.ResizeGrip.Location = new Point(card.Container.ClientSize.Width - ResizeGripSize - 2, card.Container.ClientSize.Height - ResizeGripSize - 2);
+            ApplyCardScaling(card);
         }
     }
 
@@ -685,6 +807,10 @@ public class QuoteDraftForm : Form
     private sealed class LineItemCard
     {
         public required Panel Container { get; init; }
+        public required Size BaseSize { get; init; }
+        public required Panel ResizeGrip { get; init; }
+        public required IDictionary<Control, float> BaseFonts { get; init; }
+        public bool IsUserResized { get; set; }
         public required Label Title { get; init; }
         public required QuoteLineItem Model { get; init; }
         public required TextBox DrawingNumber { get; init; }
