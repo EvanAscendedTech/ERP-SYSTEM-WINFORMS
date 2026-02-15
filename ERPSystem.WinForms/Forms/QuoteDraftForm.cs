@@ -11,6 +11,8 @@ public class QuoteDraftForm : Form
     private const int DefaultLineItemHeight = 430;
     private const int MinimumLineItemWidth = 620;
     private const int MinimumLineItemHeight = 320;
+    private const int MinimumBlobAreaWidth = 210;
+    private const int MinimumBlobAreaHeight = 130;
     private const float MinScaledFontSize = 8f;
     private const float MaxScaledFontSize = 13f;
     private const int ResizeGripSize = 16;
@@ -229,12 +231,11 @@ public class QuoteDraftForm : Form
             MinimumSize = new Size(MinimumLineItemWidth, MinimumLineItemHeight)
         };
 
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, ColumnCount = 1, RowCount = 6 };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, ColumnCount = 1, RowCount = 5 };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 34));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 56));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var title = new Label { AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
@@ -257,12 +258,6 @@ public class QuoteDraftForm : Form
 
         var drawingDocs = BuildBlobArea(model, QuoteBlobType.Technical, "Drawings (PDF / STEP)");
         var modelDocs = BuildBlobArea(model, QuoteBlobType.ThreeDModel, "3D Models");
-        var docsRow = new TableLayoutPanel { AutoSize = false, ColumnCount = 2, Dock = DockStyle.Fill, Margin = new Padding(0, 6, 0, 6) };
-        docsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        docsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        docsRow.Controls.Add(drawingDocs.SectionPanel, 0, 0);
-        docsRow.Controls.Add(modelDocs.SectionPanel, 1, 0);
-        layout.Controls.Add(docsRow, 0, 2);
 
         var costsRow = new TableLayoutPanel { AutoSize = false, ColumnCount = 5, Dock = DockStyle.Fill, Margin = new Padding(0, 6, 0, 6) };
         for (var i = 0; i < 5; i++) costsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
@@ -283,25 +278,43 @@ public class QuoteDraftForm : Form
         costsRow.Controls.Add(NewFieldPanel("Material Cost", materialCost), 2, 0);
         costsRow.Controls.Add(NewFieldPanel("Tooling Cost", toolingCost), 3, 0);
         costsRow.Controls.Add(NewFieldPanel("Secondary Operations Cost", secondaryCost), 4, 0);
-        layout.Controls.Add(costsRow, 0, 3);
+        layout.Controls.Add(costsRow, 0, 2);
 
-        var supportDocsRow = new TableLayoutPanel { AutoSize = false, ColumnCount = 3, Dock = DockStyle.Fill, Margin = new Padding(0, 6, 0, 6) };
-        supportDocsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
-        supportDocsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
-        supportDocsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
         var materialDocs = BuildBlobArea(model, QuoteBlobType.MaterialPricing, "Material Blob Area");
         var toolingDocs = BuildBlobArea(model, QuoteBlobType.ToolingDocumentation, "Tooling Blob Area");
         var postOpDocs = BuildBlobArea(model, QuoteBlobType.PostOpPricing, "Secondary Operations Blob Area");
-        supportDocsRow.Controls.Add(materialDocs.SectionPanel, 0, 0);
-        supportDocsRow.Controls.Add(toolingDocs.SectionPanel, 1, 0);
-        supportDocsRow.Controls.Add(postOpDocs.SectionPanel, 2, 0);
-        layout.Controls.Add(supportDocsRow, 0, 4);
+
+        var blobGrid = new TableLayoutPanel
+        {
+            AutoSize = false,
+            ColumnCount = 3,
+            RowCount = 2,
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0, 6, 0, 6),
+            GrowStyle = TableLayoutPanelGrowStyle.FixedSize,
+            MinimumSize = new Size(MinimumBlobAreaWidth * 3, MinimumBlobAreaHeight * 2)
+        };
+        for (var i = 0; i < 3; i++)
+        {
+            blobGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
+        }
+
+        blobGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
+        blobGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
+        blobGrid.Controls.Add(drawingDocs.SectionPanel, 0, 0);
+        blobGrid.Controls.Add(modelDocs.SectionPanel, 1, 0);
+        blobGrid.Controls.Add(materialDocs.SectionPanel, 2, 0);
+        blobGrid.Controls.Add(toolingDocs.SectionPanel, 0, 1);
+        blobGrid.Controls.Add(postOpDocs.SectionPanel, 1, 1);
+        var spacer = new Panel { Dock = DockStyle.Fill, MinimumSize = new Size(MinimumBlobAreaWidth, MinimumBlobAreaHeight), Margin = new Padding(3) };
+        blobGrid.Controls.Add(spacer, 2, 1);
+        layout.Controls.Add(blobGrid, 0, 3);
 
         var footer = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Dock = DockStyle.Fill, WrapContents = true };
         var totalBox = new TextBox { ReadOnly = true, Width = 180, Text = model.LineItemTotal.ToString("0.00", CultureInfo.CurrentCulture) };
         footer.Controls.Add(new Label { Text = "Line Item Total", AutoSize = true, Margin = new Padding(0, 8, 8, 0), Font = new Font(Font, FontStyle.Bold) });
         footer.Controls.Add(totalBox);
-        layout.Controls.Add(footer);
+        layout.Controls.Add(footer, 0, 4);
 
         cardPanel.Controls.Add(layout);
         var resizeGrip = CreateResizeGrip(cardPanel);
@@ -447,7 +460,7 @@ public class QuoteDraftForm : Form
             Padding = new Padding(6),
             Margin = new Padding(3),
             Dock = DockStyle.Fill,
-            MinimumSize = new Size(200, 130)
+            MinimumSize = new Size(MinimumBlobAreaWidth, MinimumBlobAreaHeight)
         };
         var titleLabel = new Label { Text = title, AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
         var list = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false };
@@ -681,15 +694,18 @@ public class QuoteDraftForm : Form
         foreach (var card in _lineItemCards)
         {
             var maximumWidth = Math.Max(MinimumLineItemWidth, _lineItemsPanel.ClientSize.Width - 28);
+            var proportionalHeight = Math.Max(
+                card.Container.MinimumSize.Height,
+                (int)Math.Round(DefaultLineItemHeight * (maximumWidth / (float)DefaultLineItemWidth)));
             if (!card.IsUserResized)
             {
                 card.Container.Width = maximumWidth;
-                card.Container.Height = Math.Max(card.Container.MinimumSize.Height, card.Container.PreferredSize.Height);
+                card.Container.Height = proportionalHeight;
             }
             else
             {
                 card.Container.Width = Math.Min(card.Container.Width, maximumWidth);
-                card.Container.Height = Math.Max(card.Container.MinimumSize.Height, card.Container.Height);
+                card.Container.Height = Math.Max(proportionalHeight, card.Container.Height);
             }
 
             card.ResizeGrip.Location = new Point(card.Container.ClientSize.Width - ResizeGripSize - 2, card.Container.ClientSize.Height - ResizeGripSize - 2);
