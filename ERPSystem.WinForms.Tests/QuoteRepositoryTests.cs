@@ -425,6 +425,34 @@ public class QuoteRepositoryTests
         File.Delete(dbPath);
     }
 
+
+    [Fact]
+    public async Task UpdateStatusAsync_ToCompleted_SetsCompletedAuditFields()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-status-completed-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var quote = new Quote
+        {
+            CustomerName = "Completed Customer",
+            Status = QuoteStatus.InProgress,
+            LineItems = [new QuoteLineItem { Description = "Bracket", Quantity = 1 }]
+        };
+
+        var id = await repository.SaveQuoteAsync(quote);
+        var update = await repository.UpdateStatusAsync(id, QuoteStatus.Completed, "qa.user");
+        var loaded = await repository.GetQuoteAsync(id);
+
+        Assert.True(update.Success);
+        Assert.NotNull(loaded);
+        Assert.Equal(QuoteStatus.Completed, loaded!.Status);
+        Assert.NotNull(loaded.CompletedUtc);
+        Assert.Equal("qa.user", loaded.CompletedByUserId);
+
+        File.Delete(dbPath);
+    }
+
     private static async Task<int> CountByQuoteIdAsync(SqliteConnection connection, string tableName, int quoteId)
     {
         await using var command = connection.CreateCommand();
@@ -434,3 +462,4 @@ public class QuoteRepositoryTests
     }
 
 }
+

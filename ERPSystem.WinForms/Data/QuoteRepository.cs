@@ -57,7 +57,9 @@ public class QuoteRepository
                 LostUtc TEXT NULL,
                 LostByUserId TEXT NULL,
                 ExpiredUtc TEXT NULL,
-                ExpiredByUserId TEXT NULL
+                ExpiredByUserId TEXT NULL,
+                CompletedUtc TEXT NULL,
+                CompletedByUserId TEXT NULL
             );
 
             CREATE TABLE IF NOT EXISTS QuoteLineItems (
@@ -123,6 +125,8 @@ public class QuoteRepository
         await EnsureColumnExistsAsync(connection, "Quotes", "LostByUserId", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "Quotes", "ExpiredUtc", "TEXT NULL");
         await EnsureColumnExistsAsync(connection, "Quotes", "ExpiredByUserId", "TEXT NULL");
+        await EnsureColumnExistsAsync(connection, "Quotes", "CompletedUtc", "TEXT NULL");
+        await EnsureColumnExistsAsync(connection, "Quotes", "CompletedByUserId", "TEXT NULL");
 
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "UnitPrice", "REAL NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "QuoteLineItems", "LeadTimeDays", "INTEGER NOT NULL DEFAULT 0");
@@ -240,7 +244,9 @@ public class QuoteRepository
                         LostUtc,
                         LostByUserId,
                         ExpiredUtc,
-                        ExpiredByUserId)
+                        ExpiredByUserId,
+                        CompletedUtc,
+                        CompletedByUserId)
                     VALUES (
                         $customerId,
                         $name,
@@ -253,7 +259,9 @@ public class QuoteRepository
                         $lostUtc,
                         $lostByUserId,
                         $expiredUtc,
-                        $expiredByUserId);
+                        $expiredByUserId,
+                        $completedUtc,
+                        $completedByUserId);
                     SELECT last_insert_rowid();";
                 insertQuote.Parameters.AddWithValue("$customerId", quote.CustomerId == 0 ? DBNull.Value : quote.CustomerId);
                 insertQuote.Parameters.AddWithValue("$name", quote.CustomerName);
@@ -267,6 +275,8 @@ public class QuoteRepository
                 AddNullableString(insertQuote, "$lostByUserId", quote.LostByUserId);
                 AddNullableString(insertQuote, "$expiredUtc", quote.ExpiredUtc?.ToString("O"));
                 AddNullableString(insertQuote, "$expiredByUserId", quote.ExpiredByUserId);
+                AddNullableString(insertQuote, "$completedUtc", quote.CompletedUtc?.ToString("O"));
+                AddNullableString(insertQuote, "$completedByUserId", quote.CompletedByUserId);
 
                 quote.Id = Convert.ToInt32(await insertQuote.ExecuteScalarAsync());
             }
@@ -292,7 +302,9 @@ public class QuoteRepository
                         LostUtc = $lostUtc,
                         LostByUserId = $lostByUserId,
                         ExpiredUtc = $expiredUtc,
-                        ExpiredByUserId = $expiredByUserId
+                        ExpiredByUserId = $expiredByUserId,
+                        CompletedUtc = $completedUtc,
+                        CompletedByUserId = $completedByUserId
                     WHERE Id = $id;";
                 updateQuote.Parameters.AddWithValue("$id", quote.Id);
                 updateQuote.Parameters.AddWithValue("$customerId", quote.CustomerId == 0 ? DBNull.Value : quote.CustomerId);
@@ -306,6 +318,8 @@ public class QuoteRepository
                 AddNullableString(updateQuote, "$lostByUserId", quote.LostByUserId);
                 AddNullableString(updateQuote, "$expiredUtc", quote.ExpiredUtc?.ToString("O"));
                 AddNullableString(updateQuote, "$expiredByUserId", quote.ExpiredByUserId);
+                AddNullableString(updateQuote, "$completedUtc", quote.CompletedUtc?.ToString("O"));
+                AddNullableString(updateQuote, "$completedByUserId", quote.CompletedByUserId);
                 await updateQuote.ExecuteNonQueryAsync();
 
                 await DeleteLineItemsForQuoteAsync(connection, transaction, quote.Id);
@@ -540,6 +554,10 @@ public class QuoteRepository
                 quote.ExpiredUtc = now;
                 quote.ExpiredByUserId = actorUserId;
                 break;
+            case QuoteStatus.Completed:
+                quote.CompletedUtc = now;
+                quote.CompletedByUserId = actorUserId;
+                break;
         }
 
         await SaveQuoteAsync(quote);
@@ -557,7 +575,7 @@ public class QuoteRepository
             lineItemCount: quote.LineItems.Count,
             details: $"from={(int)priorStatus};to={(int)nextStatus}");
 
-        if (nextStatus is QuoteStatus.Won or QuoteStatus.Lost or QuoteStatus.Expired)
+        if (nextStatus is QuoteStatus.Completed or QuoteStatus.Won or QuoteStatus.Lost or QuoteStatus.Expired)
         {
             await AppendAuditEventAsync(
                 connection,
@@ -659,6 +677,8 @@ public class QuoteRepository
                    q.LostByUserId,
                    q.ExpiredUtc,
                    q.ExpiredByUserId,
+                   q.CompletedUtc,
+                   q.CompletedByUserId,
                    c.Name
             FROM Quotes q
             LEFT JOIN Customers c ON c.Id = q.CustomerId
@@ -671,7 +691,7 @@ public class QuoteRepository
             return null;
         }
 
-        var customerName = reader.IsDBNull(13) ? reader.GetString(2) : reader.GetString(13);
+        var customerName = reader.IsDBNull(15) ? reader.GetString(2) : reader.GetString(15);
         return new Quote
         {
             Id = reader.GetInt32(0),
@@ -686,7 +706,9 @@ public class QuoteRepository
             LostUtc = reader.IsDBNull(9) ? null : DateTime.Parse(reader.GetString(9)),
             LostByUserId = reader.IsDBNull(10) ? null : reader.GetString(10),
             ExpiredUtc = reader.IsDBNull(11) ? null : DateTime.Parse(reader.GetString(11)),
-            ExpiredByUserId = reader.IsDBNull(12) ? null : reader.GetString(12)
+            ExpiredByUserId = reader.IsDBNull(12) ? null : reader.GetString(12),
+            CompletedUtc = reader.IsDBNull(13) ? null : DateTime.Parse(reader.GetString(13)),
+            CompletedByUserId = reader.IsDBNull(14) ? null : reader.GetString(14)
         };
     }
 

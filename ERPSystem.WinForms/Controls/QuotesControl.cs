@@ -38,17 +38,20 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         var refreshButton = new Button { Text = "Refresh Active Quotes", AutoSize = true };
         var newQuoteButton = new Button { Text = "Create New Quote", AutoSize = true };
         var deleteQuoteButton = new Button { Text = "Delete Quote", AutoSize = true };
+        var markCompletedButton = new Button { Text = "Mark Completed", AutoSize = true };
         var passToProductionButton = new Button { Text = "Pass to Production", AutoSize = true };
 
         refreshButton.Click += async (_, _) => await LoadActiveQuotesAsync();
         newQuoteButton.Click += async (_, _) => await CreateNewQuoteAsync();
         deleteQuoteButton.Click += async (_, _) => await DeleteSelectedQuoteAsync();
+        markCompletedButton.Click += async (_, _) => await MarkSelectedCompletedAsync();
         passToProductionButton.Click += async (_, _) => await PassSelectedToProductionAsync();
         _quotesGrid.CellDoubleClick += async (_, _) => await OpenSelectedQuoteDetailsAsync();
 
         actionsPanel.Controls.Add(refreshButton);
         actionsPanel.Controls.Add(newQuoteButton);
         actionsPanel.Controls.Add(deleteQuoteButton);
+        actionsPanel.Controls.Add(markCompletedButton);
         actionsPanel.Controls.Add(passToProductionButton);
 
         var topContent = new Panel { Dock = DockStyle.Fill };
@@ -116,6 +119,8 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             var statusColor = row.Status switch
             {
                 QuoteStatus.Won => Color.FromArgb(192, 255, 192),
+                QuoteStatus.Completed => Color.FromArgb(225, 205, 255),
+                QuoteStatus.Lost => Color.FromArgb(255, 200, 200),
                 QuoteStatus.InProgress when row.DaysUntilExpiry <= NearExpiryThresholdDays => Color.FromArgb(255, 200, 200),
                 QuoteStatus.InProgress => Color.FromArgb(255, 251, 184),
                 _ => Color.White
@@ -138,6 +143,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     {
         try
         {
+            await AutoMoveStaleQuotesToLostAsync();
             await AutoArchiveExpiredQuotesAsync();
 
             var allQuotes = await _quoteRepository.GetQuotesAsync();
@@ -174,7 +180,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
         if (fullQuote.Status is QuoteStatus.Lost or QuoteStatus.Expired)
         {
-            _feedback.Text = "Only active quotes (Open/In-Process or Won) can be opened from this screen.";
+            _feedback.Text = "Only active quotes (Open/In-Process, Completed, or Won) can be opened from this screen.";
             return;
         }
 
@@ -231,6 +237,36 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         }
     }
 
+
+    private async Task MarkSelectedCompletedAsync()
+    {
+        if (TryGetSelectedQuoteId() is not int selectedId)
+        {
+            _feedback.Text = "Select a quote first.";
+            return;
+        }
+
+        var fullQuote = await _quoteRepository.GetQuoteAsync(selectedId);
+        if (fullQuote is null)
+        {
+            _feedback.Text = "Quote could not be loaded.";
+            return;
+        }
+
+        if (fullQuote.Status != QuoteStatus.InProgress)
+        {
+            _feedback.Text = $"Only InProgress quotes can be marked Completed. Current status: {fullQuote.Status}.";
+            return;
+        }
+
+        var result = await _quoteRepository.UpdateStatusAsync(selectedId, QuoteStatus.Completed, _currentUser.Username);
+        _feedback.Text = result.Success
+            ? $"Quote {selectedId} moved to Completed and is now awaiting customer confirmation."
+            : result.Message;
+
+        await LoadActiveQuotesAsync();
+    }
+
     private async Task PassSelectedToProductionAsync()
     {
         if (TryGetSelectedQuoteId() is not int selectedId)
@@ -246,9 +282,25 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        fullQuote.Status = QuoteStatus.Won;
-        fullQuote.WonUtc = DateTime.UtcNow;
-        await _quoteRepository.SaveQuoteAsync(fullQuote);
+        if (fullQuote.Status != QuoteStatus.Completed)
+        {
+            _feedback.Text = "Only Completed quotes can be moved to production after customer confirmation.";
+            return;
+        }
+
+        var moveToWon = await _quoteRepository.UpdateStatusAsync(fullQuote.Id, QuoteStatus.Won, _currentUser.Username);
+        if (!moveToWon.Success)
+        {
+            _feedback.Text = moveToWon.Message;
+            return;
+        }
+
+        fullQuote = await _quoteRepository.GetQuoteAsync(selectedId);
+        if (fullQuote is null)
+        {
+            _feedback.Text = "Quote could not be reloaded.";
+            return;
+        }
 
         var firstLine = fullQuote.LineItems.FirstOrDefault();
         await _productionRepository.SaveJobAsync(new ProductionJob
@@ -318,6 +370,18 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
     public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => LoadActiveQuotesAsync();
 
+    private async Task AutoMoveStaleQuotesToLostAsync()
+    {
+        var cutoff = DateTime.UtcNow.AddDays(-QuoteExpiryDays);
+        var completed = await _quoteRepository.GetQuotesByStatusAsync(QuoteStatus.Completed);
+        var won = await _quoteRepository.GetQuotesByStatusAsync(QuoteStatus.Won);
+
+        foreach (var quote in completed.Concat(won).Where(q => q.LastUpdatedUtc <= cutoff))
+        {
+            await _quoteRepository.UpdateStatusAsync(quote.Id, QuoteStatus.Lost, "system.expiration");
+        }
+    }
+
     private async Task AutoArchiveExpiredQuotesAsync()
     {
         var inProgress = await _quoteRepository.GetQuotesByStatusAsync(QuoteStatus.InProgress);
@@ -351,7 +415,8 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             LifecycleStageDisplay = quote.Status switch
             {
                 QuoteStatus.InProgress => "CREATED / UNFINISHED",
-                QuoteStatus.Won => "FINISHED / PASSED",
+                QuoteStatus.Completed => "FINISHED / COMPLETED",
+                QuoteStatus.Won => "CUSTOMER CONFIRMED / MOVED TO PRODUCTION",
                 QuoteStatus.Lost => "FINISHED / LOST",
                 QuoteStatus.Expired => "EXPIRED",
                 _ => "UNKNOWN"
@@ -418,12 +483,13 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         };
 
         var openCount = quotes.Count(q => q.Status == QuoteStatus.InProgress);
+        var completedCount = quotes.Count(q => q.Status == QuoteStatus.Completed);
         var wonCount = quotes.Count(q => q.Status == QuoteStatus.Won);
 
         var nameLabel = new Label { Text = customerName, Dock = DockStyle.Top, Height = 44, Padding = new Padding(10, 12, 10, 4), Font = new Font(Font, FontStyle.Bold) };
         var summaryLabel = new Label
         {
-            Text = $"Open: {openCount}    Total: {quotes.Count}    Won: {wonCount}",
+            Text = $"Open: {openCount}    Completed: {completedCount}    Total: {quotes.Count}    Won: {wonCount}",
             Dock = DockStyle.Fill,
             Padding = new Padding(10, 4, 10, 8),
             Font = new Font(Font.FontFamily, 9f, FontStyle.Regular)

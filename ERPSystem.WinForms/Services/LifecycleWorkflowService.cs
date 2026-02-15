@@ -32,7 +32,7 @@ public static class LifecycleWorkflowService
     {
         if (quoteStatus.HasValue)
         {
-            if (quoteStatus is QuoteStatus.Won or QuoteStatus.Lost or QuoteStatus.Expired)
+            if (quoteStatus is QuoteStatus.Completed or QuoteStatus.Won or QuoteStatus.Lost or QuoteStatus.Expired)
             {
                 message = "Archive approved for terminal quote.";
                 return true;

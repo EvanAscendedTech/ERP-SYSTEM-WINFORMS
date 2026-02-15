@@ -29,7 +29,8 @@ public class SectionServiceTests
     [Fact]
     public void QuoteWorkflowService_AllowsExpectedTransitions()
     {
-        Assert.True(QuoteWorkflowService.IsTransitionAllowed(QuoteStatus.InProgress, QuoteStatus.Expired));
+        Assert.True(QuoteWorkflowService.IsTransitionAllowed(QuoteStatus.InProgress, QuoteStatus.Completed));
+        Assert.True(QuoteWorkflowService.IsTransitionAllowed(QuoteStatus.Completed, QuoteStatus.Won));
         Assert.False(QuoteWorkflowService.IsTransitionAllowed(QuoteStatus.Expired, QuoteStatus.Lost));
         Assert.False(QuoteWorkflowService.IsTransitionAllowed(QuoteStatus.Won, QuoteStatus.InProgress));
     }
