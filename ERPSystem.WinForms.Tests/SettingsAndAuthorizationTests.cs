@@ -48,4 +48,25 @@ public class SettingsAndAuthorizationTests
         Assert.True(AuthorizationService.HasPermission(user, UserPermission.ManageInspection));
         Assert.False(AuthorizationService.HasPermission(user, UserPermission.ManageUsers));
     }
+
+    [Fact]
+    public void AuthorizationService_CanAccessSettings_AlwaysTrue()
+    {
+        var user = new UserAccount
+        {
+            Username = "viewer",
+            Roles =
+            [
+                new RoleDefinition
+                {
+                    Name = RoleCatalog.Production,
+                    Permissions = [UserPermission.ViewProduction]
+                }
+            ]
+        };
+
+        Assert.True(AuthorizationService.CanAccessSection(user, "Settings"));
+        Assert.False(AuthorizationService.CanEditSection(user, "Settings"));
+    }
+
 }
