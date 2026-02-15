@@ -1,14 +1,11 @@
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
-using System.Text.Json;
 
 namespace ERPSystem.WinForms.Controls;
 
 public class PurchasingControl : UserControl, IRealtimeDataControl
 {
     private readonly QuoteRepository _quoteRepository;
-    private const string PurchasingLayoutPreferenceKey = "purchasing.layout";
-
     private readonly ProductionRepository _productionRepository;
     private readonly UserManagementRepository _userRepository;
     private readonly Action<string> _openSection;
@@ -101,21 +98,15 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
     {
         try
         {
-            var serialized = await _userRepository.GetUserPreferenceAsync(_currentUserId, PurchasingLayoutPreferenceKey);
-            if (string.IsNullOrWhiteSpace(serialized))
-            {
-                return;
-            }
-
-            var layout = JsonSerializer.Deserialize<PurchasingLayoutPreference>(serialized);
+            var layout = await _userRepository.GetPurchasingLayoutAsync(_currentUserId);
             if (layout is null)
             {
                 return;
             }
 
             _restoringLayout = true;
-            ApplySafeSplitterDistance(_mainSplit, layout.MainSplitterDistance, _mainSplit.Panel1MinSize, _mainSplit.Panel2MinSize);
-            ApplySafeSplitterDistance(_docsSplit, layout.DocsSplitterDistance, _docsSplit.Panel1MinSize, _docsSplit.Panel2MinSize);
+            ApplySafeSplitterDistance(_mainSplit, GetDistanceFromProportion(_mainSplit, layout.LeftPanelProportion), _mainSplit.Panel1MinSize, _mainSplit.Panel2MinSize);
+            ApplySafeSplitterDistance(_docsSplit, GetDistanceFromProportion(_docsSplit, layout.RightTopPanelProportion), _docsSplit.Panel1MinSize, _docsSplit.Panel2MinSize);
         }
         catch
         {
@@ -134,14 +125,15 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        var preference = new PurchasingLayoutPreference
+        var preference = new PurchasingLayoutSetting
         {
-            MainSplitterDistance = _mainSplit.SplitterDistance,
-            DocsSplitterDistance = _docsSplit.SplitterDistance
+            UserId = _currentUserId,
+            LeftPanelProportion = GetPanelProportion(_mainSplit),
+            RightTopPanelProportion = GetPanelProportion(_docsSplit)
         };
+        preference.RightBottomPanelProportion = Math.Clamp(1d - preference.RightTopPanelProportion, 0.01d, 0.99d);
 
-        var serialized = JsonSerializer.Serialize(preference);
-        await _userRepository.SaveUserPreferenceAsync(_currentUserId, PurchasingLayoutPreferenceKey, serialized);
+        await _userRepository.SavePurchasingLayoutAsync(preference);
     }
 
 
@@ -184,6 +176,42 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         }
 
         splitContainer.SplitterDistance = Math.Clamp(preferredDistance, minDistance, maxDistance);
+    }
+
+    private static double GetPanelProportion(SplitContainer splitContainer)
+    {
+        var totalSize = splitContainer.Orientation == Orientation.Vertical
+            ? splitContainer.ClientSize.Width
+            : splitContainer.ClientSize.Height;
+
+        if (totalSize <= splitContainer.SplitterWidth)
+        {
+            return 0.5d;
+        }
+
+        var availableForPanels = totalSize - splitContainer.SplitterWidth;
+        if (availableForPanels <= 0)
+        {
+            return 0.5d;
+        }
+
+        return Math.Clamp(splitContainer.SplitterDistance / (double)availableForPanels, 0.01d, 0.99d);
+    }
+
+    private static int GetDistanceFromProportion(SplitContainer splitContainer, double proportion)
+    {
+        var totalSize = splitContainer.Orientation == Orientation.Vertical
+            ? splitContainer.ClientSize.Width
+            : splitContainer.ClientSize.Height;
+
+        if (totalSize <= splitContainer.SplitterWidth)
+        {
+            return splitContainer.SplitterDistance;
+        }
+
+        var availableForPanels = totalSize - splitContainer.SplitterWidth;
+        var clampedProportion = Math.Clamp(proportion, 0.01d, 0.99d);
+        return (int)Math.Round(availableForPanels * clampedProportion);
     }
 
     private void ConfigureGrids()
@@ -379,9 +407,4 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
 
     public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => LoadPurchasingQuotesAsync();
 
-    private sealed class PurchasingLayoutPreference
-    {
-        public int MainSplitterDistance { get; set; }
-        public int DocsSplitterDistance { get; set; }
-    }
 }

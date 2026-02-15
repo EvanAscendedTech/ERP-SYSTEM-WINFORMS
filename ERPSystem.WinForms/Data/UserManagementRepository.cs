@@ -63,6 +63,15 @@ public class UserManagementRepository
                 LastUpdatedUtc TEXT NOT NULL,
                 PRIMARY KEY (UserId, PreferenceKey),
                 FOREIGN KEY(UserId) REFERENCES Users(Id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS PurchasingLayouts (
+                UserId INTEGER PRIMARY KEY,
+                LeftPanelProportion REAL NOT NULL,
+                RightTopPanelProportion REAL NOT NULL,
+                RightBottomPanelProportion REAL NOT NULL,
+                LastUpdatedUtc TEXT NOT NULL,
+                FOREIGN KEY(UserId) REFERENCES Users(Id) ON DELETE CASCADE
             );";
 
         await using var command = connection.CreateCommand();
@@ -296,6 +305,61 @@ public class UserManagementRepository
         if (_realtimeDataService is not null)
         {
             await _realtimeDataService.PublishChangeAsync("Users", "save-preference");
+        }
+    }
+
+    public async Task<PurchasingLayoutSetting?> GetPurchasingLayoutAsync(int userId)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT UserId, LeftPanelProportion, RightTopPanelProportion, RightBottomPanelProportion, LastUpdatedUtc
+            FROM PurchasingLayouts
+            WHERE UserId = $userId;";
+        command.Parameters.AddWithValue("$userId", userId);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return null;
+        }
+
+        return new PurchasingLayoutSetting
+        {
+            UserId = reader.GetInt32(0),
+            LeftPanelProportion = reader.GetDouble(1),
+            RightTopPanelProportion = reader.GetDouble(2),
+            RightBottomPanelProportion = reader.GetDouble(3),
+            LastUpdatedUtc = DateTime.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+        };
+    }
+
+    public async Task SavePurchasingLayoutAsync(PurchasingLayoutSetting layout)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO PurchasingLayouts (UserId, LeftPanelProportion, RightTopPanelProportion, RightBottomPanelProportion, LastUpdatedUtc)
+            VALUES ($userId, $leftPanelProportion, $rightTopPanelProportion, $rightBottomPanelProportion, $lastUpdatedUtc)
+            ON CONFLICT(UserId) DO UPDATE SET
+                LeftPanelProportion = excluded.LeftPanelProportion,
+                RightTopPanelProportion = excluded.RightTopPanelProportion,
+                RightBottomPanelProportion = excluded.RightBottomPanelProportion,
+                LastUpdatedUtc = excluded.LastUpdatedUtc;";
+        command.Parameters.AddWithValue("$userId", layout.UserId);
+        command.Parameters.AddWithValue("$leftPanelProportion", Math.Clamp(layout.LeftPanelProportion, 0.01d, 0.99d));
+        command.Parameters.AddWithValue("$rightTopPanelProportion", Math.Clamp(layout.RightTopPanelProportion, 0.01d, 0.99d));
+        command.Parameters.AddWithValue("$rightBottomPanelProportion", Math.Clamp(layout.RightBottomPanelProportion, 0.01d, 0.99d));
+        command.Parameters.AddWithValue("$lastUpdatedUtc", DateTime.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync();
+
+        if (_realtimeDataService is not null)
+        {
+            await _realtimeDataService.PublishChangeAsync("Users", "save-purchasing-layout");
         }
     }
 
