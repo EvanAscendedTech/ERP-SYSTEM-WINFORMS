@@ -15,6 +15,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
     private const int ProductionDueSoonDays = 2;
     private const float QueueBaseFontSize = 9F;
     private const float QueueMinFontSize = 5.5F;
+    private const float QueueMaxScale = 1.45F;
 
     private readonly QuoteRepository _quoteRepository;
     private readonly ProductionRepository _productionRepository;
@@ -45,6 +46,10 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         Margin = new Padding(0),
         Padding = new Padding(0)
     };
+
+    private readonly Dictionary<Control, float> _queueBaseFontSizes = new();
+    private readonly List<(Label Label, TableLayoutPanel Row)> _queueLineLabels = new();
+    private float _queueWidthBaseline;
 
     private readonly Label _lastUpdatedLabel = new()
     {
@@ -152,6 +157,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         Controls.Add(root);
 
         Load += async (_, _) => await LoadDashboardAsync();
+        Resize += (_, _) => UpdateQueueResponsiveLayout();
     }
 
     public void ApplyTheme(ThemePalette palette)
@@ -234,6 +240,8 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
     {
         _workQueueCards.SuspendLayout();
         _workQueueCards.Controls.Clear();
+        _queueBaseFontSizes.Clear();
+        _queueLineLabels.Clear();
 
         for (var index = 0; index < cards.Length; index++)
         {
@@ -243,6 +251,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         }
 
         _workQueueCards.ResumeLayout();
+        UpdateQueueResponsiveLayout();
     }
 
     private Panel CreateStageCard(string title, string subtitle, int count, Color color, string sectionKey)
@@ -793,19 +802,33 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
     private Panel CreateQueueCard(string title, IReadOnlyList<StageTaskItem> items, string sectionKey, Color stageColor)
     {
         var panel = CreateBasePanel();
-        panel.MinimumSize = new Size(0, 240);
+        panel.MinimumSize = new Size(220, 240);
         panel.BackColor = ControlPaint.Light(stageColor, 0.92f);
         panel.Margin = new Padding(0, 0, 8, 8);
         panel.Paint += (_, args) => PaintBeveledCard(args.Graphics, panel.ClientRectangle, stageColor);
 
+        var cardLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            MinimumSize = new Size(0, 210)
+        };
+        cardLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 18F));
+        cardLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 82F));
+
         var titleRow = new TableLayoutPanel
         {
-            Dock = DockStyle.Top,
+            Dock = DockStyle.Fill,
             ColumnCount = 2,
-            Height = 32
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            MinimumSize = new Size(0, 36)
         };
-        titleRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        titleRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        titleRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 66F));
+        titleRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34F));
 
         var titleLabel = new Label
         {
@@ -813,96 +836,172 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             Font = new Font("Segoe UI", 11F, FontStyle.Bold),
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleLeft,
-            ForeColor = stageColor
+            ForeColor = stageColor,
+            AutoEllipsis = false
         };
+        RegisterQueueFontControl(titleLabel, 11F);
 
         var openButton = new LinkLabel
         {
             Text = "Open module",
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleRight,
-            AutoSize = true,
-            LinkBehavior = LinkBehavior.HoverUnderline
+            AutoSize = false,
+            LinkBehavior = LinkBehavior.HoverUnderline,
+            MinimumSize = new Size(90, 0)
         };
+        RegisterQueueFontControl(openButton, QueueBaseFontSize);
         openButton.LinkClicked += (_, _) => _openTarget(new DashboardNavigationTarget(sectionKey));
 
         titleRow.Controls.Add(titleLabel, 0, 0);
         titleRow.Controls.Add(openButton, 1, 0);
 
-        var list = new ListBox
+        var listHost = new Panel
         {
             Dock = DockStyle.Fill,
-            HorizontalScrollbar = true,
-            IntegralHeight = false,
-            DrawMode = DrawMode.OwnerDrawFixed,
-            ItemHeight = 22
+            AutoScroll = true,
+            Padding = new Padding(0, 8, 0, 0),
+            Margin = new Padding(0),
+            MinimumSize = new Size(0, 140)
         };
+
+        var itemLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            RowCount = 0,
+            Margin = new Padding(0),
+            Padding = new Padding(0)
+        };
+        itemLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
 
         if (items.Count > 0)
         {
             foreach (var item in items)
             {
-                list.Items.Add(item);
+                itemLayout.RowCount += 1;
+                itemLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                itemLayout.Controls.Add(CreateQueueLineItem(item), 0, itemLayout.RowCount - 1);
             }
         }
         else
         {
-            list.Items.Add(CreateEmptyQueueMessage(title));
+            var noItemsLabel = new Label
+            {
+                Text = CreateEmptyQueueMessage(title),
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                Margin = new Padding(0, 0, 0, 8),
+                MaximumSize = new Size(280, 0),
+                ForeColor = Color.FromArgb(60, 60, 60)
+            };
+            RegisterQueueFontControl(noItemsLabel, QueueBaseFontSize);
+            itemLayout.RowCount = 1;
+            itemLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            itemLayout.Controls.Add(noItemsLabel, 0, 0);
         }
 
-        ApplyQueueListSizing(list, Math.Max(1, list.Items.Count));
-        list.Resize += (_, _) => ApplyQueueListSizing(list, Math.Max(1, list.Items.Count));
-        panel.Disposed += (_, _) =>
-        {
-            if (list.Tag is Font queueFont)
-            {
-                queueFont.Dispose();
-            }
-        };
-
-        list.DrawItem += (_, args) => DrawStageTask(list, args);
-        list.DoubleClick += (_, _) => OpenStageTask(list, sectionKey);
-        list.KeyDown += (_, args) =>
-        {
-            if (args.KeyCode != Keys.Enter)
-            {
-                return;
-            }
-
-            OpenStageTask(list, sectionKey);
-            args.Handled = true;
-        };
-
-        panel.Controls.Add(list);
-        panel.Controls.Add(titleRow);
+        listHost.Controls.Add(itemLayout);
+        cardLayout.Controls.Add(titleRow, 0, 0);
+        cardLayout.Controls.Add(listHost, 0, 1);
+        panel.Controls.Add(cardLayout);
         return panel;
     }
 
-    private static void ApplyQueueListSizing(ListBox list, int itemCount)
+    private TableLayoutPanel CreateQueueLineItem(StageTaskItem item)
     {
-        if (list.IsDisposed)
+        var row = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            Margin = new Padding(0, 0, 0, 8),
+            Padding = new Padding(8, 6, 8, 6),
+            BackColor = Color.FromArgb(245, 247, 250),
+            MinimumSize = new Size(0, 38)
+        };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 84F));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16F));
+
+        var textLabel = new Label
+        {
+            Text = item.Text,
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            Margin = new Padding(0),
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = item.Highlight ? Color.FromArgb(181, 54, 57) : Color.FromArgb(48, 53, 61)
+        };
+        RegisterQueueFontControl(textLabel, QueueBaseFontSize);
+        _queueLineLabels.Add((textLabel, row));
+
+        var openLink = new LinkLabel
+        {
+            Text = "Open",
+            Dock = DockStyle.Fill,
+            Margin = new Padding(6, 0, 0, 0),
+            TextAlign = ContentAlignment.MiddleRight,
+            AutoSize = false
+        };
+        RegisterQueueFontControl(openLink, QueueBaseFontSize);
+        openLink.LinkClicked += (_, _) => _openTarget(item.Target);
+
+        row.Click += (_, _) => _openTarget(item.Target);
+        textLabel.Click += (_, _) => _openTarget(item.Target);
+
+        row.Controls.Add(textLabel, 0, 0);
+        row.Controls.Add(openLink, 1, 0);
+        return row;
+    }
+
+    private void RegisterQueueFontControl(Control control, float baseFontSize)
+    {
+        _queueBaseFontSizes[control] = baseFontSize;
+    }
+
+    private void UpdateQueueResponsiveLayout()
+    {
+        if (_workQueueCards.IsDisposed || _workQueueCards.Width <= 0)
         {
             return;
         }
 
-        var safeCount = Math.Max(1, itemCount);
-        var itemHeight = Math.Clamp(list.ClientSize.Height / safeCount, 1, 255);
-        list.ItemHeight = itemHeight;
-
-        var targetFontSize = Math.Clamp(itemHeight * 0.46F, QueueMinFontSize, QueueBaseFontSize);
-        if (Math.Abs(list.Font.SizeInPoints - targetFontSize) < 0.15F)
+        if (_queueWidthBaseline <= 0)
         {
-            return;
+            _queueWidthBaseline = _workQueueCards.Width;
         }
 
-        if (list.Tag is Font oldFont)
+        var scale = Math.Clamp(_workQueueCards.Width / _queueWidthBaseline, 0.8F, QueueMaxScale);
+        foreach (var pair in _queueBaseFontSizes)
         {
-            oldFont.Dispose();
+            var control = pair.Key;
+            if (control.IsDisposed)
+            {
+                continue;
+            }
+
+            var targetSize = Math.Clamp(pair.Value * scale, QueueMinFontSize, pair.Value * QueueMaxScale);
+            if (Math.Abs(control.Font.SizeInPoints - targetSize) < 0.15F)
+            {
+                continue;
+            }
+
+            control.Font = new Font(control.Font.FontFamily, targetSize, control.Font.Style);
         }
 
-        var updatedFont = new Font("Segoe UI", targetFontSize, FontStyle.Regular);
-        list.Font = updatedFont;
-        list.Tag = updatedFont;
+        foreach (var (label, row) in _queueLineLabels)
+        {
+            if (label.IsDisposed || row.IsDisposed)
+            {
+                continue;
+            }
+
+            var wrapWidth = Math.Max(120, (int)(row.ClientSize.Width * 0.84F) - 22);
+            label.MaximumSize = new Size(wrapWidth, 0);
+        }
     }
 
     private Panel CreateQuoteQueuePanel(string title, IReadOnlyCollection<Quote> quotes, bool includeExpiryWarning)
@@ -920,36 +1019,6 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             .ToList();
 
         return CreateQueueCard(title, details, "Quotes", Color.FromArgb(45, 125, 255));
-    }
-
-    private void OpenStageTask(ListBox list, string sectionKey)
-    {
-        if (list.SelectedItem is StageTaskItem task)
-        {
-            _openTarget(task.Target);
-            return;
-        }
-
-        _openTarget(new DashboardNavigationTarget(sectionKey));
-    }
-
-    private static void DrawStageTask(ListBox list, DrawItemEventArgs args)
-    {
-        args.DrawBackground();
-        if (args.Index < 0 || args.Index >= list.Items.Count)
-        {
-            return;
-        }
-
-        var item = list.Items[args.Index];
-        var text = item is StageTaskItem task ? task.Text : item?.ToString() ?? string.Empty;
-        var color = item is StageTaskItem highlightedTask && highlightedTask.Highlight
-            ? Color.FromArgb(181, 54, 57)
-            : args.ForeColor;
-
-        var drawBounds = Rectangle.Inflate(args.Bounds, -2, 0);
-        TextRenderer.DrawText(args.Graphics, text, args.Font, drawBounds, color, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-        args.DrawFocusRectangle();
     }
 
     private static string CreateEmptyQueueMessage(string sectionName) => $"{sectionName}: no jobs currently in queue.";
