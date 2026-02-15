@@ -333,7 +333,7 @@ public class QuoteDraftForm : Form
 
         var productionFlagsSection = BuildCompactSection("Production Flags", productionFlags);
 
-        var blobGrid = new TableLayoutPanel
+        var attachmentsFlow = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
             AutoSize = true,
