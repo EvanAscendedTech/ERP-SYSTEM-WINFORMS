@@ -48,6 +48,10 @@ public class QuoteLineItem
     public bool RequiresGForce { get; set; }
     public bool RequiresSecondaryProcessing { get; set; }
     public bool RequiresPlating { get; set; }
+    public bool RequiresDfars { get; set; }
+    public bool RequiresMaterialTestReport { get; set; }
+    public bool RequiresCertificateOfConformance { get; set; }
+    public bool RequiresSecondaryOperations { get; set; }
     public string Notes { get; set; } = string.Empty;
     public List<string> AssociatedFiles { get; set; } = new();
     public List<QuoteBlobAttachment> BlobAttachments { get; set; } = new();
