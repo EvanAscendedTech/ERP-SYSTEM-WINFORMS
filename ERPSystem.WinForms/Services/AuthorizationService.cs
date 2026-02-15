@@ -22,7 +22,7 @@ public static class AuthorizationService
             "Production" => HasPermission(user, UserPermission.ViewProduction),
             "Inspection" => HasPermission(user, UserPermission.ViewInspection),
             "Shipping" => HasPermission(user, UserPermission.ViewShipping),
-            "Settings" => HasPermission(user, UserPermission.ManageSettings) || HasPermission(user, UserPermission.ManageUsers),
+            "Settings" => true,
             _ => false
         };
     }
