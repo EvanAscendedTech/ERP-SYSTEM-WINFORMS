@@ -18,21 +18,29 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
     private readonly JobFlowService _jobFlowService;
     private readonly Action<DashboardNavigationTarget> _openTarget;
 
-    private readonly FlowLayoutPanel _glanceCards = new()
+    private readonly TableLayoutPanel _glanceCards = new()
     {
         Dock = DockStyle.Fill,
-        WrapContents = false,
-        AutoScroll = true,
+        ColumnCount = 4,
+        RowCount = 2,
         Margin = new Padding(0, 0, 0, 12)
     };
 
-    private readonly FlowLayoutPanel _workQueues = new()
+    private readonly TableLayoutPanel _workflowStageCards = new()
     {
         Dock = DockStyle.Fill,
-        FlowDirection = FlowDirection.TopDown,
-        WrapContents = false,
-        AutoScroll = true,
-        Padding = new Padding(0, 0, 8, 0)
+        ColumnCount = 11,
+        RowCount = 1,
+        Margin = new Padding(0, 0, 0, 12)
+    };
+
+    private readonly TableLayoutPanel _workQueues = new()
+    {
+        Dock = DockStyle.Fill,
+        ColumnCount = 3,
+        RowCount = 2,
+        Margin = new Padding(0),
+        Padding = new Padding(0)
     };
 
     private readonly Label _lastUpdatedLabel = new()
@@ -59,13 +67,18 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         DoubleBuffered = true;
         Dock = DockStyle.Fill;
 
+        ConfigureGlanceCardsLayout();
+        ConfigureWorkflowStageLayout();
+        ConfigureWorkQueueLayout();
+
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 6,
+            RowCount = 7,
             Padding = new Padding(20)
         };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -82,20 +95,36 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
 
         var subtitle = new Label
         {
-            Text = "At-a-glance management view for quotes, production, quality and inspection.",
+            Text = "At-a-glance workflow progression from quote through customer follow-up.",
             Font = new Font("Segoe UI", 10F),
             AutoSize = true,
-            Margin = new Padding(0, 4, 0, 12),
+            Margin = new Padding(0, 4, 0, 8),
             Tag = "secondary"
+        };
+
+        var flowTitle = new Label
+        {
+            Text = "Workflow progression",
+            Font = new Font("Segoe UI", 12F, FontStyle.Bold),
+            Dock = DockStyle.Top,
+            Height = 28
         };
 
         var glancePanel = new Panel
         {
             Dock = DockStyle.Fill,
-            Height = 130,
-            Padding = new Padding(0, 0, 0, 10)
+            Height = 220,
+            Padding = new Padding(0, 0, 0, 8)
         };
         glancePanel.Controls.Add(_glanceCards);
+
+        var stagePanel = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Height = 84,
+            Padding = new Padding(0, 0, 0, 8)
+        };
+        stagePanel.Controls.Add(_workflowStageCards);
 
         var queueTitle = new Label
         {
@@ -107,13 +136,15 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
 
         root.Controls.Add(title, 0, 0);
         root.Controls.Add(subtitle, 0, 1);
-        root.Controls.Add(glancePanel, 0, 2);
-        root.Controls.Add(queueTitle, 0, 3);
-        root.Controls.Add(_lastUpdatedLabel, 0, 5);
+        root.Controls.Add(flowTitle, 0, 2);
+        root.Controls.Add(stagePanel, 0, 3);
+        root.Controls.Add(glancePanel, 0, 4);
+        root.Controls.Add(_lastUpdatedLabel, 0, 6);
 
-        var queueHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 28, 0, 0) };
+        var queueHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 8, 0, 0) };
+        queueHost.Controls.Add(queueTitle);
         queueHost.Controls.Add(_workQueues);
-        root.Controls.Add(queueHost, 0, 4);
+        root.Controls.Add(queueHost, 0, 5);
 
         Controls.Add(root);
 
@@ -124,6 +155,138 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
     {
         BackColor = palette.Background;
         ForeColor = palette.TextPrimary;
+    }
+
+    private void ConfigureGlanceCardsLayout()
+    {
+        _glanceCards.ColumnStyles.Clear();
+        _glanceCards.RowStyles.Clear();
+        for (var index = 0; index < _glanceCards.ColumnCount; index++)
+        {
+            _glanceCards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25F));
+        }
+
+        _glanceCards.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+        _glanceCards.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+    }
+
+    private void ConfigureWorkflowStageLayout()
+    {
+        _workflowStageCards.ColumnStyles.Clear();
+        _workflowStageCards.RowStyles.Clear();
+        for (var index = 0; index < _workflowStageCards.ColumnCount; index++)
+        {
+            var isArrowColumn = index % 2 == 1;
+            _workflowStageCards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, isArrowColumn ? 3F : 13.666F));
+        }
+
+        _workflowStageCards.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+    }
+
+    private void ConfigureWorkQueueLayout()
+    {
+        _workQueues.ColumnStyles.Clear();
+        _workQueues.RowStyles.Clear();
+        for (var index = 0; index < _workQueues.ColumnCount; index++)
+        {
+            _workQueues.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
+        }
+
+        _workQueues.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+        _workQueues.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+    }
+
+    private void PopulateGlanceCards(params (string Metric, string Value)[] cards)
+    {
+        _glanceCards.SuspendLayout();
+        _glanceCards.Controls.Clear();
+
+        for (var index = 0; index < cards.Length; index++)
+        {
+            var card = CreateGlanceCard(cards[index].Metric, cards[index].Value);
+            _glanceCards.Controls.Add(card, index % 4, index / 4);
+        }
+
+        _glanceCards.ResumeLayout();
+    }
+
+    private void PopulateWorkflowStages(params Control[] stageCards)
+    {
+        _workflowStageCards.SuspendLayout();
+        _workflowStageCards.Controls.Clear();
+
+        for (var index = 0; index < stageCards.Length; index++)
+        {
+            var column = index * 2;
+            _workflowStageCards.Controls.Add(stageCards[index], column, 0);
+            if (index < stageCards.Length - 1)
+            {
+                _workflowStageCards.Controls.Add(CreateStageArrow(), column + 1, 0);
+            }
+        }
+
+        _workflowStageCards.ResumeLayout();
+    }
+
+    private void PopulateQueueGrid(params Control[] cards)
+    {
+        _workQueues.SuspendLayout();
+        _workQueues.Controls.Clear();
+        for (var index = 0; index < cards.Length; index++)
+        {
+            _workQueues.Controls.Add(cards[index], index % 3, index / 3);
+        }
+
+        _workQueues.ResumeLayout();
+    }
+
+    private Panel CreateStageCard(string title, string subtitle, int count, Color color, string sectionKey)
+    {
+        var panel = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Margin = new Padding(2, 0, 2, 0),
+            Padding = new Padding(12, 10, 12, 10),
+            BackColor = ControlPaint.Light(color, 0.9f)
+        };
+
+        var header = new Label
+        {
+            Text = title,
+            Dock = DockStyle.Top,
+            Height = 24,
+            Font = new Font("Segoe UI", 10F, FontStyle.Bold),
+            ForeColor = color
+        };
+
+        var detail = new Label
+        {
+            Text = $"{subtitle}: {count}",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Font = new Font("Segoe UI", 9F)
+        };
+
+        panel.Click += (_, _) => _openTarget(new DashboardNavigationTarget(sectionKey));
+        header.Click += (_, _) => _openTarget(new DashboardNavigationTarget(sectionKey));
+        detail.Click += (_, _) => _openTarget(new DashboardNavigationTarget(sectionKey));
+
+        panel.Controls.Add(detail);
+        panel.Controls.Add(header);
+        return panel;
+    }
+
+    private static Label CreateStageArrow()
+    {
+        return new Label
+        {
+            Text = "➜",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI", 16F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(92, 102, 122),
+            Margin = new Padding(0)
+        };
     }
 
     private async Task LoadDashboardAsync()
@@ -154,36 +317,31 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         var qualityQueue = jobs.Where(j => _jobFlowService.IsInModule(j.JobNumber, JobFlowService.WorkflowModule.Quality)).OrderBy(j => j.JobNumber).ToList();
         var inspectionQueue = jobs.Where(j => _jobFlowService.IsInModule(j.JobNumber, JobFlowService.WorkflowModule.Inspection)).OrderBy(j => j.JobNumber).ToList();
         var shippingQueue = jobs.Where(j => _jobFlowService.IsInModule(j.JobNumber, JobFlowService.WorkflowModule.Shipping)).OrderBy(j => j.JobNumber).ToList();
-        _glanceCards.SuspendLayout();
-        _glanceCards.Controls.Clear();
-        _glanceCards.Controls.Add(CreateGlanceCard("Quotes in progress", inProgressQuotes.Count.ToString()));
-        _glanceCards.Controls.Add(CreateGlanceCard("Quotes completed (awaiting customer)", completedQuotes.Count.ToString()));
-        _glanceCards.Controls.Add(CreateGlanceCard("Quotes expiring soon", quoteExpiringSoon.Count.ToString()));
-        _glanceCards.Controls.Add(CreateGlanceCard("Production in progress", productionInProgress.Count.ToString()));
-        _glanceCards.Controls.Add(CreateGlanceCard("Jobs near/over due", productionNearDue.Count.ToString()));
-        _glanceCards.Controls.Add(CreateGlanceCard("Quality queue", qualityQueue.Count.ToString()));
-        _glanceCards.Controls.Add(CreateGlanceCard("Inspection queue", inspectionQueue.Count.ToString()));
-        _glanceCards.Controls.Add(CreateGlanceCard("Shipping queue", shippingQueue.Count.ToString()));
-        _glanceCards.ResumeLayout();
+        PopulateGlanceCards(
+            ("Quotes in progress", inProgressQuotes.Count.ToString()),
+            ("Quotes completed", completedQuotes.Count.ToString()),
+            ("Expiring soon", quoteExpiringSoon.Count.ToString()),
+            ("Production in progress", productionInProgress.Count.ToString()),
+            ("Near/over due", productionNearDue.Count.ToString()),
+            ("Quality queue", qualityQueue.Count.ToString()),
+            ("Inspection queue", inspectionQueue.Count.ToString()),
+            ("Shipping queue", shippingQueue.Count.ToString()));
 
-        _workQueues.SuspendLayout();
-        _workQueues.Controls.Clear();
-        _workQueues.Controls.Add(CreateOpenQuotesSnapshotPanel(inProgressQuotes));
-        _workQueues.Controls.Add(CreateJobFlowSnapshotPanel(inProgressQuotes, productionInProgress, inspectionQueue, shippingQueue));
-        _workQueues.Controls.Add(CreateWorkSnapshotPanel(inProgressQuotes, productionInProgress, qualityQueue, inspectionQueue, shippingQueue));
-        _workQueues.Controls.Add(CreateModuleSnapshotTable("Production in-progress snapshot", productionInProgress, "Working production orders currently in progress."));
-        _workQueues.Controls.Add(CreateModuleSnapshotTable("Quality in-progress snapshot", qualityQueue, "Orders waiting in quality review."));
-        _workQueues.Controls.Add(CreateModuleSnapshotTable("Inspection in-progress snapshot", inspectionQueue, "Orders currently in inspection.", showInspectionState: true));
-        _workQueues.Controls.Add(CreateModuleSnapshotTable("Shipping in-progress snapshot", shippingQueue, "Orders staged in shipping."));
-        _workQueues.Controls.Add(CreateQuoteQueuePanel("In-progress quotes", inProgressQuotes, includeExpiryWarning: false));
-        _workQueues.Controls.Add(CreateQuoteQueuePanel("Completed quotes awaiting confirmation", completedQuotes, includeExpiryWarning: false));
-        _workQueues.Controls.Add(CreateQuoteQueuePanel("Quotes about to expire", quoteExpiringSoon, includeExpiryWarning: true));
-        _workQueues.Controls.Add(CreateProductionQueuePanel("In-progress production orders", productionInProgress));
-        _workQueues.Controls.Add(CreateQualityQueuePanel("Quality queue", qualityQueue));
-        _workQueues.Controls.Add(CreateInspectionQueuePanel("Inspection queue", inspectionQueue));
-        _workQueues.Controls.Add(CreateShippingQueuePanel("Shipping queue", shippingQueue));
-        _workQueues.Controls.Add(CreateStatusBarPanel("Job status distribution", jobs));
-        _workQueues.ResumeLayout();
+        PopulateWorkflowStages(
+            CreateStageCard("Quote", "In progress", inProgressQuotes.Count, Color.FromArgb(45, 125, 255), "Quotes"),
+            CreateStageCard("Production", "Active jobs", productionInProgress.Count, Color.FromArgb(83, 143, 94), "Production"),
+            CreateStageCard("Quality", "Queued", qualityQueue.Count, Color.FromArgb(243, 170, 60), "Quality"),
+            CreateStageCard("Inspection", "Queued", inspectionQueue.Count, Color.FromArgb(205, 98, 184), "Inspection"),
+            CreateStageCard("Shipping", "Staged", shippingQueue.Count, Color.FromArgb(95, 175, 193), "Shipping"),
+            CreateStageCard("CRM", "Follow-up", completedQuotes.Count, Color.FromArgb(121, 111, 214), "CRM"));
+
+        PopulateQueueGrid(
+            CreateQuoteQueuePanel("In-progress quotes", inProgressQuotes, includeExpiryWarning: false),
+            CreateProductionQueuePanel("In-progress production orders", productionInProgress),
+            CreateQualityQueuePanel("Quality queue", qualityQueue),
+            CreateQuoteQueuePanel("Quotes about to expire", quoteExpiringSoon, includeExpiryWarning: true),
+            CreateInspectionQueuePanel("Inspection queue", inspectionQueue),
+            CreateShippingQueuePanel("Shipping queue", shippingQueue));
 
         _lastUpdatedLabel.Text = $"Updated {DateTime.Now:g}";
     }
@@ -701,11 +859,10 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
     {
         return new Panel
         {
-            Dock = DockStyle.Top,
-            Margin = new Padding(0, 0, 0, 10),
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0, 0, 8, 8),
             Padding = new Padding(12),
-            BorderStyle = BorderStyle.FixedSingle,
-            Width = 900
+            BorderStyle = BorderStyle.FixedSingle
         };
     }
 

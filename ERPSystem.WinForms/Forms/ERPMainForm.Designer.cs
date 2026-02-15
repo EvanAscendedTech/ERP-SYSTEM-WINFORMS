@@ -60,7 +60,7 @@ public partial class ERPMainForm
         rootLayout.ColumnCount = 1;
         rootLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 92F));
-        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 64F));
+        rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F));
         rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
         headerPanel.Dock = DockStyle.Fill;
@@ -117,12 +117,12 @@ public partial class ERPMainForm
         headerPanel.Controls.Add(onlineUsersPanel);
 
         tabStripPanel.Dock = DockStyle.Fill;
-        tabStripPanel.Padding = new Padding(12, 10, 12, 10);
+        tabStripPanel.Padding = new Padding(12, 6, 12, 6);
 
         navButtonsPanel.Dock = DockStyle.Fill;
         navButtonsPanel.FlowDirection = FlowDirection.LeftToRight;
         navButtonsPanel.WrapContents = false;
-        navButtonsPanel.AutoScroll = true;
+        navButtonsPanel.AutoScroll = false;
 
         ConfigureNavButton(btnDashboard, "Dashboard");
         ConfigureNavButton(btnQuotes, "Quotes");
@@ -139,6 +139,29 @@ public partial class ERPMainForm
         navButtonsPanel.Controls.Add(btnInspection);
         navButtonsPanel.Controls.Add(btnShipping);
         navButtonsPanel.Controls.Add(btnCRM);
+
+        tabStripPanel.Resize += (_, _) =>
+        {
+            var spacing = 8;
+            var availableWidth = Math.Max(700, tabStripPanel.ClientSize.Width - tabStripPanel.Padding.Horizontal);
+            var buttonCount = navButtonsPanel.Controls.Count;
+            var width = Math.Max(92, (availableWidth - (spacing * (buttonCount - 1))) / buttonCount);
+
+            foreach (Control control in navButtonsPanel.Controls)
+            {
+                if (control is ModernButton navButton)
+                {
+                    navButton.Width = width;
+                    navButton.Margin = new Padding(0, 0, spacing, 0);
+                }
+            }
+
+            if (navButtonsPanel.Controls.Count > 0)
+            {
+                navButtonsPanel.Controls[^1].Margin = new Padding(0);
+            }
+        };
+
         tabStripPanel.Controls.Add(navButtonsPanel);
 
         mainContentPanel.Dock = DockStyle.Fill;
@@ -157,10 +180,10 @@ public partial class ERPMainForm
     {
         button.Text = text;
         button.Width = 142;
-        button.Height = 40;
+        button.Height = 34;
         button.Margin = new Padding(0, 0, 10, 0);
         button.TextAlign = ContentAlignment.MiddleCenter;
         button.Padding = new Padding(0);
-        button.CornerRadius = 10;
+        button.CornerRadius = 8;
     }
 }
