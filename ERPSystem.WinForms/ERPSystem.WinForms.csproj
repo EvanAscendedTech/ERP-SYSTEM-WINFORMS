@@ -6,6 +6,9 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <GenerateTargetPlatformAttribute>false</GenerateTargetPlatformAttribute>
     <CopyRetryCount>20</CopyRetryCount>
     <CopyRetryDelayMilliseconds>250</CopyRetryDelayMilliseconds>
   </PropertyGroup>
