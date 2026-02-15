@@ -22,13 +22,42 @@ public class ProductionControl : UserControl, IRealtimeDataControl
     private readonly SplitContainer _productionSplit = new() { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 320 };
 
     private readonly DataGridView _machinesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
-    private readonly TextBox _machineIdInput = new() { Width = 180 };
-    private readonly TextBox _machineDescriptionInput = new() { Width = 260 };
-    private readonly NumericUpDown _machineCapacityInput = new() { Width = 120, Minimum = 0, Maximum = 24, Value = 8 };
-    private readonly Button _editMachinesButton = new() { Text = "Edit", AutoSize = true, BackColor = Color.FromArgb(0, 120, 215), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-    private readonly Button _addMachineButton = new() { Text = "Add Machine", AutoSize = true, Enabled = false };
+    private readonly Button _addMachineButton = new() { Text = "Add New Machine", AutoSize = true };
+    private static readonly string[] MachineTypes =
+    {
+        "Mill",
+        "Lathe",
+        "Swiss Lathe",
+        "Horizontal Machining Center",
+        "Vertical Machining Center",
+        "5-Axis Machining Center",
+        "Boring Mill",
+        "Drill Press",
+        "Tapping Center",
+        "Wire EDM",
+        "Sinker EDM",
+        "Laser Cutter",
+        "Plasma Cutter",
+        "Waterjet Cutter",
+        "Router",
+        "Surface Grinder",
+        "Cylindrical Grinder",
+        "Centerless Grinder",
+        "Saw",
+        "Broach",
+        "Hob",
+        "Gear Shaper",
+        "Press Brake",
+        "Hydraulic Press",
+        "Mechanical Press",
+        "Turret Punch",
+        "Roll Former",
+        "Deburring",
+        "Welding Cell",
+        "CMM",
+        "Other"
+    };
 
-    private bool _machineEditMode;
     private string? _selectedMachineCode;
     private List<MachineSchedule> _selectedMachineSchedules = new();
 
@@ -117,35 +146,30 @@ public class ProductionControl : UserControl, IRealtimeDataControl
     private void BuildMachinesTab()
     {
         var machinesTab = new TabPage("Machines");
-        _machinesGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Machine ID", DataPropertyName = nameof(Machine.MachineCode), Width = 180 });
+        _machinesGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Machine ID", DataPropertyName = nameof(Machine.MachineCode), Width = 180, ReadOnly = true });
         _machinesGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Machine Description", DataPropertyName = nameof(Machine.Description), Width = 300 });
         _machinesGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Daily Capacity (h)", DataPropertyName = nameof(Machine.DailyCapacityHours), Width = 140 });
+        _machinesGrid.Columns.Add(new DataGridViewComboBoxColumn
+        {
+            HeaderText = "Machine Type",
+            DataPropertyName = nameof(Machine.MachineType),
+            Width = 220,
+            FlatStyle = FlatStyle.Flat,
+            DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
+            DataSource = MachineTypes.ToList()
+        });
 
-        var editorPanel = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(8), WrapContents = false };
-        editorPanel.Controls.Add(new Label { Text = "Machine ID", AutoSize = true, Margin = new Padding(0, 8, 6, 0) });
-        editorPanel.Controls.Add(_machineIdInput);
-        editorPanel.Controls.Add(new Label { Text = "Description", AutoSize = true, Margin = new Padding(12, 8, 6, 0) });
-        editorPanel.Controls.Add(_machineDescriptionInput);
-        editorPanel.Controls.Add(new Label { Text = "Daily Capacity", AutoSize = true, Margin = new Padding(12, 8, 6, 0) });
-        editorPanel.Controls.Add(_machineCapacityInput);
-        editorPanel.Controls.Add(_addMachineButton);
+        _machinesGrid.ReadOnly = !_canEdit;
+        _machinesGrid.CellEndEdit += async (_, e) => await SaveEditedMachineAsync(e.RowIndex);
+        _machinesGrid.DataError += (_, _) => { };
 
-        _machineIdInput.Enabled = false;
-        _machineDescriptionInput.Enabled = false;
-        _machineCapacityInput.Enabled = false;
+        _addMachineButton.Enabled = _canEdit;
+        _addMachineButton.Click += async (_, _) => await OpenAddMachineDialogAsync();
 
-        _editMachinesButton.Enabled = _canEdit;
-        _editMachinesButton.Click += (_, _) => ToggleMachineEditMode();
-        _addMachineButton.Click += async (_, _) => await AddMachineAsync();
-
-        var actionsPanel = new Panel { Dock = DockStyle.Bottom, Height = 52, Padding = new Padding(8) };
-        _editMachinesButton.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
-        _editMachinesButton.Location = new Point(actionsPanel.Width - 100, 10);
-        actionsPanel.Resize += (_, _) => _editMachinesButton.Location = new Point(actionsPanel.Width - _editMachinesButton.Width - 8, 10);
-        actionsPanel.Controls.Add(_editMachinesButton);
+        var actionsPanel = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 52, Padding = new Padding(8), FlowDirection = FlowDirection.LeftToRight };
+        actionsPanel.Controls.Add(_addMachineButton);
 
         machinesTab.Controls.Add(_machinesGrid);
-        machinesTab.Controls.Add(editorPanel);
         machinesTab.Controls.Add(actionsPanel);
 
         _tabs.TabPages.Add(machinesTab);
@@ -208,36 +232,99 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         _machinesList.DisplayMember = nameof(Machine.MachineCode);
     }
 
-    private void ToggleMachineEditMode()
+    private async Task OpenAddMachineDialogAsync()
     {
-        _machineEditMode = !_machineEditMode;
-        _machineIdInput.Enabled = _machineEditMode;
-        _machineDescriptionInput.Enabled = _machineEditMode;
-        _machineCapacityInput.Enabled = _machineEditMode;
-        _addMachineButton.Enabled = _machineEditMode;
-        _editMachinesButton.Text = _machineEditMode ? "Done" : "Edit";
-    }
+        var nextMachineId = await _productionRepository.GenerateNextMachineCodeAsync();
 
-    private async Task AddMachineAsync()
-    {
-        var machineId = _machineIdInput.Text.Trim();
-        if (string.IsNullOrWhiteSpace(machineId))
+        using var form = new Form
         {
-            _feedback.Text = "Machine ID is required.";
+            Text = "Add New Machine",
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            StartPosition = FormStartPosition.CenterParent,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(12)
+        };
+
+        var idBox = new TextBox { Width = 180, Text = nextMachineId, ReadOnly = true };
+        var descriptionBox = new TextBox { Width = 320 };
+        var capacityInput = new NumericUpDown { Width = 120, Minimum = 0, Maximum = 24, Value = 8 };
+        var typePicker = new ComboBox { Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
+        typePicker.Items.AddRange(MachineTypes);
+        typePicker.SelectedItem = "Other";
+
+        var layout = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, RowCount = 5, Dock = DockStyle.Fill };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        layout.Controls.Add(new Label { Text = "Machine ID", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
+        layout.Controls.Add(idBox, 1, 0);
+        layout.Controls.Add(new Label { Text = "Description", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 1);
+        layout.Controls.Add(descriptionBox, 1, 1);
+        layout.Controls.Add(new Label { Text = "Daily Capacity", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 2);
+        layout.Controls.Add(capacityInput, 1, 2);
+        layout.Controls.Add(new Label { Text = "Machine Type", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 3);
+        layout.Controls.Add(typePicker, 1, 3);
+
+        var buttonsPanel = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Fill };
+        var saveButton = new Button { Text = "Save", AutoSize = true, DialogResult = DialogResult.OK };
+        var cancelButton = new Button { Text = "Cancel", AutoSize = true, DialogResult = DialogResult.Cancel };
+        buttonsPanel.Controls.Add(saveButton);
+        buttonsPanel.Controls.Add(cancelButton);
+
+        layout.Controls.Add(buttonsPanel, 0, 4);
+        layout.SetColumnSpan(buttonsPanel, 2);
+
+        form.AcceptButton = saveButton;
+        form.CancelButton = cancelButton;
+        form.Controls.Add(layout);
+
+        if (form.ShowDialog(this) != DialogResult.OK)
+        {
             return;
         }
 
+        var description = descriptionBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(description))
+        {
+            _feedback.Text = "Machine description is required.";
+            return;
+        }
+
+        var machineType = typePicker.SelectedItem?.ToString() ?? "Other";
+
         await _productionRepository.SaveMachineAsync(new Machine
         {
-            MachineCode = machineId,
-            Description = _machineDescriptionInput.Text.Trim(),
-            DailyCapacityHours = (int)_machineCapacityInput.Value
+            MachineCode = idBox.Text.Trim(),
+            Description = description,
+            DailyCapacityHours = (int)capacityInput.Value,
+            MachineType = machineType
         });
 
-        _machineIdInput.Clear();
-        _machineDescriptionInput.Clear();
-        _machineCapacityInput.Value = 8;
-        _feedback.Text = $"Saved machine {machineId}.";
+        _feedback.Text = $"Saved machine {idBox.Text.Trim()}.";
+        await LoadMachinesAsync();
+    }
+
+    private async Task SaveEditedMachineAsync(int rowIndex)
+    {
+        if (!_canEdit || rowIndex < 0 || rowIndex >= _machinesGrid.Rows.Count)
+        {
+            return;
+        }
+
+        if (_machinesGrid.Rows[rowIndex].DataBoundItem is not Machine machine)
+        {
+            return;
+        }
+
+        machine.Description = machine.Description.Trim();
+        machine.MachineType = string.IsNullOrWhiteSpace(machine.MachineType) ? "Other" : machine.MachineType.Trim();
+        machine.DailyCapacityHours = Math.Clamp(machine.DailyCapacityHours, 0, 24);
+
+        await _productionRepository.SaveMachineAsync(machine);
+        _feedback.Text = $"Updated machine {machine.MachineCode}.";
         await LoadMachinesAsync();
     }
 

@@ -6,4 +6,5 @@ public class Machine
     public string MachineCode { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public int DailyCapacityHours { get; set; } = 8;
+    public string MachineType { get; set; } = "Other";
 }
