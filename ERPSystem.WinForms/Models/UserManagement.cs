@@ -51,6 +51,15 @@ public class EmployeeRecord
     public int? LinkedUserId { get; set; }
 }
 
+public class PurchasingLayoutSetting
+{
+    public int UserId { get; set; }
+    public double LeftPanelProportion { get; set; }
+    public double RightTopPanelProportion { get; set; }
+    public double RightBottomPanelProportion { get; set; }
+    public DateTime LastUpdatedUtc { get; set; }
+}
+
 
 public static class RoleCatalog
 {

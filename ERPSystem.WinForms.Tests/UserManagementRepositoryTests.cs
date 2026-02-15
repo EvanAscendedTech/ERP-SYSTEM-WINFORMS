@@ -127,4 +127,65 @@ public class UserManagementRepositoryTests
         File.Delete(dbPath);
     }
 
+    [Fact]
+    public async Task PurchasingLayouts_ArePersistedAndIsolatedPerUser()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-purchasing-layout-{Guid.NewGuid():N}.db");
+        var repository = new UserManagementRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        await repository.SaveUserAsync(new UserAccount
+        {
+            Username = "layout-a",
+            DisplayName = "Layout A",
+            PasswordHash = "hash",
+            IsActive = true
+        });
+
+        await repository.SaveUserAsync(new UserAccount
+        {
+            Username = "layout-b",
+            DisplayName = "Layout B",
+            PasswordHash = "hash",
+            IsActive = true
+        });
+
+        var users = await repository.GetUsersAsync();
+        var userA = Assert.Single(users.Where(u => u.Username == "layout-a"));
+        var userB = Assert.Single(users.Where(u => u.Username == "layout-b"));
+
+        await repository.SavePurchasingLayoutAsync(new PurchasingLayoutSetting
+        {
+            UserId = userA.Id,
+            LeftPanelProportion = 0.62,
+            RightTopPanelProportion = 0.35,
+            RightBottomPanelProportion = 0.65
+        });
+
+        await repository.SavePurchasingLayoutAsync(new PurchasingLayoutSetting
+        {
+            UserId = userB.Id,
+            LeftPanelProportion = 0.41,
+            RightTopPanelProportion = 0.57,
+            RightBottomPanelProportion = 0.43
+        });
+
+        var loadedA = await repository.GetPurchasingLayoutAsync(userA.Id);
+        var loadedB = await repository.GetPurchasingLayoutAsync(userB.Id);
+
+        Assert.NotNull(loadedA);
+        Assert.NotNull(loadedB);
+        Assert.Equal(0.62, loadedA!.LeftPanelProportion, 3);
+        Assert.Equal(0.35, loadedA.RightTopPanelProportion, 3);
+        Assert.Equal(0.41, loadedB!.LeftPanelProportion, 3);
+        Assert.Equal(0.57, loadedB.RightTopPanelProportion, 3);
+
+        var reloadedRepository = new UserManagementRepository(dbPath);
+        var persistedA = await reloadedRepository.GetPurchasingLayoutAsync(userA.Id);
+        Assert.NotNull(persistedA);
+        Assert.Equal(0.62, persistedA!.LeftPanelProportion, 3);
+
+        File.Delete(dbPath);
+    }
+
 }
