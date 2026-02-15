@@ -9,6 +9,8 @@ public class QuoteDraftForm : Form
 {
     private const int DefaultLineItemWidth = 860;
     private const int DefaultLineItemHeight = 430;
+    private const int MinimumLineItemWidth = 620;
+    private const int MinimumLineItemHeight = 320;
     private const float MinScaledFontSize = 8f;
     private const float MaxScaledFontSize = 13f;
     private const int ResizeGripSize = 16;
@@ -77,11 +79,11 @@ public class QuoteDraftForm : Form
         addLineButton.Click += (_, _) => AddLineItemCard();
         header.Controls.Add(addLineButton);
 
-        var totalsPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = true };
+        var totalsPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = true, Padding = new Padding(0, 4, 0, 4) };
+        totalsPanel.Controls.Add(new Label { Text = "In-Process Quote Summary:", AutoSize = true, Margin = new Padding(0, 8, 8, 0), Font = new Font(Font, FontStyle.Bold) });
         totalsPanel.Controls.Add(new Label { Text = "Total Hours:", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
         totalsPanel.Controls.Add(_totalHoursValue);
-        totalsPanel.Controls.Add(new Label { Text = "Master Quote Total:", AutoSize = true, Margin = new Padding(20, 8, 0, 0), Visible = _canViewPricing });
-        _masterTotalValue.Visible = _canViewPricing;
+        totalsPanel.Controls.Add(new Label { Text = "Total Cost:", AutoSize = true, Margin = new Padding(20, 8, 0, 0) });
         totalsPanel.Controls.Add(_masterTotalValue);
 
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, AutoSize = true };
@@ -224,21 +226,21 @@ public class QuoteDraftForm : Form
             Margin = new Padding(0, 0, 0, 10),
             Padding = new Padding(10),
             BackColor = index % 2 == 0 ? Color.FromArgb(245, 248, 252) : Color.FromArgb(234, 243, 250),
-            MinimumSize = new Size(DefaultLineItemWidth, DefaultLineItemHeight)
+            MinimumSize = new Size(MinimumLineItemWidth, MinimumLineItemHeight)
         };
 
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, ColumnCount = 1, RowCount = 6 };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 34));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 56));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var title = new Label { AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
         layout.Controls.Add(title, 0, 0);
 
-        var topFields = new TableLayoutPanel { AutoSize = true, ColumnCount = 4, Dock = DockStyle.Top };
+        var topFields = new TableLayoutPanel { AutoSize = false, ColumnCount = 4, Dock = DockStyle.Fill, AutoSizeMode = AutoSizeMode.GrowAndShrink };
         for (var i = 0; i < 4; i++) topFields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
 
         var drawingNumber = NewDecimalDisabledField(model.DrawingNumber);
@@ -255,14 +257,14 @@ public class QuoteDraftForm : Form
 
         var drawingDocs = BuildBlobArea(model, QuoteBlobType.Technical, "Drawings (PDF / STEP)");
         var modelDocs = BuildBlobArea(model, QuoteBlobType.ThreeDModel, "3D Models");
-        var docsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Dock = DockStyle.Top, Margin = new Padding(0, 6, 0, 6) };
+        var docsRow = new TableLayoutPanel { AutoSize = false, ColumnCount = 2, Dock = DockStyle.Fill, Margin = new Padding(0, 6, 0, 6) };
         docsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         docsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         docsRow.Controls.Add(drawingDocs.SectionPanel, 0, 0);
         docsRow.Controls.Add(modelDocs.SectionPanel, 1, 0);
         layout.Controls.Add(docsRow, 0, 2);
 
-        var costsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 5, Dock = DockStyle.Top, Margin = new Padding(0, 6, 0, 6) };
+        var costsRow = new TableLayoutPanel { AutoSize = false, ColumnCount = 5, Dock = DockStyle.Fill, Margin = new Padding(0, 6, 0, 6) };
         for (var i = 0; i < 5; i++) costsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
 
         var productionHours = NewNumericField(model.ProductionHours);
@@ -283,7 +285,7 @@ public class QuoteDraftForm : Form
         costsRow.Controls.Add(NewFieldPanel("Secondary Operations Cost", secondaryCost), 4, 0);
         layout.Controls.Add(costsRow, 0, 3);
 
-        var supportDocsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 3, Dock = DockStyle.Top, Margin = new Padding(0, 6, 0, 6) };
+        var supportDocsRow = new TableLayoutPanel { AutoSize = false, ColumnCount = 3, Dock = DockStyle.Fill, Margin = new Padding(0, 6, 0, 6) };
         supportDocsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
         supportDocsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
         supportDocsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
@@ -295,7 +297,7 @@ public class QuoteDraftForm : Form
         supportDocsRow.Controls.Add(postOpDocs.SectionPanel, 2, 0);
         layout.Controls.Add(supportDocsRow, 0, 4);
 
-        var footer = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Dock = DockStyle.Top };
+        var footer = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Dock = DockStyle.Fill, WrapContents = true };
         var totalBox = new TextBox { ReadOnly = true, Width = 180, Text = model.LineItemTotal.ToString("0.00", CultureInfo.CurrentCulture) };
         footer.Controls.Add(new Label { Text = "Line Item Total", AutoSize = true, Margin = new Padding(0, 8, 8, 0), Font = new Font(Font, FontStyle.Bold) });
         footer.Controls.Add(totalBox);
@@ -445,12 +447,12 @@ public class QuoteDraftForm : Form
             Padding = new Padding(6),
             Margin = new Padding(3),
             Dock = DockStyle.Fill,
-            MinimumSize = new Size(260, 180)
+            MinimumSize = new Size(200, 130)
         };
         var titleLabel = new Label { Text = title, AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
         var list = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false };
 
-        var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Dock = DockStyle.Top };
+        var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = true, Dock = DockStyle.Top };
         var upload = new Button { Text = "Upload File…", AutoSize = true, BackColor = Color.FromArgb(52, 152, 219), ForeColor = Color.White };
         var delete = new Button { Text = "Delete", AutoSize = true };
         var download = new Button { Text = "Download", AutoSize = true };
@@ -632,11 +634,11 @@ public class QuoteDraftForm : Form
     }
 
     private static TextBox NewDecimalDisabledField(string value)
-        => new() { Width = 220, Text = value };
+        => new() { Width = 220, Dock = DockStyle.Top, Text = value };
 
     private static TextBox NewNumericField(decimal value)
     {
-        var box = new TextBox { Width = 180, Text = value.ToString("0.00", CultureInfo.CurrentCulture) };
+        var box = new TextBox { Width = 180, Dock = DockStyle.Top, Text = value.ToString("0.00", CultureInfo.CurrentCulture) };
         box.KeyPress += (_, e) =>
         {
             if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar) && e.KeyChar != '.' && e.KeyChar != ',')
@@ -650,7 +652,16 @@ public class QuoteDraftForm : Form
 
     private static FlowLayoutPanel NewFieldPanel(string label, Control input)
     {
-        var flow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
+        var flow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = false,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            Margin = new Padding(3)
+        };
+        input.Anchor = AnchorStyles.Left | AnchorStyles.Right;
         flow.Controls.Add(new Label { Text = label, AutoSize = true });
         flow.Controls.Add(input);
         return flow;
@@ -669,7 +680,7 @@ public class QuoteDraftForm : Form
     {
         foreach (var card in _lineItemCards)
         {
-            var maximumWidth = Math.Max(DefaultLineItemWidth, _lineItemsPanel.ClientSize.Width - 28);
+            var maximumWidth = Math.Max(MinimumLineItemWidth, _lineItemsPanel.ClientSize.Width - 28);
             if (!card.IsUserResized)
             {
                 card.Container.Width = maximumWidth;
