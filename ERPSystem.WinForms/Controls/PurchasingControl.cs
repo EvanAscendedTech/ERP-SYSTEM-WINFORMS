@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
 
@@ -21,6 +22,10 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
     private readonly SplitContainer _mainSplit = new() { Dock = DockStyle.Fill, Orientation = Orientation.Vertical };
     private readonly SplitContainer _docsSplit = new() { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
+    private readonly TableLayoutPanel _requirementsChecklistPanel = new() { Dock = DockStyle.Fill, AutoScroll = true, ColumnCount = 1, Padding = new Padding(0, 4, 0, 4) };
+    private readonly Button _passToProductionButton;
+    private readonly Dictionary<string, ChecklistResolution> _checklistState = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<InventoryItem> _inventoryItems = Array.Empty<InventoryItem>();
     private bool _restoringLayout;
 
     public PurchasingControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, UserManagementRepository userRepository, Models.UserAccount currentUser, Action<string> openSection, bool canEdit)
@@ -38,13 +43,13 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
 
         var actionsPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
         var refreshButton = new Button { Text = "Refresh Purchasing", AutoSize = true };
-        var passToProductionButton = new Button { Text = "Pass to Production", AutoSize = true, Enabled = _canEdit };
+        _passToProductionButton = new Button { Text = "Pass to Production", AutoSize = true, Enabled = false };
 
         refreshButton.Click += async (_, _) => await LoadPurchasingQuotesAsync();
-        passToProductionButton.Click += async (_, _) => await PassToProductionAsync();
+        _passToProductionButton.Click += async (_, _) => await PassToProductionAsync();
 
         actionsPanel.Controls.Add(refreshButton);
-        actionsPanel.Controls.Add(passToProductionButton);
+        actionsPanel.Controls.Add(_passToProductionButton);
 
         ConfigureSafeSplitterDistance(_docsSplit, preferredDistance: 190, panel1MinSize: 130, panel2MinSize: 130);
 
@@ -73,7 +78,7 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
 
         purchaseDocsHeaderPanel.Controls.Add(new Label
         {
-            Text = "Purchase documentation (required before Production)",
+            Text = "Purchase documentation (double-click to open)",
             Width = 300,
             Height = 24,
             TextAlign = ContentAlignment.MiddleLeft,
@@ -85,16 +90,37 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         _docsSplit.Panel2.Controls.Add(_purchaseDocsGrid);
         _docsSplit.Panel2.Controls.Add(purchaseDocsHeaderPanel);
 
+        var checklistHost = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Margin = Padding.Empty
+        };
+        checklistHost.RowStyles.Add(new RowStyle(SizeType.Absolute, 24f));
+        checklistHost.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        checklistHost.Controls.Add(new Label
+        {
+            Text = "Step-by-step purchasing checklist",
+            Dock = DockStyle.Fill,
+            Height = 24,
+            Font = new Font(Font, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleLeft
+        }, 0, 0);
+        checklistHost.Controls.Add(_requirementsChecklistPanel, 0, 1);
+
         var rightPanel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             Padding = new Padding(8, 0, 0, 0),
             ColumnCount = 1,
-            RowCount = 4
+            RowCount = 6
         };
         rightPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 28f));
         rightPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24f));
         rightPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 170f));
+        rightPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 230f));
+        rightPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24f));
         rightPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         rightPanel.Controls.Add(_checklistLabel, 0, 0);
         rightPanel.Controls.Add(new Label
@@ -106,7 +132,16 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
             TextAlign = ContentAlignment.MiddleLeft
         }, 0, 1);
         rightPanel.Controls.Add(_lineItemsGrid, 0, 2);
-        rightPanel.Controls.Add(_docsSplit, 0, 3);
+        rightPanel.Controls.Add(checklistHost, 0, 3);
+        rightPanel.Controls.Add(new Label
+        {
+            Text = "Reference documents",
+            Dock = DockStyle.Fill,
+            Height = 24,
+            Font = new Font(Font, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleLeft
+        }, 0, 4);
+        rightPanel.Controls.Add(_docsSplit, 0, 5);
 
         ConfigureSafeSplitterDistance(_mainSplit, preferredDistance: 560, panel1MinSize: 350, panel2MinSize: 320);
 
@@ -176,7 +211,6 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
 
         await _userRepository.SavePurchasingLayoutAsync(preference);
     }
-
 
     private static void ConfigureSafeSplitterDistance(SplitContainer splitContainer, int preferredDistance, int panel1MinSize, int panel2MinSize)
     {
@@ -266,7 +300,7 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Description", DataPropertyName = nameof(PurchasingLineItemRow.Description), Width = 190 });
         _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Qty", DataPropertyName = nameof(PurchasingLineItemRow.Quantity), Width = 80 });
         _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Drawing", DataPropertyName = nameof(PurchasingLineItemRow.DrawingNumber), Width = 120 });
-        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Purchase Doc", DataPropertyName = nameof(PurchasingLineItemRow.PurchaseDocumentationStatus), Width = 130 });
+        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Requirements", DataPropertyName = nameof(PurchasingLineItemRow.RequirementSummary), Width = 220 });
 
         _technicalDocsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "File", DataPropertyName = nameof(QuoteBlobAttachment.FileName), Width = 210 });
         _technicalDocsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Type", DataPropertyName = nameof(QuoteBlobAttachment.BlobType), Width = 110 });
@@ -284,6 +318,7 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         var selectedQuoteId = GetSelectedQuote()?.Id;
         var quotes = await _quoteRepository.GetPurchasingQuotesAsync();
         var jobs = await _productionRepository.GetJobsAsync();
+        _inventoryItems = await _productionRepository.GetInventoryItemsAsync();
         var inProductionQuoteIds = jobs.Where(x => x.SourceQuoteId.HasValue).Select(x => x.SourceQuoteId!.Value).ToHashSet();
 
         var queue = quotes.Where(q => !inProductionQuoteIds.Contains(q.Id)).ToList();
@@ -324,7 +359,10 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
             _lineItemsGrid.DataSource = new List<PurchasingLineItemRow>();
             _technicalDocsGrid.DataSource = new List<QuoteBlobAttachment>();
             _purchaseDocsGrid.DataSource = new List<QuoteBlobAttachment>();
+            _requirementsChecklistPanel.Controls.Clear();
+            _requirementsChecklistPanel.RowStyles.Clear();
             _checklistLabel.Text = "Checklist: Select a quote to review docs.";
+            UpdatePassToProductionState();
             return;
         }
 
@@ -336,40 +374,344 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
                 Description = line.Description,
                 DrawingNumber = line.DrawingNumber,
                 Quantity = line.Quantity,
-                PurchaseDocumentationStatus = line.BlobAttachments.Any(x => x.BlobType == QuoteBlobType.PurchaseDocumentation) ? "✅ Uploaded" : "⬜ Missing"
+                RequirementSummary = BuildRequirementSummary(line)
             })
             .ToList();
 
         var allBlobs = selected.LineItems.SelectMany(x => x.BlobAttachments).ToList();
         var technical = allBlobs.Where(x => x.BlobType == QuoteBlobType.Technical).OrderByDescending(x => x.UploadedUtc).ToList();
         var purchasingDocs = allBlobs.Where(x => x.BlobType == QuoteBlobType.PurchaseDocumentation).OrderByDescending(x => x.UploadedUtc).ToList();
-        var missingDocCount = selected.LineItems.Count(line => line.BlobAttachments.All(blob => blob.BlobType != QuoteBlobType.PurchaseDocumentation));
 
         _lineItemsGrid.DataSource = lineItems;
         _technicalDocsGrid.DataSource = technical;
         _purchaseDocsGrid.DataSource = purchasingDocs;
-        _checklistLabel.Text = missingDocCount == 0
-            ? "Checklist: ✅ All purchasable items include purchase documentation. Ready to pass to Production."
-            : $"Checklist: ☐ {missingDocCount} line item(s) still missing purchase documentation.";
 
-        if (_lineItemsGrid.Rows.Count > 0)
+        RenderDynamicChecklist(selected);
+    }
+
+    private string BuildRequirementSummary(QuoteLineItem line)
+    {
+        var requirements = BuildRequirementsForLine(line);
+        return requirements.Count == 0 ? "No flagged docs" : string.Join(", ", requirements.Select(x => x.DisplayName));
+    }
+
+    private List<RequirementDefinition> BuildRequirementsForLine(QuoteLineItem line)
+    {
+        var requirements = new List<RequirementDefinition>();
+
+        if (line.RequiresGForce || NotesContainFlag(line.Notes, "material test report") || NotesContainFlag(line.Notes, "mtr"))
         {
-            _lineItemsGrid.Rows[0].Selected = true;
-            _lineItemsGrid.CurrentCell = _lineItemsGrid.Rows[0].Cells[0];
+            requirements.Add(new RequirementDefinition("MaterialTestReport", "Upload material test report"));
         }
+
+        if (line.RequiresSecondaryProcessing || NotesContainFlag(line.Notes, "traceability"))
+        {
+            requirements.Add(new RequirementDefinition("Traceability", "Upload traceability document"));
+        }
+
+        if (line.RequiresPlating || NotesContainFlag(line.Notes, "plating"))
+        {
+            requirements.Add(new RequirementDefinition("Plating", "Upload plating certification"));
+        }
+
+        return requirements
+            .GroupBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.First())
+            .ToList();
+    }
+
+    private static bool NotesContainFlag(string? notes, string keyword)
+        => !string.IsNullOrWhiteSpace(notes)
+           && notes.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+           && !notes.Contains($"{keyword}: no", StringComparison.OrdinalIgnoreCase);
+
+    private void RenderDynamicChecklist(Quote quote)
+    {
+        _requirementsChecklistPanel.SuspendLayout();
+        _requirementsChecklistPanel.Controls.Clear();
+        _requirementsChecklistPanel.RowStyles.Clear();
+
+        var requirements = quote.LineItems
+            .SelectMany((line, lineIndex) => BuildRequirementsForLine(line)
+                .Select(requirement => new ChecklistRowModel(
+                    line,
+                    lineIndex + 1,
+                    requirement,
+                    BuildStateKey(quote.Id, line.Id, requirement.Key))))
+            .ToList();
+
+        if (requirements.Count == 0)
+        {
+            _requirementsChecklistPanel.RowCount = 1;
+            _requirementsChecklistPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 28f));
+            _requirementsChecklistPanel.Controls.Add(new Label
+            {
+                Text = "Step 1: No quote requirement flags were set. This quote is ready when base purchasing docs are complete.",
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft
+            }, 0, 0);
+
+            _checklistLabel.Text = "Checklist: ✅ No quote-driven requirements were flagged.";
+            _requirementsChecklistPanel.ResumeLayout(true);
+            UpdatePassToProductionState();
+            return;
+        }
+
+        _requirementsChecklistPanel.RowCount = requirements.Count;
+
+        for (var i = 0; i < requirements.Count; i++)
+        {
+            _requirementsChecklistPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 92f));
+            var rowModel = requirements[i];
+            var row = BuildChecklistRow(quote, rowModel, i + 1);
+            _requirementsChecklistPanel.Controls.Add(row, 0, i);
+        }
+
+        _requirementsChecklistPanel.ResumeLayout(true);
+        UpdateChecklistHeader(quote, requirements);
+        UpdatePassToProductionState();
+    }
+
+    private Control BuildChecklistRow(Quote quote, ChecklistRowModel rowModel, int stepNumber)
+    {
+        var rowPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            Height = 86,
+            ColumnCount = 4,
+            RowCount = 2,
+            Margin = new Padding(0, 0, 0, 6),
+            CellBorderStyle = TableLayoutPanelCellBorderStyle.Single,
+            BackColor = Color.FromArgb(247, 250, 254)
+        };
+        rowPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 36f));
+        rowPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 24f));
+        rowPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 24f));
+        rowPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16f));
+        rowPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 55f));
+        rowPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 45f));
+
+        var title = new Label
+        {
+            Text = $"Step {stepNumber}: Line {rowModel.DisplayLineNumber} - {rowModel.Requirement.DisplayName}",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Font = new Font(Font, FontStyle.Bold)
+        };
+
+        var uploadButton = new Button
+        {
+            Text = "Upload file",
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            Enabled = _canEdit
+        };
+        uploadButton.Click += async (_, _) =>
+        {
+            await UploadRequirementDocumentAsync(quote, rowModel.LineItem, rowModel.Requirement);
+            SetState(rowModel.StateKey, new ChecklistResolution(ChecklistResolutionType.Uploaded, "Uploaded"));
+            UpdateChecklistAfterAction(quote);
+        };
+
+        var inventoryPicker = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Dock = DockStyle.Fill,
+            Enabled = _canEdit
+        };
+        inventoryPicker.Items.Add("Select from inventory...");
+        foreach (var item in _inventoryItems)
+        {
+            inventoryPicker.Items.Add($"{item.Sku} - {item.Description} ({item.QuantityOnHand:0.##} {item.UnitOfMeasure})");
+        }
+        inventoryPicker.SelectedIndex = 0;
+        inventoryPicker.SelectedIndexChanged += (_, _) =>
+        {
+            if (inventoryPicker.SelectedIndex <= 0)
+            {
+                SetState(rowModel.StateKey, new ChecklistResolution(ChecklistResolutionType.Pending, "Pending"));
+            }
+            else
+            {
+                SetState(rowModel.StateKey, new ChecklistResolution(ChecklistResolutionType.InventorySelected, "Inventory selected"));
+            }
+
+            UpdateChecklistAfterAction(quote);
+        };
+
+        var notRequired = new CheckBox
+        {
+            Text = "Not required",
+            Dock = DockStyle.Fill,
+            Enabled = _canEdit,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        notRequired.CheckedChanged += (_, _) =>
+        {
+            if (notRequired.Checked)
+            {
+                inventoryPicker.SelectedIndex = 0;
+                SetState(rowModel.StateKey, new ChecklistResolution(ChecklistResolutionType.NotRequired, "Marked not required"));
+            }
+            else
+            {
+                SetState(rowModel.StateKey, new ChecklistResolution(ChecklistResolutionType.Pending, "Pending"));
+            }
+
+            UpdateChecklistAfterAction(quote);
+        };
+
+        var statusLabel = new Label
+        {
+            Text = GetState(rowModel.StateKey).Label,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = Color.MidnightBlue
+        };
+
+        rowPanel.Controls.Add(title, 0, 0);
+        rowPanel.SetColumnSpan(title, 4);
+        rowPanel.Controls.Add(uploadButton, 0, 1);
+        rowPanel.Controls.Add(inventoryPicker, 1, 1);
+        rowPanel.Controls.Add(notRequired, 2, 1);
+        rowPanel.Controls.Add(statusLabel, 3, 1);
+
+        return rowPanel;
+    }
+
+    private async Task UploadRequirementDocumentAsync(Quote quote, QuoteLineItem line, RequirementDefinition requirement)
+    {
+        using var picker = new OpenFileDialog
+        {
+            Filter = "PDF files (*.pdf)|*.pdf|All files (*.*)|*.*",
+            Title = $"{requirement.DisplayName} for Q{quote.Id} / Line {line.Id}",
+            Multiselect = false,
+            CheckFileExists = true,
+            RestoreDirectory = true
+        };
+
+        if (picker.ShowDialog(this) != DialogResult.OK || string.IsNullOrWhiteSpace(picker.FileName))
+        {
+            return;
+        }
+
+        var bytes = await File.ReadAllBytesAsync(picker.FileName);
+        using var sha = SHA256.Create();
+        var digest = sha.ComputeHash(bytes);
+        var extension = Path.GetExtension(picker.FileName);
+        var prefixedName = $"{requirement.Key}-{Path.GetFileName(picker.FileName)}";
+
+        await _quoteRepository.InsertQuoteLineItemFileAsync(
+            quote.Id,
+            line.Id,
+            quote.LifecycleQuoteId,
+            QuoteBlobType.PurchaseDocumentation,
+            prefixedName,
+            extension,
+            bytes.LongLength,
+            digest,
+            _actorUserId,
+            DateTime.UtcNow,
+            bytes);
+
+        _feedback.Text = $"{requirement.DisplayName} uploaded for quote {quote.Id}, line {line.Id}.";
+        await LoadPurchasingQuotesAsync();
+    }
+
+    private void UpdateChecklistAfterAction(Quote quote)
+    {
+        var allRows = quote.LineItems
+            .SelectMany(line => BuildRequirementsForLine(line).Select(requirement => BuildStateKey(quote.Id, line.Id, requirement.Key)))
+            .ToList();
+
+        var completed = allRows.Count(IsChecklistRowSatisfied);
+        var total = allRows.Count;
+
+        _checklistLabel.Text = total == 0
+            ? "Checklist: ✅ No quote-driven requirements were flagged."
+            : $"Checklist: Step {Math.Min(completed + 1, total)}/{total} • Completed {completed}/{total}";
+
+        foreach (Control panel in _requirementsChecklistPanel.Controls)
+        {
+            if (panel is not TableLayoutPanel row || row.Controls.Count == 0)
+            {
+                continue;
+            }
+
+            if (row.Controls.OfType<Label>().LastOrDefault() is Label status)
+            {
+                var rowTitle = row.Controls.OfType<Label>().FirstOrDefault()?.Text ?? string.Empty;
+                var stateKey = FindStateKeyByTitle(quote, rowTitle);
+                if (!string.IsNullOrWhiteSpace(stateKey))
+                {
+                    status.Text = GetState(stateKey).Label;
+                }
+            }
+        }
+
+        UpdatePassToProductionState();
+    }
+
+    private void UpdateChecklistHeader(Quote quote, IReadOnlyCollection<ChecklistRowModel> rows)
+    {
+        var satisfied = rows.Count(row => IsChecklistRowSatisfied(row.StateKey));
+        _checklistLabel.Text = rows.Count == 0
+            ? "Checklist: ✅ No quote-driven requirements were flagged."
+            : $"Checklist: Step {Math.Min(satisfied + 1, rows.Count)}/{rows.Count} • Completed {satisfied}/{rows.Count}";
+    }
+
+    private string? FindStateKeyByTitle(Quote quote, string title)
+    {
+        foreach (var (line, index) in quote.LineItems.Select((line, lineIndex) => (line, lineIndex + 1)))
+        {
+            foreach (var requirement in BuildRequirementsForLine(line))
+            {
+                if (title.Contains($"Line {index} - {requirement.DisplayName}", StringComparison.OrdinalIgnoreCase))
+                {
+                    return BuildStateKey(quote.Id, line.Id, requirement.Key);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private ChecklistResolution GetState(string key)
+        => _checklistState.TryGetValue(key, out var state) ? state : new ChecklistResolution(ChecklistResolutionType.Pending, "Pending");
+
+    private void SetState(string key, ChecklistResolution resolution)
+        => _checklistState[key] = resolution;
+
+    private bool IsChecklistRowSatisfied(string stateKey)
+    {
+        var state = GetState(stateKey);
+        return state.Type is ChecklistResolutionType.Uploaded or ChecklistResolutionType.InventorySelected or ChecklistResolutionType.NotRequired;
+    }
+
+    private bool AreAllRequirementsSatisfied(Quote quote)
+    {
+        var requirementKeys = quote.LineItems
+            .SelectMany(line => BuildRequirementsForLine(line).Select(requirement => BuildStateKey(quote.Id, line.Id, requirement.Key)))
+            .ToList();
+
+        return requirementKeys.All(IsChecklistRowSatisfied);
+    }
+
+    private static string BuildStateKey(int quoteId, int lineId, string requirementKey)
+        => $"{quoteId}:{lineId}:{requirementKey}";
+
+    private void UpdatePassToProductionState()
+    {
+        var quote = GetSelectedQuote();
+        var enabled = _canEdit && quote is not null && quote.Status == QuoteStatus.Won && AreAllRequirementsSatisfied(quote);
+        _passToProductionButton.Enabled = enabled;
     }
 
     private async Task UploadPurchaseDocumentAsync()
     {
         var quote = GetSelectedQuote();
-        if (quote is null)
-        {
-            _feedback.Text = "Select a Purchasing quote first.";
-            return;
-        }
-
         var targetLine = GetSelectedLineItem();
-        if (targetLine is null)
+        if (quote is null || targetLine is null)
         {
             _feedback.Text = "Select an item in 'Items to purchase' before uploading documentation.";
             return;
@@ -377,21 +719,21 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
 
         using var picker = new OpenFileDialog
         {
+            Filter = "PDF files (*.pdf)|*.pdf|All files (*.*)|*.*",
             Title = $"Upload purchase documentation for Q{quote.Id} / Line {targetLine.Id}",
-            Filter = "PDF or docs (*.pdf;*.doc;*.docx;*.xlsx;*.xls)|*.pdf;*.doc;*.docx;*.xlsx;*.xls|All Files (*.*)|*.*",
+            Multiselect = false,
             CheckFileExists = true,
-            Multiselect = false
+            RestoreDirectory = true
         };
 
-        if (picker.ShowDialog(this) != DialogResult.OK)
+        if (picker.ShowDialog(this) != DialogResult.OK || string.IsNullOrWhiteSpace(picker.FileName))
         {
-            _feedback.Text = "Purchase document upload canceled.";
             return;
         }
 
         var filePath = picker.FileName;
         var bytes = await File.ReadAllBytesAsync(filePath);
-        using var sha = System.Security.Cryptography.SHA256.Create();
+        using var sha = SHA256.Create();
         var digest = sha.ComputeHash(bytes);
         var extension = Path.GetExtension(filePath);
 
@@ -441,13 +783,9 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        var missingDocumentation = quote.LineItems
-            .Where(line => line.BlobAttachments.All(blob => blob.BlobType != QuoteBlobType.PurchaseDocumentation))
-            .ToList();
-
-        if (missingDocumentation.Count > 0)
+        if (!AreAllRequirementsSatisfied(quote))
         {
-            _feedback.Text = $"Upload required purchase documentation for all line items before moving to Production. Missing: {missingDocumentation.Count} item(s).";
+            _feedback.Text = "Complete each checklist step (upload, inventory select, or not required) before moving to Production.";
             return;
         }
 
@@ -551,6 +889,18 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         public string Description { get; init; } = string.Empty;
         public string DrawingNumber { get; init; } = string.Empty;
         public decimal Quantity { get; init; }
-        public string PurchaseDocumentationStatus { get; init; } = string.Empty;
+        public string RequirementSummary { get; init; } = string.Empty;
     }
+
+    private sealed record RequirementDefinition(string Key, string DisplayName);
+    private sealed record ChecklistResolution(ChecklistResolutionType Type, string Label);
+    private enum ChecklistResolutionType
+    {
+        Pending,
+        Uploaded,
+        InventorySelected,
+        NotRequired
+    }
+
+    private sealed record ChecklistRowModel(QuoteLineItem LineItem, int DisplayLineNumber, RequirementDefinition Requirement, string StateKey);
 }
