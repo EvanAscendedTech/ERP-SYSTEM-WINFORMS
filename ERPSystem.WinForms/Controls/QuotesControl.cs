@@ -40,12 +40,14 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         var deleteQuoteButton = new Button { Text = "Delete Quote", AutoSize = true };
         var markCompletedButton = new Button { Text = "Mark Completed", AutoSize = true };
         var passToProductionButton = new Button { Text = "Pass to Production", AutoSize = true };
+        var archivedQuotesButton = new Button { Text = "Archived Quotes", AutoSize = true };
 
         refreshButton.Click += async (_, _) => await LoadActiveQuotesAsync();
         newQuoteButton.Click += async (_, _) => await CreateNewQuoteAsync();
         deleteQuoteButton.Click += async (_, _) => await DeleteSelectedQuoteAsync();
         markCompletedButton.Click += async (_, _) => await MarkSelectedCompletedAsync();
         passToProductionButton.Click += async (_, _) => await PassSelectedToProductionAsync();
+        archivedQuotesButton.Click += (_, _) => OpenArchivedQuotesWindow();
         _quotesGrid.CellDoubleClick += async (_, _) => await OpenSelectedQuoteDetailsAsync();
 
         actionsPanel.Controls.Add(refreshButton);
@@ -53,6 +55,15 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         actionsPanel.Controls.Add(deleteQuoteButton);
         actionsPanel.Controls.Add(markCompletedButton);
         actionsPanel.Controls.Add(passToProductionButton);
+
+        var bottomRightPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            Height = 44,
+            FlowDirection = FlowDirection.RightToLeft,
+            Padding = new Padding(8)
+        };
+        bottomRightPanel.Controls.Add(archivedQuotesButton);
 
         var topContent = new Panel { Dock = DockStyle.Fill };
         topContent.Controls.Add(_quotesGrid);
@@ -91,9 +102,16 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         split.Panel2.Controls.Add(archivePanel);
 
         Controls.Add(split);
+        Controls.Add(bottomRightPanel);
         Controls.Add(_feedback);
 
         _ = LoadActiveQuotesAsync();
+    }
+
+    private void OpenArchivedQuotesWindow()
+    {
+        using var archived = new ArchivedQuotesForm(_quoteRepository);
+        archived.ShowDialog(this);
     }
 
     private void ConfigureQuotesGrid(DataGridView grid, bool includeLifecycleColumn)
