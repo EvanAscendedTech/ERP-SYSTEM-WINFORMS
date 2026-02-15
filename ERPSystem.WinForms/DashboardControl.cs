@@ -606,7 +606,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             .ToList();
     }
 
-    private Panel CreatePurchasingQueuePanel(string title, IReadOnlyCollection<Quote> quotes)
+    private WorkQueueCardControl CreatePurchasingQueuePanel(string title, IReadOnlyCollection<Quote> quotes)
     {
         var details = quotes
             .Take(20)
@@ -618,7 +618,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         return CreateQueueCard(title, details, "Purchasing", Color.FromArgb(176, 131, 72));
     }
 
-    private Panel CreateProductionQueuePanel(string title, IReadOnlyCollection<ProductionJob> jobs)
+    private WorkQueueCardControl CreateProductionQueuePanel(string title, IReadOnlyCollection<ProductionJob> jobs)
     {
         var details = new List<StageTaskItem>();
         foreach (var job in jobs.Take(20))
@@ -634,7 +634,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         return CreateQueueCard(title, details, "Production", Color.FromArgb(83, 143, 94));
     }
 
-    private Panel CreateInspectionQueuePanel(string title, IReadOnlyCollection<ProductionJob> jobs)
+    private WorkQueueCardControl CreateInspectionQueuePanel(string title, IReadOnlyCollection<ProductionJob> jobs)
     {
         var details = jobs.Take(20)
             .Select(job => new StageTaskItem(
@@ -645,7 +645,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         return CreateQueueCard(title, details, "Inspection", Color.FromArgb(205, 98, 184));
     }
 
-    private Panel CreateShippingQueuePanel(string title, IReadOnlyCollection<ProductionJob> jobs)
+    private WorkQueueCardControl CreateShippingQueuePanel(string title, IReadOnlyCollection<ProductionJob> jobs)
     {
         var details = jobs.Take(20)
             .Select(job => new StageTaskItem(
@@ -849,7 +849,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         _workQueueCards.ResumeLayout();
     }
 
-    private Panel CreateQuoteQueuePanel(string title, IReadOnlyCollection<Quote> quotes, bool includeExpiryWarning)
+    private WorkQueueCardControl CreateQuoteQueuePanel(string title, IReadOnlyCollection<Quote> quotes, bool includeExpiryWarning)
     {
         var details = quotes
             .Take(20)
