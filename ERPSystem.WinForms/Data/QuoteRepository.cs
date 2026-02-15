@@ -928,16 +928,58 @@ public class QuoteRepository
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
 
+        await using var transaction = await connection.BeginTransactionAsync();
+
+        await using (var deleteBlobFiles = connection.CreateCommand())
+        {
+            deleteBlobFiles.Transaction = transaction;
+            deleteBlobFiles.CommandText = @"
+                DELETE FROM QuoteBlobFiles
+                WHERE QuoteId = $id
+                   OR LineItemId IN (SELECT Id FROM QuoteLineItems WHERE QuoteId = $id);";
+            deleteBlobFiles.Parameters.AddWithValue("$id", quoteId);
+            await deleteBlobFiles.ExecuteNonQueryAsync();
+        }
+
+        await using (var deleteLineItemFiles = connection.CreateCommand())
+        {
+            deleteLineItemFiles.Transaction = transaction;
+            deleteLineItemFiles.CommandText = @"
+                DELETE FROM LineItemFiles
+                WHERE LineItemId IN (SELECT Id FROM QuoteLineItems WHERE QuoteId = $id);";
+            deleteLineItemFiles.Parameters.AddWithValue("$id", quoteId);
+            await deleteLineItemFiles.ExecuteNonQueryAsync();
+        }
+
+        await using (var deleteLineItems = connection.CreateCommand())
+        {
+            deleteLineItems.Transaction = transaction;
+            deleteLineItems.CommandText = "DELETE FROM QuoteLineItems WHERE QuoteId = $id;";
+            deleteLineItems.Parameters.AddWithValue("$id", quoteId);
+            await deleteLineItems.ExecuteNonQueryAsync();
+        }
+
+        await using (var deleteAuditEvents = connection.CreateCommand())
+        {
+            deleteAuditEvents.Transaction = transaction;
+            deleteAuditEvents.CommandText = "DELETE FROM QuoteAuditEvents WHERE QuoteId = $id;";
+            deleteAuditEvents.Parameters.AddWithValue("$id", quoteId);
+            await deleteAuditEvents.ExecuteNonQueryAsync();
+        }
+
         await using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM Quotes WHERE Id = $id AND Status = $inProgressStatus;";
+        command.Transaction = transaction;
+        command.CommandText = "DELETE FROM Quotes WHERE Id = $id;";
         command.Parameters.AddWithValue("$id", quoteId);
-        command.Parameters.AddWithValue("$inProgressStatus", (int)QuoteStatus.InProgress);
 
         var affected = await command.ExecuteNonQueryAsync();
         if (affected == 0)
         {
-            throw new InvalidOperationException("Only in-process quotes can be deleted.");
+            await transaction.RollbackAsync();
+            throw new InvalidOperationException($"Quote {quoteId} was not found.");
         }
+
+        await transaction.CommitAsync();
 
         if (_realtimeDataService is not null)
         {

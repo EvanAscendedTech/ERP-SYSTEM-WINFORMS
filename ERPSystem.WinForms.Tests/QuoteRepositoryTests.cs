@@ -301,6 +301,87 @@ public class QuoteRepositoryTests
 
         File.Delete(dbPath);
     }
+
+    [Fact]
+    public async Task DeleteQuoteAsync_DeletesWonQuoteAndRelatedRecords()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-delete-won-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+        var quote = new Quote
+        {
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            LifecycleQuoteId = "Q-WON-DELETE",
+            Status = QuoteStatus.Won,
+            CreatedUtc = DateTime.UtcNow,
+            LastUpdatedUtc = DateTime.UtcNow,
+            WonUtc = DateTime.UtcNow,
+            WonByUserId = "tester",
+            LineItems =
+            [
+                new QuoteLineItem
+                {
+                    Description = "Won assembly",
+                    Quantity = 1,
+                    AssociatedFiles = ["drawing.pdf"],
+                    BlobAttachments =
+                    [
+                        new QuoteBlobAttachment
+                        {
+                            BlobType = QuoteBlobType.Technical,
+                            FileName = "spec.pdf",
+                            ContentType = ".pdf",
+                            BlobData = [10,20,30],
+                            UploadedUtc = DateTime.UtcNow
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var id = await repository.SaveQuoteAsync(quote);
+        await repository.DeleteQuoteAsync(id);
+
+        var deleted = await repository.GetQuoteAsync(id);
+        Assert.Null(deleted);
+
+        await using var connection = new SqliteConnection($"Data Source={dbPath}");
+        await connection.OpenAsync();
+
+        Assert.Equal(0, await CountByQuoteIdAsync(connection, "QuoteLineItems", id));
+        Assert.Equal(0, await CountByQuoteIdAsync(connection, "QuoteBlobFiles", id));
+        Assert.Equal(0, await CountByQuoteIdAsync(connection, "QuoteAuditEvents", id));
+
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = @"
+                SELECT COUNT(*)
+                FROM LineItemFiles
+                WHERE LineItemId IN (SELECT Id FROM QuoteLineItems WHERE QuoteId = $quoteId);";
+            command.Parameters.AddWithValue("$quoteId", id);
+            var lineItemFileCount = Convert.ToInt32(await command.ExecuteScalarAsync());
+            Assert.Equal(0, lineItemFileCount);
+        }
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task DeleteQuoteAsync_WhenQuoteMissing_ThrowsClearError()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-delete-missing-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.DeleteQuoteAsync(123456));
+        Assert.Equal("Quote 123456 was not found.", exception.Message);
+
+        File.Delete(dbPath);
+    }
+
     [Fact]
     public async Task InitializeDatabaseAsync_BackfillSkipsUsedLegacyCodes()
     {
@@ -342,6 +423,14 @@ public class QuoteRepositoryTests
         Assert.Equal("LEG-00002", created.Code);
 
         File.Delete(dbPath);
+    }
+
+    private static async Task<int> CountByQuoteIdAsync(SqliteConnection connection, string tableName, int quoteId)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {tableName} WHERE QuoteId = $quoteId;";
+        command.Parameters.AddWithValue("$quoteId", quoteId);
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
     }
 
 }
