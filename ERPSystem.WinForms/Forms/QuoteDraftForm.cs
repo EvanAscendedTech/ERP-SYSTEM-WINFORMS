@@ -289,7 +289,7 @@ public class QuoteDraftForm : Form
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 1,
-            RowCount = 3,
+            RowCount = 4,
             Dock = DockStyle.Top,
             Margin = Padding.Empty,
             Padding = Padding.Empty
@@ -297,9 +297,38 @@ public class QuoteDraftForm : Form
         contentGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         contentGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         contentGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        contentGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var detailsSection = BuildCompactSection("Details", detailsGrid);
         var costsSection = BuildCompactSection("Costs", costsRow);
+
+        var productionFlags = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            Margin = Padding.Empty,
+            Padding = new Padding(6, 2, 0, 2)
+        };
+        var requiresDfars = new CheckBox { Text = "DFARS required", AutoSize = true, Checked = model.RequiresDfars };
+        var requiresMaterialTestReport = new CheckBox { Text = "Material test report required", AutoSize = true, Checked = model.RequiresMaterialTestReport };
+        var requiresCertificateOfConformance = new CheckBox { Text = "Certificate of conformance required", AutoSize = true, Checked = model.RequiresCertificateOfConformance };
+        var requiresSecondaryOperations = new CheckBox { Text = "Secondary operations required", AutoSize = true, Checked = model.RequiresSecondaryOperations };
+
+        foreach (var checkBox in new[] { requiresDfars, requiresMaterialTestReport, requiresCertificateOfConformance, requiresSecondaryOperations })
+        {
+            checkBox.CheckedChanged += (_, _) =>
+            {
+                model.RequiresDfars = requiresDfars.Checked;
+                model.RequiresMaterialTestReport = requiresMaterialTestReport.Checked;
+                model.RequiresCertificateOfConformance = requiresCertificateOfConformance.Checked;
+                model.RequiresSecondaryOperations = requiresSecondaryOperations.Checked;
+            };
+            productionFlags.Controls.Add(checkBox);
+        }
+
+        var productionFlagsSection = BuildCompactSection("Production Flags", productionFlags);
 
         var blobGrid = new TableLayoutPanel
         {
@@ -327,7 +356,8 @@ public class QuoteDraftForm : Form
 
         contentGrid.Controls.Add(detailsSection, 0, 0);
         contentGrid.Controls.Add(costsSection, 0, 1);
-        contentGrid.Controls.Add(attachmentsSection, 0, 2);
+        contentGrid.Controls.Add(productionFlagsSection, 0, 2);
+        contentGrid.Controls.Add(attachmentsSection, 0, 3);
         contentScroller.Controls.Add(contentGrid);
         layout.Controls.Add(contentScroller, 0, 1);
 
@@ -374,6 +404,10 @@ public class QuoteDraftForm : Form
             ToolingCost = toolingCost,
             SecondaryCost = secondaryCost,
             Total = totalBox,
+            RequiresDfars = requiresDfars,
+            RequiresMaterialTestReport = requiresMaterialTestReport,
+            RequiresCertificateOfConformance = requiresCertificateOfConformance,
+            RequiresSecondaryOperations = requiresSecondaryOperations,
             BlobLists = new Dictionary<QuoteBlobType, ListView>
             {
                 [QuoteBlobType.Technical] = drawingDocs.List,
@@ -832,6 +866,10 @@ public class QuoteDraftForm : Form
             line.Description = string.IsNullOrWhiteSpace(line.DrawingName) ? card.Title.Text : line.DrawingName;
             line.Quantity = 1;
             line.UnitPrice = line.LineItemTotal;
+            line.RequiresDfars = card.RequiresDfars.Checked;
+            line.RequiresMaterialTestReport = card.RequiresMaterialTestReport.Checked;
+            line.RequiresCertificateOfConformance = card.RequiresCertificateOfConformance.Checked;
+            line.RequiresSecondaryOperations = card.RequiresSecondaryOperations.Checked;
             line.Notes = BuildLineNotes(_customerPartPo.Text.Trim());
             quote.LineItems.Add(line);
         }
@@ -905,6 +943,10 @@ public class QuoteDraftForm : Form
         public required TextBox ToolingCost { get; init; }
         public required TextBox SecondaryCost { get; init; }
         public required TextBox Total { get; init; }
+        public required CheckBox RequiresDfars { get; init; }
+        public required CheckBox RequiresMaterialTestReport { get; init; }
+        public required CheckBox RequiresCertificateOfConformance { get; init; }
+        public required CheckBox RequiresSecondaryOperations { get; init; }
         public required Dictionary<QuoteBlobType, ListView> BlobLists { get; init; }
     }
 }
