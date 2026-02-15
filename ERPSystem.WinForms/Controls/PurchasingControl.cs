@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
 
@@ -13,6 +14,7 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
     private readonly int _currentUserId;
     private readonly bool _canEdit;
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
+    private readonly DataGridView _lineItemsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _technicalDocsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _purchaseDocsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Label _checklistLabel = new() { Dock = DockStyle.Top, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
@@ -36,15 +38,12 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
 
         var actionsPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
         var refreshButton = new Button { Text = "Refresh Purchasing", AutoSize = true };
-        var uploadPurchaseDocButton = new Button { Text = "Upload Purchase Doc", AutoSize = true, Enabled = _canEdit };
         var passToProductionButton = new Button { Text = "Pass to Production", AutoSize = true, Enabled = _canEdit };
 
         refreshButton.Click += async (_, _) => await LoadPurchasingQuotesAsync();
-        uploadPurchaseDocButton.Click += async (_, _) => await UploadPurchaseDocumentAsync();
         passToProductionButton.Click += async (_, _) => await PassToProductionAsync();
 
         actionsPanel.Controls.Add(refreshButton);
-        actionsPanel.Controls.Add(uploadPurchaseDocButton);
         actionsPanel.Controls.Add(passToProductionButton);
 
         ConfigureSafeSplitterDistance(_docsSplit, preferredDistance: 190, panel1MinSize: 130, panel2MinSize: 130);
@@ -52,24 +51,62 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         _docsSplit.Panel1.Controls.Add(_technicalDocsGrid);
         _docsSplit.Panel1.Controls.Add(new Label
         {
-            Text = "Technical documentation from quote",
+            Text = "Technical documentation from quote (double-click to open)",
             Dock = DockStyle.Top,
             Height = 24,
             Font = new Font(Font, FontStyle.Bold)
         });
 
-        _docsSplit.Panel2.Controls.Add(_purchaseDocsGrid);
-        _docsSplit.Panel2.Controls.Add(new Label
+        var purchaseDocsHeaderPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            Height = 30,
+            Padding = new Padding(0),
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false
+        };
+        var uploadPurchaseDocButton = new Button { Text = "Upload Purchase Documentation", AutoSize = true, Enabled = _canEdit };
+        var removePurchaseDocButton = new Button { Text = "Remove Selected", AutoSize = true, Enabled = _canEdit };
+
+        uploadPurchaseDocButton.Click += async (_, _) => await UploadPurchaseDocumentAsync();
+        removePurchaseDocButton.Click += async (_, _) => await DeleteSelectedPurchaseDocumentAsync();
+
+        purchaseDocsHeaderPanel.Controls.Add(new Label
         {
             Text = "Purchase documentation (required before Production)",
-            Dock = DockStyle.Top,
+            Width = 300,
             Height = 24,
+            TextAlign = ContentAlignment.MiddleLeft,
             Font = new Font(Font, FontStyle.Bold)
         });
+        purchaseDocsHeaderPanel.Controls.Add(uploadPurchaseDocButton);
+        purchaseDocsHeaderPanel.Controls.Add(removePurchaseDocButton);
 
-        var rightPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8, 0, 0, 0) };
-        rightPanel.Controls.Add(_docsSplit);
-        rightPanel.Controls.Add(_checklistLabel);
+        _docsSplit.Panel2.Controls.Add(_purchaseDocsGrid);
+        _docsSplit.Panel2.Controls.Add(purchaseDocsHeaderPanel);
+
+        var rightPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(8, 0, 0, 0),
+            ColumnCount = 1,
+            RowCount = 4
+        };
+        rightPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 28f));
+        rightPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24f));
+        rightPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 170f));
+        rightPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        rightPanel.Controls.Add(_checklistLabel, 0, 0);
+        rightPanel.Controls.Add(new Label
+        {
+            Text = "Items to purchase",
+            Dock = DockStyle.Fill,
+            Height = 24,
+            Font = new Font(Font, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleLeft
+        }, 0, 1);
+        rightPanel.Controls.Add(_lineItemsGrid, 0, 2);
+        rightPanel.Controls.Add(_docsSplit, 0, 3);
 
         ConfigureSafeSplitterDistance(_mainSplit, preferredDistance: 560, panel1MinSize: 350, panel2MinSize: 320);
 
@@ -89,6 +126,8 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         Controls.Add(_feedback);
 
         _quotesGrid.SelectionChanged += (_, _) => ShowSelectedQuoteDocuments();
+        _technicalDocsGrid.CellDoubleClick += async (_, args) => await OpenBlobFromGridAsync(_technicalDocsGrid, args.RowIndex);
+        _purchaseDocsGrid.CellDoubleClick += async (_, args) => await OpenBlobFromGridAsync(_purchaseDocsGrid, args.RowIndex);
         _mainSplit.SplitterMoved += async (_, _) => await SaveLayoutPreferenceAsync();
         _docsSplit.SplitterMoved += async (_, _) => await SaveLayoutPreferenceAsync();
         Load += async (_, _) => await RestoreLayoutPreferenceAsync();
@@ -223,18 +262,26 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         _quotesGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Customer", DataPropertyName = nameof(Quote.CustomerName), Width = 210 });
         _quotesGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Passed To Purchasing", DataPropertyName = nameof(Quote.PassedToPurchasingUtc), Width = 180 });
 
+        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Line #", DataPropertyName = nameof(PurchasingLineItemRow.DisplayLineNumber), Width = 58 });
+        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Description", DataPropertyName = nameof(PurchasingLineItemRow.Description), Width = 190 });
+        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Qty", DataPropertyName = nameof(PurchasingLineItemRow.Quantity), Width = 80 });
+        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Drawing", DataPropertyName = nameof(PurchasingLineItemRow.DrawingNumber), Width = 120 });
+        _lineItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Purchase Doc", DataPropertyName = nameof(PurchasingLineItemRow.PurchaseDocumentationStatus), Width = 130 });
+
         _technicalDocsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "File", DataPropertyName = nameof(QuoteBlobAttachment.FileName), Width = 210 });
         _technicalDocsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Type", DataPropertyName = nameof(QuoteBlobAttachment.BlobType), Width = 110 });
         _technicalDocsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Uploaded By", DataPropertyName = nameof(QuoteBlobAttachment.UploadedBy), Width = 130 });
         _technicalDocsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Uploaded", DataPropertyName = nameof(QuoteBlobAttachment.UploadedUtc), Width = 150 });
 
-        _purchaseDocsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "File", DataPropertyName = nameof(QuoteBlobAttachment.FileName), Width = 240 });
-        _purchaseDocsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Uploaded By", DataPropertyName = nameof(QuoteBlobAttachment.UploadedBy), Width = 140 });
-        _purchaseDocsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Uploaded", DataPropertyName = nameof(QuoteBlobAttachment.UploadedUtc), Width = 170 });
+        _purchaseDocsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "File", DataPropertyName = nameof(QuoteBlobAttachment.FileName), Width = 210 });
+        _purchaseDocsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Line Item", DataPropertyName = nameof(QuoteBlobAttachment.LineItemId), Width = 70 });
+        _purchaseDocsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Uploaded By", DataPropertyName = nameof(QuoteBlobAttachment.UploadedBy), Width = 130 });
+        _purchaseDocsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Uploaded", DataPropertyName = nameof(QuoteBlobAttachment.UploadedUtc), Width = 150 });
     }
 
     private async Task LoadPurchasingQuotesAsync()
     {
+        var selectedQuoteId = GetSelectedQuote()?.Id;
         var quotes = await _quoteRepository.GetPurchasingQuotesAsync();
         var jobs = await _productionRepository.GetJobsAsync();
         var inProductionQuoteIds = jobs.Where(x => x.SourceQuoteId.HasValue).Select(x => x.SourceQuoteId!.Value).ToHashSet();
@@ -245,8 +292,11 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
 
         if (_quotesGrid.Rows.Count > 0)
         {
-            _quotesGrid.Rows[0].Selected = true;
-            _quotesGrid.CurrentCell = _quotesGrid.Rows[0].Cells[0];
+            var targetRow = _quotesGrid.Rows.Cast<DataGridViewRow>()
+                .FirstOrDefault(row => row.DataBoundItem is Quote quote && quote.Id == selectedQuoteId)
+                ?? _quotesGrid.Rows[0];
+            targetRow.Selected = true;
+            _quotesGrid.CurrentCell = targetRow.Cells[0];
         }
 
         ShowSelectedQuoteDocuments();
@@ -254,26 +304,59 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
 
     private Quote? GetSelectedQuote() => _quotesGrid.CurrentRow?.DataBoundItem as Quote;
 
+    private QuoteLineItem? GetSelectedLineItem()
+    {
+        var quote = GetSelectedQuote();
+        var rowModel = _lineItemsGrid.CurrentRow?.DataBoundItem as PurchasingLineItemRow;
+        if (quote is null || rowModel is null)
+        {
+            return null;
+        }
+
+        return quote.LineItems.FirstOrDefault(li => li.Id == rowModel.LineItemId);
+    }
+
     private void ShowSelectedQuoteDocuments()
     {
         var selected = GetSelectedQuote();
         if (selected is null)
         {
+            _lineItemsGrid.DataSource = new List<PurchasingLineItemRow>();
             _technicalDocsGrid.DataSource = new List<QuoteBlobAttachment>();
             _purchaseDocsGrid.DataSource = new List<QuoteBlobAttachment>();
             _checklistLabel.Text = "Checklist: Select a quote to review docs.";
             return;
         }
 
-        var allBlobs = selected.LineItems.SelectMany(x => x.BlobAttachments).ToList();
-        var technical = allBlobs.Where(x => x.BlobType == QuoteBlobType.Technical).ToList();
-        var purchasingDocs = allBlobs.Where(x => x.BlobType == QuoteBlobType.PurchaseDocumentation).ToList();
+        var lineItems = selected.LineItems
+            .Select((line, index) => new PurchasingLineItemRow
+            {
+                LineItemId = line.Id,
+                DisplayLineNumber = index + 1,
+                Description = line.Description,
+                DrawingNumber = line.DrawingNumber,
+                Quantity = line.Quantity,
+                PurchaseDocumentationStatus = line.BlobAttachments.Any(x => x.BlobType == QuoteBlobType.PurchaseDocumentation) ? "✅ Uploaded" : "⬜ Missing"
+            })
+            .ToList();
 
+        var allBlobs = selected.LineItems.SelectMany(x => x.BlobAttachments).ToList();
+        var technical = allBlobs.Where(x => x.BlobType == QuoteBlobType.Technical).OrderByDescending(x => x.UploadedUtc).ToList();
+        var purchasingDocs = allBlobs.Where(x => x.BlobType == QuoteBlobType.PurchaseDocumentation).OrderByDescending(x => x.UploadedUtc).ToList();
+        var missingDocCount = selected.LineItems.Count(line => line.BlobAttachments.All(blob => blob.BlobType != QuoteBlobType.PurchaseDocumentation));
+
+        _lineItemsGrid.DataSource = lineItems;
         _technicalDocsGrid.DataSource = technical;
         _purchaseDocsGrid.DataSource = purchasingDocs;
-        _checklistLabel.Text = purchasingDocs.Count > 0
-            ? "Checklist: ✅ Purchase documentation uploaded. Ready to pass to Production."
-            : "Checklist: ☐ Upload purchase documentation (PDF/PO) before passing to Production.";
+        _checklistLabel.Text = missingDocCount == 0
+            ? "Checklist: ✅ All purchasable items include purchase documentation. Ready to pass to Production."
+            : $"Checklist: ☐ {missingDocCount} line item(s) still missing purchase documentation.";
+
+        if (_lineItemsGrid.Rows.Count > 0)
+        {
+            _lineItemsGrid.Rows[0].Selected = true;
+            _lineItemsGrid.CurrentCell = _lineItemsGrid.Rows[0].Cells[0];
+        }
     }
 
     private async Task UploadPurchaseDocumentAsync()
@@ -285,16 +368,16 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        var targetLine = quote.LineItems.FirstOrDefault();
+        var targetLine = GetSelectedLineItem();
         if (targetLine is null)
         {
-            _feedback.Text = "Selected quote has no line item to attach purchase documentation.";
+            _feedback.Text = "Select an item in 'Items to purchase' before uploading documentation.";
             return;
         }
 
         using var picker = new OpenFileDialog
         {
-            Title = $"Upload purchase documentation for Q{quote.Id}",
+            Title = $"Upload purchase documentation for Q{quote.Id} / Line {targetLine.Id}",
             Filter = "PDF or docs (*.pdf;*.doc;*.docx;*.xlsx;*.xls)|*.pdf;*.doc;*.docx;*.xlsx;*.xls|All Files (*.*)|*.*",
             CheckFileExists = true,
             Multiselect = false
@@ -325,7 +408,21 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
             DateTime.UtcNow,
             bytes);
 
-        _feedback.Text = $"Uploaded purchase documentation for quote {quote.Id}.";
+        _feedback.Text = $"Uploaded purchase documentation for quote {quote.Id}, line item {targetLine.Id}.";
+        await LoadPurchasingQuotesAsync();
+    }
+
+    private async Task DeleteSelectedPurchaseDocumentAsync()
+    {
+        var selectedBlob = _purchaseDocsGrid.CurrentRow?.DataBoundItem as QuoteBlobAttachment;
+        if (selectedBlob is null)
+        {
+            _feedback.Text = "Select a purchase documentation file to remove.";
+            return;
+        }
+
+        await _quoteRepository.DeleteQuoteLineItemFileAsync(selectedBlob.Id);
+        _feedback.Text = $"Removed purchase documentation '{selectedBlob.FileName}'.";
         await LoadPurchasingQuotesAsync();
     }
 
@@ -344,9 +441,13 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        if (!QuoteRepository.HasBlobType(quote, QuoteBlobType.PurchaseDocumentation))
+        var missingDocumentation = quote.LineItems
+            .Where(line => line.BlobAttachments.All(blob => blob.BlobType != QuoteBlobType.PurchaseDocumentation))
+            .ToList();
+
+        if (missingDocumentation.Count > 0)
         {
-            _feedback.Text = "Upload purchase documentation (PDF/PO) before moving this quote to Production.";
+            _feedback.Text = $"Upload required purchase documentation for all line items before moving to Production. Missing: {missingDocumentation.Count} item(s).";
             return;
         }
 
@@ -386,6 +487,40 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         _openSection("Production");
     }
 
+    private async Task OpenBlobFromGridAsync(DataGridView grid, int rowIndex)
+    {
+        if (rowIndex < 0)
+        {
+            return;
+        }
+
+        if (grid.Rows[rowIndex].DataBoundItem is not QuoteBlobAttachment attachment)
+        {
+            return;
+        }
+
+        var blobBytes = attachment.BlobData.Length > 0
+            ? attachment.BlobData
+            : await _quoteRepository.GetQuoteBlobContentAsync(attachment.Id);
+        if (blobBytes.Length == 0)
+        {
+            _feedback.Text = $"Unable to open '{attachment.FileName}' because no file data is available.";
+            return;
+        }
+
+        var extension = string.IsNullOrWhiteSpace(attachment.Extension) ? Path.GetExtension(attachment.FileName) : attachment.Extension;
+        var tempFileName = $"erp-quote-{attachment.Id}-{Guid.NewGuid():N}{extension}";
+        var tempPath = Path.Combine(Path.GetTempPath(), tempFileName);
+        await File.WriteAllBytesAsync(tempPath, blobBytes);
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = tempPath,
+            UseShellExecute = true
+        });
+
+        _feedback.Text = $"Opened '{attachment.FileName}' from blob storage.";
+    }
 
     public async Task<bool> OpenFromDashboardAsync(int quoteId)
     {
@@ -409,4 +544,13 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
 
     public Task RefreshDataAsync(bool fromFailSafeCheckpoint) => LoadPurchasingQuotesAsync();
 
+    private sealed class PurchasingLineItemRow
+    {
+        public int LineItemId { get; init; }
+        public int DisplayLineNumber { get; init; }
+        public string Description { get; init; } = string.Empty;
+        public string DrawingNumber { get; init; } = string.Empty;
+        public decimal Quantity { get; init; }
+        public string PurchaseDocumentationStatus { get; init; } = string.Empty;
+    }
 }
