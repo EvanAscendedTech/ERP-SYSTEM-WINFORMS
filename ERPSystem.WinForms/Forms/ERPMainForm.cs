@@ -52,9 +52,9 @@ public partial class ERPMainForm : Form
         {
             ["Dashboard"] = btnDashboard,
             ["Quotes"] = btnQuotes,
+            ["Purchasing"] = btnPurchasing,
             ["Production"] = btnProduction,
             ["CRM"] = btnCRM,
-            ["Quality"] = btnQuality,
             ["Inspection"] = btnInspection,
             ["Shipping"] = btnShipping,
             ["Settings"] = btnSettingsMenu
@@ -364,9 +364,9 @@ public partial class ERPMainForm : Form
     {
         btnDashboard.Click += (_, _) => LoadSection("Dashboard");
         btnQuotes.Click += (_, _) => LoadSection("Quotes");
+        btnPurchasing.Click += (_, _) => LoadSection("Purchasing");
         btnProduction.Click += (_, _) => LoadSection("Production");
         btnCRM.Click += (_, _) => LoadSection("CRM");
-        btnQuality.Click += (_, _) => LoadSection("Quality");
         btnInspection.Click += (_, _) => LoadSection("Inspection");
         btnShipping.Click += (_, _) => LoadSection("Shipping");
         btnSettingsMenu.Click += (_, _) => LoadSection("Settings");
@@ -401,9 +401,6 @@ public partial class ERPMainForm : Form
             case ProductionControl productionControl when !string.IsNullOrWhiteSpace(target.JobNumber):
                 await productionControl.OpenFromDashboardAsync(target.JobNumber, openDetails: true);
                 break;
-            case QualityControl qualityControl when !string.IsNullOrWhiteSpace(target.JobNumber):
-                await qualityControl.OpenFromDashboardAsync(target.JobNumber, openDetails: true);
-                break;
             case InspectionControl inspectionControl when !string.IsNullOrWhiteSpace(target.JobNumber):
                 await inspectionControl.OpenFromDashboardAsync(target.JobNumber, openDetails: true);
                 break;
@@ -432,9 +429,9 @@ public partial class ERPMainForm : Form
         {
             "Dashboard" => new DashboardControl(_quoteRepo, _prodRepo, _jobFlow, OpenDashboardTarget),
             "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, _currentUser, LoadSection),
+            "Purchasing" => BuildPlaceholder("Purchasing", "Placeholder for material and tooling purchasing workflows."),
             "Production" => new ProductionControl(_prodRepo, _jobFlow, _currentUser, LoadSection),
             "CRM" => new CRMControl(_quoteRepo),
-            "Quality" => new QualityControl(_prodRepo, _jobFlow, _currentUser, LoadSection),
             "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, _currentUser, LoadSection),
             "Shipping" => new ShippingControl(_prodRepo, _jobFlow, _currentUser, LoadSection),
             "Settings" => new SettingsControl(

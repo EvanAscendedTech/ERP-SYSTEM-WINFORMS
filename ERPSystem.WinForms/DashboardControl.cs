@@ -2,6 +2,7 @@ using ERPSystem.WinForms.Controls;
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
+using System.Drawing.Drawing2D;
 
 namespace ERPSystem.WinForms;
 
@@ -34,13 +35,14 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         Margin = new Padding(0, 0, 0, 12)
     };
 
-    private readonly TableLayoutPanel _workQueues = new()
+    private readonly FlowLayoutPanel _workQueues = new()
     {
         Dock = DockStyle.Fill,
-        ColumnCount = 3,
-        RowCount = 2,
         Margin = new Padding(0),
-        Padding = new Padding(0)
+        Padding = new Padding(0),
+        AutoScroll = true,
+        WrapContents = false,
+        FlowDirection = FlowDirection.LeftToRight
     };
 
     private readonly Label _lastUpdatedLabel = new()
@@ -185,15 +187,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
 
     private void ConfigureWorkQueueLayout()
     {
-        _workQueues.ColumnStyles.Clear();
-        _workQueues.RowStyles.Clear();
-        for (var index = 0; index < _workQueues.ColumnCount; index++)
-        {
-            _workQueues.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
-        }
-
-        _workQueues.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
-        _workQueues.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+        _workQueues.AutoScrollMinSize = new Size(0, 0);
     }
 
     private void PopulateGlanceCards(params (string Metric, string Value)[] cards)
@@ -232,9 +226,9 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
     {
         _workQueues.SuspendLayout();
         _workQueues.Controls.Clear();
-        for (var index = 0; index < cards.Length; index++)
+        foreach (var card in cards)
         {
-            _workQueues.Controls.Add(cards[index], index % 3, index / 3);
+            _workQueues.Controls.Add(card);
         }
 
         _workQueues.ResumeLayout();
@@ -316,31 +310,32 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         var productionNearDue = productionInProgress.Where(IsJobNearDueDate).ToList();
         var qualityQueue = jobs.Where(j => _jobFlowService.IsInModule(j.JobNumber, JobFlowService.WorkflowModule.Quality)).OrderBy(j => j.JobNumber).ToList();
         var inspectionQueue = jobs.Where(j => _jobFlowService.IsInModule(j.JobNumber, JobFlowService.WorkflowModule.Inspection)).OrderBy(j => j.JobNumber).ToList();
+        var qualityAndInspectionQueue = qualityQueue.Concat(inspectionQueue).OrderBy(j => j.JobNumber).ToList();
         var shippingQueue = jobs.Where(j => _jobFlowService.IsInModule(j.JobNumber, JobFlowService.WorkflowModule.Shipping)).OrderBy(j => j.JobNumber).ToList();
         PopulateGlanceCards(
             ("Quotes in progress", inProgressQuotes.Count.ToString()),
             ("Quotes completed", completedQuotes.Count.ToString()),
             ("Expiring soon", quoteExpiringSoon.Count.ToString()),
+            ("Purchasing queue", "0"),
             ("Production in progress", productionInProgress.Count.ToString()),
             ("Near/over due", productionNearDue.Count.ToString()),
-            ("Quality queue", qualityQueue.Count.ToString()),
-            ("Inspection queue", inspectionQueue.Count.ToString()),
+            ("Inspection queue", qualityAndInspectionQueue.Count.ToString()),
             ("Shipping queue", shippingQueue.Count.ToString()));
 
         PopulateWorkflowStages(
-            CreateStageCard("Quote", "In progress", inProgressQuotes.Count, Color.FromArgb(45, 125, 255), "Quotes"),
+            CreateStageCard("Quotes", "In progress", inProgressQuotes.Count, Color.FromArgb(45, 125, 255), "Quotes"),
+            CreateStageCard("Purchasing", "Queued", 0, Color.FromArgb(176, 131, 72), "Purchasing"),
             CreateStageCard("Production", "Active jobs", productionInProgress.Count, Color.FromArgb(83, 143, 94), "Production"),
-            CreateStageCard("Quality", "Queued", qualityQueue.Count, Color.FromArgb(243, 170, 60), "Quality"),
-            CreateStageCard("Inspection", "Queued", inspectionQueue.Count, Color.FromArgb(205, 98, 184), "Inspection"),
+            CreateStageCard("Inspection", "Queued", qualityAndInspectionQueue.Count, Color.FromArgb(205, 98, 184), "Inspection"),
             CreateStageCard("Shipping", "Staged", shippingQueue.Count, Color.FromArgb(95, 175, 193), "Shipping"),
             CreateStageCard("CRM", "Follow-up", completedQuotes.Count, Color.FromArgb(121, 111, 214), "CRM"));
 
         PopulateQueueGrid(
             CreateQuoteQueuePanel("In-progress quotes", inProgressQuotes, includeExpiryWarning: false),
+            CreatePurchasingQueuePanel("Purchasing queue"),
             CreateProductionQueuePanel("In-progress production orders", productionInProgress),
-            CreateQualityQueuePanel("Quality queue", qualityQueue),
+            CreateInspectionQueuePanel("Inspection + quality queue", qualityAndInspectionQueue),
             CreateQuoteQueuePanel("Quotes about to expire", quoteExpiringSoon, includeExpiryWarning: true),
-            CreateInspectionQueuePanel("Inspection queue", inspectionQueue),
             CreateShippingQueuePanel("Shipping queue", shippingQueue));
 
         _lastUpdatedLabel.Text = $"Updated {DateTime.Now:g}";
@@ -576,7 +571,18 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             details.Add($"Q{quote.Id} • {quote.CustomerName} • updated {quote.LastUpdatedUtc:g}{expiryText}");
         }
 
-        return CreateQueueCard(title, details, "Quotes", quotes.Count > 0);
+        return CreateQueueCard(title, details, "Quotes", quotes.Count > 0, Color.FromArgb(45, 125, 255));
+    }
+
+    private Panel CreatePurchasingQueuePanel(string title)
+    {
+        var details = new List<string>
+        {
+            "Material PO workflow placeholder",
+            "Tooling PO workflow placeholder"
+        };
+
+        return CreateQueueCard(title, details, "Purchasing", true, Color.FromArgb(176, 131, 72));
     }
 
     private Panel CreateProductionQueuePanel(string title, IReadOnlyCollection<ProductionJob> jobs)
@@ -588,16 +594,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             details.Add($"{job.JobNumber} • {job.ProductName} • due {job.DueDateUtc:g} • {dueNote}");
         }
 
-        return CreateQueueCard(title, details, "Production", jobs.Count > 0);
-    }
-
-    private Panel CreateQualityQueuePanel(string title, IReadOnlyCollection<ProductionJob> jobs)
-    {
-        var details = jobs.Take(20)
-            .Select(job => $"{job.JobNumber} • {job.ProductName} • Waiting for quality approval")
-            .ToList();
-
-        return CreateQueueCard(title, details, "Quality", jobs.Count > 0);
+        return CreateQueueCard(title, details, "Production", jobs.Count > 0, Color.FromArgb(83, 143, 94));
     }
 
     private Panel CreateInspectionQueuePanel(string title, IReadOnlyCollection<ProductionJob> jobs)
@@ -606,7 +603,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             .Select(job => $"{job.JobNumber} • {job.ProductName} • {(_jobFlowService.IsInspectionPassed(job.JobNumber) ? "Passed" : "Pending")}")
             .ToList();
 
-        return CreateQueueCard(title, details, "Inspection", jobs.Count > 0);
+        return CreateQueueCard(title, details, "Inspection", jobs.Count > 0, Color.FromArgb(205, 98, 184));
     }
 
     private Panel CreateShippingQueuePanel(string title, IReadOnlyCollection<ProductionJob> jobs)
@@ -615,7 +612,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             .Select(job => $"{job.JobNumber} • {job.ProductName} • Ready to ship")
             .ToList();
 
-        return CreateQueueCard(title, details, "Shipping", jobs.Count > 0);
+        return CreateQueueCard(title, details, "Shipping", jobs.Count > 0, Color.FromArgb(95, 175, 193));
     }
 
     private Panel CreateWorkSnapshotPanel(
@@ -634,7 +631,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             ($"PRODUCTION • {job.JobNumber} • {job.ProductName}", new DashboardNavigationTarget("Production", JobNumber: job.JobNumber, OpenDetails: true))));
 
         snapshotItems.AddRange(qualityQueue.Take(3).Select(job =>
-            ($"QUALITY • {job.JobNumber} • {job.ProductName}", new DashboardNavigationTarget("Quality", JobNumber: job.JobNumber, OpenDetails: true))));
+            ($"QUALITY • {job.JobNumber} • {job.ProductName}", new DashboardNavigationTarget("Inspection", JobNumber: job.JobNumber, OpenDetails: true))));
 
         snapshotItems.AddRange(inspectionQueue.Take(3).Select(job =>
             ($"INSPECTION • {job.JobNumber} • {job.ProductName}", new DashboardNavigationTarget("Inspection", JobNumber: job.JobNumber, OpenDetails: true))));
@@ -647,7 +644,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
 
         var title = new Label
         {
-            Text = "WIP Snapshot (Quotes / Production / Quality / Inspection / Shipping)",
+            Text = "WIP Snapshot (Quotes / Purchasing / Production / Inspection / Shipping)",
             Dock = DockStyle.Top,
             Height = 28,
             Font = new Font("Segoe UI", 10.5F, FontStyle.Bold)
@@ -766,10 +763,14 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         return new Panel { Dock = DockStyle.Fill, Controls = { row } };
     }
 
-    private Panel CreateQueueCard(string title, IReadOnlyList<string> items, string sectionKey, bool hasItems)
+    private Panel CreateQueueCard(string title, IReadOnlyList<string> items, string sectionKey, bool hasItems, Color stageColor)
     {
         var panel = CreateBasePanel();
-        panel.Height = 190;
+        panel.Width = 280;
+        panel.Height = 178;
+        panel.BackColor = ControlPaint.Light(stageColor, 0.92f);
+        panel.Margin = new Padding(0, 0, 10, 0);
+        panel.Paint += (_, args) => PaintBeveledCard(args.Graphics, panel.ClientRectangle, stageColor);
 
         var titleRow = new TableLayoutPanel
         {
@@ -785,7 +786,8 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             Text = title,
             Font = new Font("Segoe UI", 11F, FontStyle.Bold),
             Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = stageColor
         };
 
         var openButton = new LinkLabel
@@ -864,6 +866,25 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             Padding = new Padding(12),
             BorderStyle = BorderStyle.FixedSingle
         };
+    }
+
+    private static void PaintBeveledCard(Graphics graphics, Rectangle bounds, Color baseColor)
+    {
+        if (bounds.Width <= 2 || bounds.Height <= 2)
+        {
+            return;
+        }
+
+        var fillArea = Rectangle.Inflate(bounds, -1, -1);
+        using var brush = new LinearGradientBrush(fillArea, ControlPaint.Light(baseColor, 0.35f), ControlPaint.Dark(baseColor, 0.18f), LinearGradientMode.Vertical);
+        graphics.FillRectangle(brush, fillArea);
+        using var topHighlight = new Pen(Color.FromArgb(170, Color.White));
+        using var outerBorder = new Pen(ControlPaint.Dark(baseColor, 0.35f));
+        using var innerShadow = new Pen(Color.FromArgb(120, ControlPaint.Dark(baseColor, 0.1f)));
+        graphics.DrawLine(topHighlight, fillArea.Left, fillArea.Top, fillArea.Right, fillArea.Top);
+        graphics.DrawLine(topHighlight, fillArea.Left, fillArea.Top, fillArea.Left, fillArea.Bottom);
+        graphics.DrawRectangle(outerBorder, fillArea);
+        graphics.DrawRectangle(innerShadow, Rectangle.Inflate(fillArea, -1, -1));
     }
 
     private static bool IsQuoteExpiringSoon(Quote quote)

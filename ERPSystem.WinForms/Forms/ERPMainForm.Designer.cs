@@ -17,9 +17,9 @@ public partial class ERPMainForm
     private FlowLayoutPanel navButtonsPanel = null!;
     private ModernButton btnDashboard = null!;
     private ModernButton btnQuotes = null!;
+    private ModernButton btnPurchasing = null!;
     private ModernButton btnProduction = null!;
     private ModernButton btnCRM = null!;
-    private ModernButton btnQuality = null!;
     private ModernButton btnInspection = null!;
     private ModernButton btnShipping = null!;
 
@@ -40,9 +40,9 @@ public partial class ERPMainForm
         navButtonsPanel = new FlowLayoutPanel();
         btnDashboard = new ModernButton();
         btnQuotes = new ModernButton();
+        btnPurchasing = new ModernButton();
         btnProduction = new ModernButton();
         btnCRM = new ModernButton();
-        btnQuality = new ModernButton();
         btnInspection = new ModernButton();
         btnShipping = new ModernButton();
 
@@ -126,16 +126,16 @@ public partial class ERPMainForm
 
         ConfigureNavButton(btnDashboard, "Dashboard");
         ConfigureNavButton(btnQuotes, "Quotes");
+        ConfigureNavButton(btnPurchasing, "Purchasing");
         ConfigureNavButton(btnProduction, "Production");
         ConfigureNavButton(btnCRM, "CRM");
-        ConfigureNavButton(btnQuality, "Quality");
         ConfigureNavButton(btnInspection, "Inspection");
         ConfigureNavButton(btnShipping, "Shipping");
 
         navButtonsPanel.Controls.Add(btnDashboard);
         navButtonsPanel.Controls.Add(btnQuotes);
+        navButtonsPanel.Controls.Add(btnPurchasing);
         navButtonsPanel.Controls.Add(btnProduction);
-        navButtonsPanel.Controls.Add(btnQuality);
         navButtonsPanel.Controls.Add(btnInspection);
         navButtonsPanel.Controls.Add(btnShipping);
         navButtonsPanel.Controls.Add(btnCRM);
