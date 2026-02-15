@@ -886,7 +886,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         }
 
         var safeCount = Math.Max(1, itemCount);
-        var itemHeight = Math.Max(1, list.ClientSize.Height / safeCount);
+        var itemHeight = Math.Clamp(list.ClientSize.Height / safeCount, 1, 255);
         list.ItemHeight = itemHeight;
 
         var targetFontSize = Math.Clamp(itemHeight * 0.46F, QueueMinFontSize, QueueBaseFontSize);
