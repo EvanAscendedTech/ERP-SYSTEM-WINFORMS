@@ -8,6 +8,12 @@ namespace ERPSystem.WinForms.Forms;
 
 public class QuoteDraftForm : Form
 {
+    private const string DescriptionFieldName = "Description";
+    private const string ProductionHoursFieldName = "ProductionHours";
+    private const string SetupHoursFieldName = "SetupHours";
+    private const string HoursConsumedFieldName = "HoursConsumed";
+    private const string LineItemPriceFieldName = "UnitPrice";
+
     private sealed class BlobUploadSectionState
     {
         public required QuoteBlobType BlobType { get; init; }
@@ -29,6 +35,11 @@ public class QuoteDraftForm : Form
     private readonly TextBox _quoteLifecycleId = new() { Width = 220, ReadOnly = true };
     private readonly NumericUpDown _lineCount = new() { Minimum = 1, Maximum = 20, Value = 1, Width = 100 };
     private readonly FlowLayoutPanel _lineItemsPanel = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
+    private readonly TextBox _dailyCapacityHours = new() { Width = 120, Text = "8" };
+    private readonly TextBox _leadTimeAdjustmentDays = new() { Width = 120, Text = "0" };
+    private readonly Label _totalHoursValue = new() { AutoSize = true, Text = "0.00" };
+    private readonly Label _totalLeadTimeValue = new() { AutoSize = true, Text = "0 days" };
+    private readonly Label _totalPriceValue = new() { AutoSize = true, Text = "$0.00" };
     private readonly Quote? _editingQuote;
 
     public int CreatedQuoteId { get; private set; }
@@ -68,9 +79,10 @@ public class QuoteDraftForm : Form
         WindowState = FormWindowState.Maximized;
         StartPosition = FormStartPosition.CenterParent;
 
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(10) };
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(10) };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var headerContainer = new Panel { Dock = DockStyle.Top, Height = 42 };
@@ -101,7 +113,22 @@ public class QuoteDraftForm : Form
         };
 
         _lineCount.ValueChanged += (_, _) => SyncLineItems((int)_lineCount.Value);
+        _dailyCapacityHours.TextChanged += (_, _) => RecalculateQuoteTotals();
+        _leadTimeAdjustmentDays.TextChanged += (_, _) => RecalculateQuoteTotals();
         SyncLineItems((int)_lineCount.Value);
+
+        var totalsPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = true };
+        totalsPanel.Controls.Add(new Label { Text = "Daily Capacity (hrs)", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
+        totalsPanel.Controls.Add(_dailyCapacityHours);
+        totalsPanel.Controls.Add(new Label { Text = "Lead Time Adjustment (days)", AutoSize = true, Margin = new Padding(12, 8, 0, 0) });
+        totalsPanel.Controls.Add(_leadTimeAdjustmentDays);
+        totalsPanel.Controls.Add(new Label { Text = "Total Hours:", AutoSize = true, Margin = new Padding(20, 8, 0, 0) });
+        totalsPanel.Controls.Add(_totalHoursValue);
+        totalsPanel.Controls.Add(new Label { Text = "Total Lead Time:", AutoSize = true, Margin = new Padding(20, 8, 0, 0) });
+        totalsPanel.Controls.Add(_totalLeadTimeValue);
+        totalsPanel.Controls.Add(new Label { Text = "Total Price:", AutoSize = true, Margin = new Padding(20, 8, 0, 0), Visible = _canViewPricing });
+        _totalPriceValue.Visible = _canViewPricing;
+        totalsPanel.Controls.Add(_totalPriceValue);
 
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, AutoSize = true };
         var saveButton = new Button { Text = "Save Quote", AutoSize = true };
@@ -117,7 +144,8 @@ public class QuoteDraftForm : Form
 
         root.Controls.Add(headerContainer, 0, 0);
         root.Controls.Add(_lineItemsPanel, 0, 1);
-        root.Controls.Add(buttons, 0, 2);
+        root.Controls.Add(totalsPanel, 0, 2);
+        root.Controls.Add(buttons, 0, 3);
 
         Controls.Add(root);
         _ = LoadCustomersAsync();
@@ -162,6 +190,8 @@ public class QuoteDraftForm : Form
         {
             PopulateLineItem((GroupBox)_lineItemsPanel.Controls[index], quote.LineItems[index]);
         }
+
+        RecalculateQuoteTotals();
     }
 
     private void PopulateLineItem(GroupBox group, QuoteLineItem line)
@@ -170,11 +200,13 @@ public class QuoteDraftForm : Form
         var fields = table.Controls.OfType<FlowLayoutPanel>().First();
         var uploadFlow = table.Controls.OfType<FlowLayoutPanel>().Skip(1).First();
 
-        var textboxes = fields.Controls.OfType<TextBox>().ToList();
-        if (textboxes.Count > 0) textboxes[0].Text = line.Description;
-        if (textboxes.Count > 1) textboxes[1].Text = line.LeadTimeDays.ToString();
+        var description = fields.Controls.OfType<TextBox>().FirstOrDefault(t => t.Name == DescriptionFieldName);
+        if (description is not null)
+        {
+            description.Text = line.Description;
+        }
 
-        var unitPrice = textboxes.FirstOrDefault(t => t.Name == "UnitPrice");
+        var unitPrice = fields.Controls.OfType<TextBox>().FirstOrDefault(t => t.Name == LineItemPriceFieldName);
         if (unitPrice is not null) unitPrice.Text = line.UnitPrice.ToString();
 
         var metadata = ParseMetadata(line.Notes);
@@ -193,6 +225,16 @@ public class QuoteDraftForm : Form
             _pricingAdjustment.Text = adjustment;
         }
 
+        if (metadata.TryGetValue("Daily capacity hours", out var dailyCapacity))
+        {
+            _dailyCapacityHours.Text = dailyCapacity;
+        }
+
+        if (metadata.TryGetValue("Lead time adjustment days", out var leadTimeAdjustment))
+        {
+            _leadTimeAdjustmentDays.Text = leadTimeAdjustment;
+        }
+
         foreach (var section in uploadFlow.Controls.OfType<Panel>().Select(p => p.Tag).OfType<BlobUploadSectionState>())
         {
             foreach (var attachment in line.BlobAttachments.Where(a => a.BlobType == section.BlobType))
@@ -202,6 +244,8 @@ public class QuoteDraftForm : Form
                 section.UploadGrid.Rows[rowIndex].Tag = attachment.FileName;
             }
         }
+
+        RecalculateQuoteTotals();
     }
 
     private void OpenCustomerCreation()
@@ -227,6 +271,8 @@ public class QuoteDraftForm : Form
                 _lineItemsPanel.Controls.Add(BuildLineItemCard(i, _canViewPricing));
             }
 
+            RecalculateQuoteTotals();
+
             return;
         }
 
@@ -236,6 +282,8 @@ public class QuoteDraftForm : Form
             {
                 _lineItemsPanel.Controls.RemoveAt(i);
             }
+
+            RecalculateQuoteTotals();
         }
     }
 
@@ -253,14 +301,18 @@ public class QuoteDraftForm : Form
         container.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var fieldsLayout = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true };
-        fieldsLayout.Controls.Add(new TextBox { Width = 200, PlaceholderText = "Description", Name = "Description" });
-        fieldsLayout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Lead time" });
+        fieldsLayout.Controls.Add(new TextBox { Width = 200, PlaceholderText = "Line item name", Name = DescriptionFieldName });
 
-        var pricing = new TextBox { Width = 120, PlaceholderText = "Unit price", Name = "UnitPrice", Visible = canViewPricing };
+        var pricing = new TextBox { Width = 120, PlaceholderText = "Line item price", Name = LineItemPriceFieldName, Visible = canViewPricing };
+        pricing.TextChanged += (_, _) => RecalculateQuoteTotals();
         fieldsLayout.Controls.Add(pricing);
 
-        fieldsLayout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Production hrs" });
-        fieldsLayout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Setup hrs" });
+        fieldsLayout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Production hrs", Name = ProductionHoursFieldName });
+        fieldsLayout.Controls.Add(new TextBox { Width = 120, PlaceholderText = "Setup hrs", Name = SetupHoursFieldName });
+
+        var hoursConsumed = new TextBox { Width = 120, PlaceholderText = "Hours consumed", Name = HoursConsumedFieldName };
+        hoursConsumed.TextChanged += (_, _) => RecalculateQuoteTotals();
+        fieldsLayout.Controls.Add(hoursConsumed);
 
         var uploadLayout = new FlowLayoutPanel
         {
@@ -278,6 +330,39 @@ public class QuoteDraftForm : Form
         container.Controls.Add(uploadLayout, 0, 1);
         group.Controls.Add(container);
         return group;
+    }
+
+    private void RecalculateQuoteTotals()
+    {
+        var lineSummaries = _lineItemsPanel.Controls.OfType<GroupBox>()
+            .Select(ReadLineSummary)
+            .ToList();
+
+        var totalHours = lineSummaries.Sum(line => line.HoursConsumed);
+        var totalPrice = lineSummaries.Sum(line => line.LineTotal);
+        var totalLeadTimeDays = CalculateLeadTimeDays(totalHours);
+
+        _totalHoursValue.Text = totalHours.ToString("0.##", CultureInfo.CurrentCulture);
+        _totalLeadTimeValue.Text = $"{totalLeadTimeDays} days";
+        _totalPriceValue.Text = totalPrice.ToString("C", CultureInfo.CurrentCulture);
+    }
+
+    private int CalculateLeadTimeDays(decimal totalHours)
+    {
+        var dailyCapacity = decimal.TryParse(_dailyCapacityHours.Text, NumberStyles.Any, CultureInfo.CurrentCulture, out var parsedDailyCapacity)
+            ? parsedDailyCapacity
+            : 0m;
+        var adjustmentDays = int.TryParse(_leadTimeAdjustmentDays.Text, NumberStyles.Any, CultureInfo.CurrentCulture, out var parsedAdjustment)
+            ? parsedAdjustment
+            : 0;
+
+        if (dailyCapacity <= 0)
+        {
+            return Math.Max(0, adjustmentDays);
+        }
+
+        var calculatedDays = (int)Math.Ceiling(totalHours / dailyCapacity);
+        return Math.Max(0, calculatedDays + adjustmentDays);
     }
 
     private Control BuildBlobUploadSection(string title, QuoteBlobType blobType)
@@ -662,6 +747,8 @@ public class QuoteDraftForm : Form
             LastUpdatedUtc = DateTime.UtcNow
         };
 
+        var totalLeadTimeDays = CalculateLeadTimeDays(_lineItemsPanel.Controls.OfType<GroupBox>().Select(ReadLineSummary).Sum(line => line.HoursConsumed));
+
         foreach (GroupBox item in _lineItemsPanel.Controls.OfType<GroupBox>())
         {
             var table = item.Controls.OfType<TableLayoutPanel>().First();
@@ -669,16 +756,16 @@ public class QuoteDraftForm : Form
             var uploadFlow = table.Controls.OfType<FlowLayoutPanel>().Skip(1).First();
 
             var textboxes = fields.Controls.OfType<TextBox>().ToList();
-            var description = textboxes.FirstOrDefault()?.Text;
-            var priceText = textboxes.FirstOrDefault(t => t.Name == "UnitPrice")?.Text;
+            var description = textboxes.FirstOrDefault(t => t.Name == DescriptionFieldName)?.Text;
+            var priceText = textboxes.FirstOrDefault(t => t.Name == LineItemPriceFieldName)?.Text;
 
             var line = new QuoteLineItem
             {
                 Description = string.IsNullOrWhiteSpace(description) ? $"Line {quote.LineItems.Count + 1}" : description,
                 Quantity = 1,
                 UnitPrice = decimal.TryParse(priceText, out var unitPrice) ? unitPrice : 0,
-                LeadTimeDays = 7,
-                Notes = BuildLineNotes(_customerQuoteNumber.Text.Trim(), _customerAddress.Text.Trim(), _pricingAdjustment.Text.Trim())
+                LeadTimeDays = totalLeadTimeDays,
+                Notes = BuildLineNotes(_customerQuoteNumber.Text.Trim(), _customerAddress.Text.Trim(), _pricingAdjustment.Text.Trim(), _dailyCapacityHours.Text.Trim(), _leadTimeAdjustmentDays.Text.Trim())
             };
 
             line.BlobAttachments = uploadFlow.Controls.OfType<Panel>()
@@ -726,7 +813,7 @@ public class QuoteDraftForm : Form
 
         var lineTotal = lineSummaries.Sum(line => line.LineTotal);
         var grandTotal = lineTotal + adjustment;
-        var leadTimeDays = lineSummaries.Max(line => line.LeadTimeDays);
+        var leadTimeDays = CalculateLeadTimeDays(lineSummaries.Sum(line => line.HoursConsumed));
         var quoteIdentifier = _editingQuote is not null ? $"#{_editingQuote.Id} ({_quoteLifecycleId.Text})" : _quoteLifecycleId.Text;
         var address = string.IsNullOrWhiteSpace(_customerAddress.Text) ? "Not provided" : _customerAddress.Text.Trim();
 
@@ -773,31 +860,32 @@ public class QuoteDraftForm : Form
         }
     }
 
-    private (string Description, decimal Quantity, int LeadTimeDays, decimal LineTotal) ReadLineSummary(GroupBox item)
+    private (string Description, decimal Quantity, decimal HoursConsumed, decimal LineTotal) ReadLineSummary(GroupBox item)
     {
         var table = item.Controls.OfType<TableLayoutPanel>().First();
         var fields = table.Controls.OfType<FlowLayoutPanel>().First();
-        var textboxes = fields.Controls.OfType<TextBox>().ToList();
-        var description = string.IsNullOrWhiteSpace(textboxes.FirstOrDefault()?.Text)
+        var descriptionText = fields.Controls.OfType<TextBox>().FirstOrDefault(t => t.Name == DescriptionFieldName)?.Text;
+        var description = string.IsNullOrWhiteSpace(descriptionText)
             ? item.Text
-            : textboxes.First().Text.Trim();
-
-        var leadTimeDays = int.TryParse(textboxes.Skip(1).FirstOrDefault()?.Text, out var parsedLeadTime)
-            ? parsedLeadTime
-            : 7;
+            : descriptionText.Trim();
 
         var quantity = 1m;
-        var unitPriceText = textboxes.FirstOrDefault(t => t.Name == "UnitPrice")?.Text;
+        var hoursConsumedText = fields.Controls.OfType<TextBox>().FirstOrDefault(t => t.Name == HoursConsumedFieldName)?.Text;
+        var hoursConsumed = decimal.TryParse(hoursConsumedText, NumberStyles.Any, CultureInfo.CurrentCulture, out var parsedHours)
+            ? parsedHours
+            : 0m;
+
+        var unitPriceText = fields.Controls.OfType<TextBox>().FirstOrDefault(t => t.Name == LineItemPriceFieldName)?.Text;
         var unitPrice = decimal.TryParse(unitPriceText, NumberStyles.Any, CultureInfo.CurrentCulture, out var parsedPrice)
             ? parsedPrice
             : 0m;
 
-        return (description, quantity, leadTimeDays, quantity * unitPrice);
+        return (description, quantity, hoursConsumed, quantity * unitPrice);
     }
 
-    private static string BuildLineNotes(string customerQuoteNumber, string customerAddress, string adjustment)
+    private static string BuildLineNotes(string customerQuoteNumber, string customerAddress, string adjustment, string dailyCapacityHours, string leadTimeAdjustmentDays)
     {
-        return $"Customer quote #: {customerQuoteNumber}\nCustomer address: {customerAddress}\nPricing adjustment: {adjustment}";
+        return $"Customer quote #: {customerQuoteNumber}\nCustomer address: {customerAddress}\nPricing adjustment: {adjustment}\nDaily capacity hours: {dailyCapacityHours}\nLead time adjustment days: {leadTimeAdjustmentDays}";
     }
 
     private static Dictionary<string, string> ParseMetadata(string notes)
