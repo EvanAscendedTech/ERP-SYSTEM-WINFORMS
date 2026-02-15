@@ -17,7 +17,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private readonly UserAccount _currentUser;
     private readonly FlowLayoutPanel _customerCardsPanel = new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(8, 4, 8, 8) };
     private readonly Label _customerHubLabel = new() { Dock = DockStyle.Top, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold), Padding = new Padding(8, 0, 0, 0) };
-    private readonly Button _backToHubButton = new() { Text = "← Back to Customers", AutoSize = true, Visible = false };
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _expiredQuotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
@@ -38,28 +37,19 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         var actionsPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
         var refreshButton = new Button { Text = "Refresh Active Quotes", AutoSize = true };
         var newQuoteButton = new Button { Text = "Create New Quote", AutoSize = true };
-        var editQuoteButton = new Button { Text = "Open Quote Details", AutoSize = true };
         var deleteQuoteButton = new Button { Text = "Delete Quote", AutoSize = true };
         var passToProductionButton = new Button { Text = "Pass to Production", AutoSize = true };
 
         refreshButton.Click += async (_, _) => await LoadActiveQuotesAsync();
         newQuoteButton.Click += async (_, _) => await CreateNewQuoteAsync();
-        editQuoteButton.Click += async (_, _) => await OpenSelectedQuoteDetailsAsync();
         deleteQuoteButton.Click += async (_, _) => await DeleteSelectedQuoteAsync();
         passToProductionButton.Click += async (_, _) => await PassSelectedToProductionAsync();
-        _backToHubButton.Click += (_, _) =>
-        {
-            _selectedCustomer = null;
-            RefreshActiveQuotesView();
-        };
         _quotesGrid.CellDoubleClick += async (_, _) => await OpenSelectedQuoteDetailsAsync();
 
         actionsPanel.Controls.Add(refreshButton);
         actionsPanel.Controls.Add(newQuoteButton);
-        actionsPanel.Controls.Add(editQuoteButton);
         actionsPanel.Controls.Add(deleteQuoteButton);
         actionsPanel.Controls.Add(passToProductionButton);
-        actionsPanel.Controls.Add(_backToHubButton);
 
         var topContent = new Panel { Dock = DockStyle.Fill };
         topContent.Controls.Add(_quotesGrid);
@@ -206,10 +196,33 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             return;
         }
 
+        var selected = await _quoteRepository.GetQuoteAsync(selectedId);
+        if (selected is null)
+        {
+            _feedback.Text = $"Quote {selectedId} no longer exists.";
+            return;
+        }
+
+        var quoteIdentifier = string.IsNullOrWhiteSpace(selected.LifecycleQuoteId)
+            ? $"Quote #{selected.Id}"
+            : selected.LifecycleQuoteId;
+
+        var confirm = MessageBox.Show(
+            $"Are you sure you want to delete {quoteIdentifier} for {selected.CustomerName}?",
+            "Delete Quote",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning);
+
+        if (confirm != DialogResult.Yes)
+        {
+            _feedback.Text = "Quote deletion canceled.";
+            return;
+        }
+
         try
         {
-            await _quoteRepository.DeleteQuoteAsync(selectedId);
-            _feedback.Text = $"Quote {selectedId} deleted.";
+            await _quoteRepository.DeleteQuoteAsync(selected.Id);
+            _feedback.Text = $"Quote {selected.Id} deleted.";
             await LoadActiveQuotesAsync();
         }
         catch (Exception ex)
@@ -249,6 +262,8 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             SourceQuoteId = fullQuote.Id,
             Status = ProductionJobStatus.Planned
         });
+
+        _selectedCustomer = null;
 
         await _quoteRepository.ResetLastInteractionOnQuoteAsync(fullQuote.CustomerId);
         _feedback.Text = $"Quote {fullQuote.Id} passed to production and archived as won.";
@@ -349,6 +364,16 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
     private void RefreshActiveQuotesView()
     {
+        var customerGroups = _activeQuotesCache
+            .GroupBy(q => NormalizeCustomerName(q.CustomerName))
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        if (string.IsNullOrWhiteSpace(_selectedCustomer) && customerGroups.Count > 0)
+        {
+            _selectedCustomer = customerGroups[0].Key;
+        }
+
         BuildCustomerCards();
 
         var filteredQuotes = string.IsNullOrWhiteSpace(_selectedCustomer)
@@ -356,7 +381,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             : _activeQuotesCache.Where(q => string.Equals(NormalizeCustomerName(q.CustomerName), _selectedCustomer, StringComparison.OrdinalIgnoreCase)).ToArray();
 
         _quotesGrid.DataSource = BuildActiveViewRows(filteredQuotes);
-        _backToHubButton.Visible = !string.IsNullOrWhiteSpace(_selectedCustomer);
         _customerHubLabel.Text = string.IsNullOrWhiteSpace(_selectedCustomer)
             ? "Customer Hub — pick a customer card to drill into quote details"
             : $"Customer Hub / {_selectedCustomer}";
@@ -376,6 +400,8 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         {
             _customerCardsPanel.Controls.Add(CreateCustomerCard(customerGroup.Key, customerGroup.ToList()));
         }
+
+        _customerCardsPanel.Invalidate(true);
 
         _customerCardsPanel.ResumeLayout();
     }
@@ -523,6 +549,11 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         if (_quotesGrid.CurrentRow?.DataBoundItem is QuoteGridRow { IsCustomerHeader: false, QuoteId: int id })
         {
             return id;
+        }
+
+        if (_expiredQuotesGrid.CurrentRow?.DataBoundItem is QuoteGridRow { IsCustomerHeader: false, QuoteId: int expiredId })
+        {
+            return expiredId;
         }
 
         return null;
