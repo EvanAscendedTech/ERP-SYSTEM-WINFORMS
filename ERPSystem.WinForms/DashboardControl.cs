@@ -339,7 +339,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         PopulateWorkflowStages(
             CreateStageCard("Quotes", "In progress", inProgressQuotes.Count, Color.FromArgb(45, 125, 255), "Quotes"),
             CreateStageCard("Purchasing", "Pending", purchasingQueue.Count, Color.FromArgb(176, 131, 72), "Purchasing"),
-            CreateStageCard("Production", "Active jobs", productionInProgress.Count, Color.FromArgb(83, 143, 94), "Production"),
+            CreateStageCard("Manufacturing", "Active jobs", productionInProgress.Count, Color.FromArgb(83, 143, 94), "Production"),
             CreateStageCard("Inspection", "Queued", qualityAndInspectionQueue.Count, Color.FromArgb(205, 98, 184), "Inspection"),
             CreateStageCard("Shipping", "Staged", shippingQueue.Count, Color.FromArgb(95, 175, 193), "Shipping"),
             CreateStageCard("CRM", "Follow-up", completedQuotes.Count, Color.FromArgb(121, 111, 214), "CRM"));
@@ -347,7 +347,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         PopulateQueueGrid(
             ("Quotes", CreateQuoteQueuePanel("Quotes", inProgressQuotes, includeExpiryWarning: false), Color.FromArgb(45, 125, 255)),
             ("Purchasing", CreatePurchasingQueuePanel("Purchasing", purchasingQueue), Color.FromArgb(176, 131, 72)),
-            ("Production", CreateProductionQueuePanel("Production", productionInProgress), Color.FromArgb(83, 143, 94)),
+            ("Manufacturing", CreateProductionQueuePanel("Manufacturing", productionInProgress), Color.FromArgb(83, 143, 94)),
             ("Inspection", CreateInspectionQueuePanel("Inspection", qualityAndInspectionQueue), Color.FromArgb(205, 98, 184)),
             ("Shipping", CreateShippingQueuePanel("Shipping", shippingQueue), Color.FromArgb(95, 175, 193)));
 
@@ -845,7 +845,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         }
         else
         {
-            list.Items.Add("No items to show.");
+            list.Items.Add(CreateEmptyQueueMessage(title));
         }
 
         list.DrawItem += (_, args) => DrawStageTask(list, args);
@@ -912,6 +912,8 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         TextRenderer.DrawText(args.Graphics, text, args.Font, drawBounds, color, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         args.DrawFocusRectangle();
     }
+
+    private static string CreateEmptyQueueMessage(string sectionName) => $"{sectionName}: no jobs currently in queue.";
 
     private static Panel CreateGlanceCard(string metric, string value)
     {
