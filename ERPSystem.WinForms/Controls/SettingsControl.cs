@@ -10,6 +10,9 @@ public class SettingsControl : UserControl, IRealtimeDataControl
     private readonly bool _canManageSettings;
     private readonly Action<AppSettings>? _settingsChanged;
     private readonly Action<AppTheme>? _themeChanged;
+    private readonly Func<Task>? _syncAction;
+    private readonly Func<Task>? _saveAction;
+    private readonly Func<string>? _lastSyncText;
 
     private readonly TextBox _companyNameInput = new() { Width = 320 };
     private readonly NumericUpDown _autoRefreshInput = new() { Minimum = 5, Maximum = 600, Width = 120 };
@@ -19,6 +22,7 @@ public class SettingsControl : UserControl, IRealtimeDataControl
     private readonly Label _feedback = new() { AutoSize = true };
     private readonly Label _themeValueLabel = new() { AutoSize = true, Margin = new Padding(0, 8, 8, 0) };
     private readonly Button _toggleThemeButton = new() { AutoSize = true };
+    private readonly Button _lastSyncButton = new() { AutoSize = true, Enabled = false };
     private readonly UsersControl _usersControl;
 
     private AppSettings _settings = new();
@@ -31,13 +35,19 @@ public class SettingsControl : UserControl, IRealtimeDataControl
         bool canManageSettings,
         Action<AppSettings>? settingsChanged = null,
         AppTheme currentTheme = AppTheme.Dark,
-        Action<AppTheme>? themeChanged = null)
+        Action<AppTheme>? themeChanged = null,
+        Func<Task>? syncAction = null,
+        Func<Task>? saveAction = null,
+        Func<string>? lastSyncText = null)
     {
         _settingsService = settingsService;
         _canManageSettings = canManageSettings;
         _settingsChanged = settingsChanged;
         _currentTheme = currentTheme;
         _themeChanged = themeChanged;
+        _syncAction = syncAction;
+        _saveAction = saveAction;
+        _lastSyncText = lastSyncText;
         Dock = DockStyle.Fill;
 
         _usersControl = new UsersControl(userRepository, currentUser, () => { }) { Dock = DockStyle.Fill };
@@ -56,6 +66,7 @@ public class SettingsControl : UserControl, IRealtimeDataControl
 
         _ = LoadSettingsAsync();
         UpdateThemeControls();
+        UpdateLastSyncButtonText();
     }
 
     private Control BuildGeneralSettingsPanel()
@@ -90,6 +101,29 @@ public class SettingsControl : UserControl, IRealtimeDataControl
         form.Controls.Add(saveButton, 1, 6);
         form.Controls.Add(_feedback, 1, 7);
 
+        var syncButton = new Button { Text = "Sync", AutoSize = true, Enabled = _syncAction is not null };
+        syncButton.Click += async (_, _) => await RunSyncAsync();
+
+        var manualSaveButton = new Button { Text = "Save", AutoSize = true, Enabled = _saveAction is not null };
+        manualSaveButton.Click += async (_, _) => await RunManualSaveAsync();
+
+        _lastSyncButton.Text = GetLastSyncText();
+
+        var actionsRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0),
+            Padding = new Padding(12, 8, 12, 12),
+            Anchor = AnchorStyles.Bottom | AnchorStyles.Right
+        };
+        actionsRow.FlowDirection = FlowDirection.RightToLeft;
+        actionsRow.Controls.Add(_lastSyncButton);
+        actionsRow.Controls.Add(manualSaveButton);
+        actionsRow.Controls.Add(syncButton);
+
         if (!_canManageSettings)
         {
             _feedback.Text = "Settings are read-only. Administrator access required.";
@@ -102,6 +136,7 @@ public class SettingsControl : UserControl, IRealtimeDataControl
             }
         }
 
+        panel.Controls.Add(actionsRow);
         panel.Controls.Add(form);
         return panel;
     }
@@ -124,6 +159,7 @@ public class SettingsControl : UserControl, IRealtimeDataControl
 
         _currentTheme = ParseTheme(_settings.Theme);
         UpdateThemeControls();
+        UpdateLastSyncButtonText();
     }
 
     private void ToggleTheme()
@@ -184,6 +220,38 @@ public class SettingsControl : UserControl, IRealtimeDataControl
         _settingsChanged?.Invoke(_settings);
         _themeChanged?.Invoke(_currentTheme);
         _feedback.Text = "Settings saved.";
+    }
+
+    private async Task RunSyncAsync()
+    {
+        if (_syncAction is null)
+        {
+            return;
+        }
+
+        await _syncAction();
+        UpdateLastSyncButtonText();
+    }
+
+    private async Task RunManualSaveAsync()
+    {
+        if (_saveAction is null)
+        {
+            return;
+        }
+
+        await _saveAction();
+        UpdateLastSyncButtonText();
+    }
+
+    private string GetLastSyncText()
+    {
+        return _lastSyncText?.Invoke() ?? "Last Sync: n/a";
+    }
+
+    private void UpdateLastSyncButtonText()
+    {
+        _lastSyncButton.Text = GetLastSyncText();
     }
 
     public async Task RefreshDataAsync(bool fromFailSafeCheckpoint)

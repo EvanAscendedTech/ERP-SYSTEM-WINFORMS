@@ -219,9 +219,6 @@ public partial class ERPMainForm : Form
             countdown = TimeSpan.Zero;
         }
 
-        var remaining = $"{countdown.Minutes:D2}:{countdown.Seconds:D2}";
-        lblSyncClock.Text = $"Sync in {remaining}";
-        lblSaveClock.Text = $"Save in {remaining} • Last sync {_lastRefreshAt:HH:mm:ss}";
     }
 
     private async Task RefreshOnlineUsersAsync()
@@ -426,6 +423,27 @@ public partial class ERPMainForm : Form
         }
     }
 
+
+    private string GetLastSyncText()
+    {
+        return _lastRefreshAt == DateTime.MinValue
+            ? "Last Sync: Never"
+            : $"Last Sync: {_lastRefreshAt:HH:mm:ss}";
+    }
+
+    private async Task ManualSyncAsync()
+    {
+        await RefreshActiveSectionAsync(fromFailSafeCheckpoint: false);
+        _lastRefreshAt = DateTime.Now;
+        UpdateSyncClockText(DateTime.Now);
+    }
+
+    private async Task ManualSaveAsync()
+    {
+        await ExecuteFailSafeCheckpointAsync();
+        UpdateSyncClockText(DateTime.Now);
+    }
+
     private void OpenDashboardTarget(DashboardNavigationTarget target)
     {
         LoadSection(target.SectionKey);
@@ -511,7 +529,10 @@ public partial class ERPMainForm : Form
                 canManageSettings: true,
                 settingsChanged: ApplySettings,
                 currentTheme: _themeManager.CurrentTheme,
-                themeChanged: OnThemeChanged),
+                themeChanged: OnThemeChanged,
+                syncAction: ManualSyncAsync,
+                saveAction: ManualSaveAsync,
+                lastSyncText: GetLastSyncText),
             _ => BuildPlaceholder("Not Found", "The requested section is not available.")
         };
     }
@@ -571,8 +592,6 @@ public partial class ERPMainForm : Form
         tabStripPanel.BackColor = palette.Panel;
         mainContentPanel.BackColor = palette.Background;
         lblAppTitle.ForeColor = palette.TextPrimary;
-        lblSyncClock.ForeColor = palette.TextSecondary;
-        lblSaveClock.ForeColor = palette.TextSecondary;
         foreach (Control c in onlineUsersPanel.Controls)
         {
             c.ForeColor = palette.TextSecondary;

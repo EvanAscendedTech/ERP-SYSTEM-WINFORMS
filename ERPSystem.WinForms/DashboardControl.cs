@@ -35,14 +35,12 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         Margin = new Padding(0, 0, 0, 12)
     };
 
-    private readonly TableLayoutPanel _workQueues = new()
+    private readonly TabControl _workQueueTabs = new()
     {
         Dock = DockStyle.Fill,
         Margin = new Padding(0),
-        Padding = new Padding(0),
-        AutoScroll = true,
-        ColumnCount = 3,
-        RowCount = 2
+        Padding = new Point(12, 6),
+        SizeMode = TabSizeMode.Normal
     };
 
     private readonly Label _lastUpdatedLabel = new()
@@ -145,7 +143,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
 
         var queueHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 8, 0, 0) };
         queueHost.Controls.Add(queueTitle);
-        queueHost.Controls.Add(_workQueues);
+        queueHost.Controls.Add(_workQueueTabs);
         root.Controls.Add(queueHost, 0, 5);
 
         Controls.Add(root);
@@ -187,13 +185,8 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
 
     private void ConfigureWorkQueueLayout()
     {
-        _workQueues.ColumnStyles.Clear();
-        _workQueues.RowStyles.Clear();
-        _workQueues.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34F));
-        _workQueues.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33F));
-        _workQueues.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33F));
-        _workQueues.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
-        _workQueues.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+        _workQueueTabs.Appearance = TabAppearance.Normal;
+        _workQueueTabs.Multiline = false;
     }
 
     private void PopulateGlanceCards(params (string Metric, string Value)[] cards)
@@ -228,18 +221,26 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
         _workflowStageCards.ResumeLayout();
     }
 
-    private void PopulateQueueGrid(params Control[] cards)
+    private void PopulateQueueGrid(params (string TabTitle, Control Card, Color TabColor)[] cards)
     {
-        _workQueues.SuspendLayout();
-        _workQueues.Controls.Clear();
-        for (var index = 0; index < cards.Length; index++)
+        _workQueueTabs.SuspendLayout();
+        _workQueueTabs.TabPages.Clear();
+
+        foreach (var (tabTitle, card, tabColor) in cards)
         {
-            var row = index / _workQueues.ColumnCount;
-            var col = index % _workQueues.ColumnCount;
-            _workQueues.Controls.Add(cards[index], col, row);
+            var tabPage = new TabPage(tabTitle)
+            {
+                BackColor = ControlPaint.Light(tabColor, 0.94f),
+                ForeColor = tabColor,
+                Padding = new Padding(8)
+            };
+
+            card.Dock = DockStyle.Fill;
+            tabPage.Controls.Add(card);
+            _workQueueTabs.TabPages.Add(tabPage);
         }
 
-        _workQueues.ResumeLayout();
+        _workQueueTabs.ResumeLayout();
     }
 
     private Panel CreateStageCard(string title, string subtitle, int count, Color color, string sectionKey)
@@ -340,11 +341,11 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             CreateStageCard("CRM", "Follow-up", completedQuotes.Count, Color.FromArgb(121, 111, 214), "CRM"));
 
         PopulateQueueGrid(
-            CreateQuoteQueuePanel("Quotes", inProgressQuotes, includeExpiryWarning: false),
-            CreatePurchasingQueuePanel("Purchasing", purchasingQueue),
-            CreateProductionQueuePanel("Production", productionInProgress),
-            CreateInspectionQueuePanel("Inspection", qualityAndInspectionQueue),
-            CreateShippingQueuePanel("Shipping", shippingQueue));
+            ("Quotes", CreateQuoteQueuePanel("Quotes", inProgressQuotes, includeExpiryWarning: false), Color.FromArgb(45, 125, 255)),
+            ("Purchasing", CreatePurchasingQueuePanel("Purchasing", purchasingQueue), Color.FromArgb(176, 131, 72)),
+            ("Production", CreateProductionQueuePanel("Production", productionInProgress), Color.FromArgb(83, 143, 94)),
+            ("Inspection", CreateInspectionQueuePanel("Inspection", qualityAndInspectionQueue), Color.FromArgb(205, 98, 184)),
+            ("Shipping", CreateShippingQueuePanel("Shipping", shippingQueue), Color.FromArgb(95, 175, 193)));
 
         _lastUpdatedLabel.Text = $"Updated {DateTime.Now:g}";
     }
@@ -783,7 +784,7 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
     private Panel CreateQueueCard(string title, IReadOnlyList<StageTaskItem> items, string sectionKey, Color stageColor)
     {
         var panel = CreateBasePanel();
-        panel.Height = 198;
+        panel.MinimumSize = new Size(0, 240);
         panel.BackColor = ControlPaint.Light(stageColor, 0.92f);
         panel.Margin = new Padding(0, 0, 8, 8);
         panel.Paint += (_, args) => PaintBeveledCard(args.Graphics, panel.ClientRectangle, stageColor);
@@ -824,7 +825,8 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             Dock = DockStyle.Fill,
             HorizontalScrollbar = true,
             IntegralHeight = false,
-            DrawMode = DrawMode.OwnerDrawFixed
+            DrawMode = DrawMode.OwnerDrawFixed,
+            ItemHeight = 22
         };
 
         if (items.Count > 0)
@@ -899,7 +901,8 @@ public sealed class DashboardControl : UserControl, IRealtimeDataControl
             ? Color.FromArgb(181, 54, 57)
             : args.ForeColor;
 
-        TextRenderer.DrawText(args.Graphics, text, args.Font, args.Bounds, color, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+        var drawBounds = Rectangle.Inflate(args.Bounds, -2, 0);
+        TextRenderer.DrawText(args.Graphics, text, args.Font, drawBounds, color, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         args.DrawFocusRectangle();
     }
 
