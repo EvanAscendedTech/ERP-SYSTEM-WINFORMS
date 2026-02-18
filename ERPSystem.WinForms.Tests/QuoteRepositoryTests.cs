@@ -56,6 +56,80 @@ public class QuoteRepositoryTests
     }
 
     [Fact]
+    public async Task SaveQuoteAsync_Update_RehydratesMissingBlobStorageFile()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-blob-update-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+        var originalBlobBytes = new byte[] { 7, 8, 9, 10 };
+
+        var quote = new Quote
+        {
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            LifecycleQuoteId = "Q-TEST-UPD",
+            Status = QuoteStatus.InProgress,
+            LineItems =
+            [
+                new QuoteLineItem
+                {
+                    Description = "Widget",
+                    Quantity = 1,
+                    BlobAttachments =
+                    [
+                        new QuoteBlobAttachment
+                        {
+                            BlobType = QuoteBlobType.Technical,
+                            FileName = "widget.pdf",
+                            Extension = ".pdf",
+                            ContentType = ".pdf",
+                            FileSizeBytes = originalBlobBytes.LongLength,
+                            BlobData = originalBlobBytes,
+                            UploadedUtc = DateTime.UtcNow
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var createdId = await repository.SaveQuoteAsync(quote);
+        var loaded = await repository.GetQuoteAsync(createdId);
+        Assert.NotNull(loaded);
+
+        loaded!.LineItems[0].Quantity = 2;
+        await repository.SaveQuoteAsync(loaded);
+
+        await using var connection = new SqliteConnection($"Data Source={dbPath}");
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT StorageRelativePath, BlobData
+            FROM QuoteBlobFiles
+            WHERE QuoteId = $quoteId
+            ORDER BY Id DESC
+            LIMIT 1;";
+        command.Parameters.AddWithValue("$quoteId", createdId);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        var storageRelativePath = reader.GetString(0);
+        var blobData = (byte[])reader[1];
+
+        Assert.NotEmpty(storageRelativePath);
+        Assert.Equal(originalBlobBytes, blobData);
+
+        var storageRoot = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dbPath))!, "ServerBlobStorage", "QuoteBlobs");
+        var storedFile = Path.Combine(storageRoot, storageRelativePath);
+        Assert.True(File.Exists(storedFile));
+        Assert.Equal(originalBlobBytes, await File.ReadAllBytesAsync(storedFile));
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
     public async Task SaveQuoteAsync_PersistsExtendedLineItemFields()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-{Guid.NewGuid():N}.db");
