@@ -67,4 +67,30 @@ public class JobFlowServiceTests
         Assert.Equal(JobFlowService.WorkflowModule.Inspection, service.GetCurrentModule(job.JobNumber));
     }
 
+
+    [Fact]
+    public void TryMoveToModule_BypassValidation_AllowsAdministratorOverride()
+    {
+        var service = new JobFlowService();
+        var job = new ProductionJob { JobNumber = "JOB-6", Status = ProductionJobStatus.Planned };
+
+        var moved = service.TryMoveToModule(job, JobFlowService.WorkflowModule.Inspection, bypassValidation: true, out var message);
+
+        Assert.True(moved);
+        Assert.Contains("Inspection", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(JobFlowService.WorkflowModule.Inspection, service.GetCurrentModule(job.JobNumber));
+    }
+
+    [Fact]
+    public void RemoveJobState_ClearsFlowState()
+    {
+        var service = new JobFlowService();
+        var job = new ProductionJob { JobNumber = "JOB-7", Status = ProductionJobStatus.Completed };
+        service.TryApproveQuality(job, out _);
+
+        service.RemoveJobState(job.JobNumber);
+
+        Assert.Equal(JobFlowService.WorkflowModule.Production, service.GetCurrentModule(job.JobNumber));
+        Assert.False(service.IsQualityApproved(job.JobNumber));
+    }
 }

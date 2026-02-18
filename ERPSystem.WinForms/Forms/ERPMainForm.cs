@@ -629,8 +629,8 @@ public partial class ERPMainForm : Form
             "Purchasing" => new PurchasingControl(_quoteRepo, _prodRepo, _userRepo, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Purchasing")),
             "Production" => new ProductionControl(_prodRepo, _userRepo, _jobFlow, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Production")),
             "CRM" => new CRMControl(_quoteRepo),
-            "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Inspection")),
-            "Shipping" => new ShippingControl(_prodRepo, _jobFlow, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Shipping")),
+            "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, _userRepo, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Inspection")),
+            "Shipping" => new ShippingControl(_prodRepo, _jobFlow, _userRepo, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Shipping")),
             "Settings" => new SettingsControl(
                 _settings,
                 _userRepo,

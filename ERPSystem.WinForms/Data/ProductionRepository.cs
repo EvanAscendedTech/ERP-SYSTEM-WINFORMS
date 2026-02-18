@@ -92,6 +92,21 @@ public class ProductionRepository
                 FOREIGN KEY(Sku) REFERENCES InventoryItems(Sku) ON UPDATE CASCADE ON DELETE RESTRICT
             );
 
+            CREATE TABLE IF NOT EXISTS ArchivedWorkflowJobs (
+                ArchiveId INTEGER PRIMARY KEY AUTOINCREMENT,
+                JobNumber TEXT NOT NULL,
+                ProductName TEXT NOT NULL,
+                PlannedQuantity INTEGER NOT NULL,
+                ProducedQuantity INTEGER NOT NULL,
+                DueDateUtc TEXT NOT NULL,
+                Status INTEGER NOT NULL,
+                SourceQuoteId INTEGER NULL,
+                QuoteLifecycleId TEXT NOT NULL,
+                OriginModule TEXT NOT NULL,
+                ArchivedByUserId TEXT NOT NULL,
+                ArchivedUtc TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS RelationshipChangeLog (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 TableName TEXT NOT NULL,
@@ -196,6 +211,199 @@ public class ProductionRepository
         }
 
         await transaction.CommitAsync();
+    }
+
+
+    public async Task ArchiveAndDeleteJobAsync(string jobNumber, JobFlowService.WorkflowModule originModule, string actorUserId)
+    {
+        var jobs = await GetJobsAsync();
+        var job = jobs.FirstOrDefault(j => string.Equals(j.JobNumber, jobNumber, StringComparison.OrdinalIgnoreCase));
+        if (job is null)
+        {
+            throw new InvalidOperationException($"Job {jobNumber} was not found.");
+        }
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
+
+        await using (var archive = connection.CreateCommand())
+        {
+            archive.Transaction = transaction;
+            archive.CommandText = @"
+                INSERT INTO ArchivedWorkflowJobs (
+                    JobNumber, ProductName, PlannedQuantity, ProducedQuantity, DueDateUtc, Status,
+                    SourceQuoteId, QuoteLifecycleId, OriginModule, ArchivedByUserId, ArchivedUtc)
+                VALUES (
+                    $jobNumber, $productName, $plannedQuantity, $producedQuantity, $dueDateUtc, $status,
+                    $sourceQuoteId, $quoteLifecycleId, $originModule, $archivedByUserId, $archivedUtc);";
+            archive.Parameters.AddWithValue("$jobNumber", job.JobNumber);
+            archive.Parameters.AddWithValue("$productName", job.ProductName);
+            archive.Parameters.AddWithValue("$plannedQuantity", job.PlannedQuantity);
+            archive.Parameters.AddWithValue("$producedQuantity", job.ProducedQuantity);
+            archive.Parameters.AddWithValue("$dueDateUtc", job.DueDateUtc.ToString("O"));
+            archive.Parameters.AddWithValue("$status", (int)job.Status);
+            archive.Parameters.AddWithValue("$sourceQuoteId", job.SourceQuoteId ?? (object)DBNull.Value);
+            archive.Parameters.AddWithValue("$quoteLifecycleId", job.QuoteLifecycleId);
+            archive.Parameters.AddWithValue("$originModule", originModule.ToString());
+            archive.Parameters.AddWithValue("$archivedByUserId", actorUserId);
+            archive.Parameters.AddWithValue("$archivedUtc", DateTime.UtcNow.ToString("O"));
+            await archive.ExecuteNonQueryAsync();
+        }
+
+        await using (var deleteSchedules = connection.CreateCommand())
+        {
+            deleteSchedules.Transaction = transaction;
+            deleteSchedules.CommandText = "DELETE FROM MachineSchedules WHERE AssignedJobNumber = $jobNumber;";
+            deleteSchedules.Parameters.AddWithValue("$jobNumber", job.JobNumber);
+            await deleteSchedules.ExecuteNonQueryAsync();
+        }
+
+        await using (var deleteAssignment = connection.CreateCommand())
+        {
+            deleteAssignment.Transaction = transaction;
+            deleteAssignment.CommandText = "DELETE FROM JobMachineAssignments WHERE JobNumber = $jobNumber;";
+            deleteAssignment.Parameters.AddWithValue("$jobNumber", job.JobNumber);
+            await deleteAssignment.ExecuteNonQueryAsync();
+        }
+
+        await using (var deleteMaterials = connection.CreateCommand())
+        {
+            deleteMaterials.Transaction = transaction;
+            deleteMaterials.CommandText = "DELETE FROM JobMaterialRequirements WHERE JobNumber = $jobNumber;";
+            deleteMaterials.Parameters.AddWithValue("$jobNumber", job.JobNumber);
+            await deleteMaterials.ExecuteNonQueryAsync();
+        }
+
+        await using (var deleteJob = connection.CreateCommand())
+        {
+            deleteJob.Transaction = transaction;
+            deleteJob.CommandText = "DELETE FROM ProductionJobs WHERE JobNumber = $jobNumber;";
+            deleteJob.Parameters.AddWithValue("$jobNumber", job.JobNumber);
+            await deleteJob.ExecuteNonQueryAsync();
+        }
+
+        await transaction.CommitAsync();
+
+        if (_realtimeDataService is not null)
+        {
+            await _realtimeDataService.PublishChangeAsync("ProductionJobs", "archive-delete");
+        }
+    }
+
+    public async Task<IReadOnlyList<ArchivedWorkflowJob>> GetArchivedWorkflowJobsAsync(JobFlowService.WorkflowModule originModule)
+    {
+        var archived = new List<ArchivedWorkflowJob>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT ArchiveId, JobNumber, ProductName, PlannedQuantity, ProducedQuantity, DueDateUtc, Status,
+                   SourceQuoteId, QuoteLifecycleId, OriginModule, ArchivedByUserId, ArchivedUtc
+            FROM ArchivedWorkflowJobs
+            WHERE OriginModule = $originModule
+            ORDER BY ArchivedUtc DESC;";
+        command.Parameters.AddWithValue("$originModule", originModule.ToString());
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            archived.Add(new ArchivedWorkflowJob
+            {
+                ArchiveId = reader.GetInt32(0),
+                JobNumber = reader.GetString(1),
+                ProductName = reader.GetString(2),
+                PlannedQuantity = reader.GetInt32(3),
+                ProducedQuantity = reader.GetInt32(4),
+                DueDateUtc = DateTime.Parse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                Status = (ProductionJobStatus)reader.GetInt32(6),
+                SourceQuoteId = reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                QuoteLifecycleId = reader.IsDBNull(8) ? string.Empty : reader.GetString(8),
+                OriginModule = reader.GetString(9),
+                ArchivedByUserId = reader.GetString(10),
+                ArchivedUtc = DateTime.Parse(reader.GetString(11), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+            });
+        }
+
+        return archived;
+    }
+
+    public async Task<(bool Success, string Message)> RestoreArchivedWorkflowJobAsync(int archiveId)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
+
+        ArchivedWorkflowJob? archived = null;
+        await using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = @"
+                SELECT ArchiveId, JobNumber, ProductName, PlannedQuantity, ProducedQuantity, DueDateUtc, Status,
+                       SourceQuoteId, QuoteLifecycleId, OriginModule, ArchivedByUserId, ArchivedUtc
+                FROM ArchivedWorkflowJobs
+                WHERE ArchiveId = $archiveId;";
+            select.Parameters.AddWithValue("$archiveId", archiveId);
+
+            await using var reader = await select.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+            {
+                archived = new ArchivedWorkflowJob
+                {
+                    ArchiveId = reader.GetInt32(0),
+                    JobNumber = reader.GetString(1),
+                    ProductName = reader.GetString(2),
+                    PlannedQuantity = reader.GetInt32(3),
+                    ProducedQuantity = reader.GetInt32(4),
+                    DueDateUtc = DateTime.Parse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    Status = (ProductionJobStatus)reader.GetInt32(6),
+                    SourceQuoteId = reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                    QuoteLifecycleId = reader.IsDBNull(8) ? string.Empty : reader.GetString(8),
+                    OriginModule = reader.GetString(9),
+                    ArchivedByUserId = reader.GetString(10),
+                    ArchivedUtc = DateTime.Parse(reader.GetString(11), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+                };
+            }
+        }
+
+        if (archived is null)
+        {
+            await transaction.RollbackAsync();
+            return (false, $"Archive entry {archiveId} was not found.");
+        }
+
+        await using (var insert = connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = @"
+                INSERT INTO ProductionJobs (JobNumber, ProductName, PlannedQuantity, ProducedQuantity, DueDateUtc, Status,
+                                            SourceQuoteId, QuoteLifecycleId, StartedUtc, StartedByUserId, CompletedUtc, CompletedByUserId, EstimatedDurationHours)
+                VALUES ($jobNumber, $productName, $plannedQuantity, $producedQuantity, $dueDateUtc, $status,
+                        $sourceQuoteId, $quoteLifecycleId, NULL, NULL, NULL, NULL, 8)
+                ON CONFLICT(JobNumber) DO NOTHING;";
+            insert.Parameters.AddWithValue("$jobNumber", archived.JobNumber);
+            insert.Parameters.AddWithValue("$productName", archived.ProductName);
+            insert.Parameters.AddWithValue("$plannedQuantity", archived.PlannedQuantity);
+            insert.Parameters.AddWithValue("$producedQuantity", archived.ProducedQuantity);
+            insert.Parameters.AddWithValue("$dueDateUtc", archived.DueDateUtc.ToString("O"));
+            insert.Parameters.AddWithValue("$status", (int)archived.Status);
+            insert.Parameters.AddWithValue("$sourceQuoteId", archived.SourceQuoteId ?? (object)DBNull.Value);
+            insert.Parameters.AddWithValue("$quoteLifecycleId", archived.QuoteLifecycleId);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        await using (var delete = connection.CreateCommand())
+        {
+            delete.Transaction = transaction;
+            delete.CommandText = "DELETE FROM ArchivedWorkflowJobs WHERE ArchiveId = $archiveId;";
+            delete.Parameters.AddWithValue("$archiveId", archiveId);
+            await delete.ExecuteNonQueryAsync();
+        }
+
+        await transaction.CommitAsync();
+        return (true, $"Restored job {archived.JobNumber} to {archived.OriginModule}.");
     }
 
     public async Task<IntegrityValidationReport> RunReferentialIntegrityBatchAsync()

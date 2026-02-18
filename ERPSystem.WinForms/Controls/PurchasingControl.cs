@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
+using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms.Controls;
 
@@ -13,7 +14,9 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
     private readonly Action<string> _openSection;
     private readonly string _actorUserId;
     private readonly int _currentUserId;
+    private readonly UserAccount _currentUser;
     private readonly bool _canEdit;
+    private readonly bool _isAdmin;
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _lineItemsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _technicalDocsGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
@@ -24,6 +27,7 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
     private readonly SplitContainer _docsSplit = new() { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
     private readonly TableLayoutPanel _requirementsChecklistPanel = new() { Dock = DockStyle.Fill, AutoScroll = true, ColumnCount = 1, Padding = new Padding(0, 4, 0, 4) };
     private readonly Button _passToProductionButton;
+    private readonly DataGridView _archiveGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Dictionary<string, ChecklistResolution> _checklistState = new(StringComparer.OrdinalIgnoreCase);
     private bool _restoringLayout;
 
@@ -32,10 +36,12 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         _quoteRepository = quoteRepository;
         _productionRepository = productionRepository;
         _userRepository = userRepository;
+        _currentUser = currentUser;
         _actorUserId = currentUser.Username;
         _currentUserId = currentUser.Id;
         _openSection = openSection;
         _canEdit = canEdit;
+        _isAdmin = AuthorizationService.HasRole(currentUser, RoleCatalog.Administrator);
         Dock = DockStyle.Fill;
 
         ConfigureGrids();
@@ -43,12 +49,18 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         var actionsPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
         var refreshButton = new Button { Text = "Refresh Purchasing", AutoSize = true };
         _passToProductionButton = new Button { Text = "Pass to Production", AutoSize = true, Enabled = false };
+        var deleteJobButton = new Button { Text = "Admin: Delete Purchasing Job", AutoSize = true, Visible = _isAdmin };
+        var restoreArchiveButton = new Button { Text = "Admin: Restore Purchasing Archive", AutoSize = true, Visible = _isAdmin };
 
         refreshButton.Click += async (_, _) => await LoadPurchasingQuotesAsync();
         _passToProductionButton.Click += async (_, _) => await PassToProductionAsync();
+        deleteJobButton.Click += async (_, _) => await DeleteSelectedPurchasingQuoteAsync();
+        restoreArchiveButton.Click += async (_, _) => await RestoreSelectedArchivedPurchasingQuoteAsync();
 
         actionsPanel.Controls.Add(refreshButton);
         actionsPanel.Controls.Add(_passToProductionButton);
+        actionsPanel.Controls.Add(deleteJobButton);
+        actionsPanel.Controls.Add(restoreArchiveButton);
 
         ConfigureSafeSplitterDistance(_docsSplit, preferredDistance: 190, panel1MinSize: 130, panel2MinSize: 130);
 
@@ -155,7 +167,13 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
 
         _mainSplit.Panel2.Controls.Add(rightPanel);
 
+        ConfigureArchiveGrid();
+        var archiveHost = new Panel { Dock = DockStyle.Bottom, Height = 180, Padding = new Padding(8) };
+        archiveHost.Controls.Add(_archiveGrid);
+        archiveHost.Controls.Add(new Label { Text = "Purchasing Archive (viewable by all, restore is Administrator only)", Dock = DockStyle.Top, Height = 24, Font = new Font(Font, FontStyle.Bold) });
+
         Controls.Add(_mainSplit);
+        Controls.Add(archiveHost);
         Controls.Add(actionsPanel);
         Controls.Add(_feedback);
 
@@ -288,6 +306,15 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
         return (int)Math.Round(availableForPanels * clampedProportion);
     }
 
+    private void ConfigureArchiveGrid()
+    {
+        _archiveGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Archive #", DataPropertyName = nameof(ArchivedPurchasingQuote.ArchiveId), Width = 80 });
+        _archiveGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Quote #", DataPropertyName = nameof(ArchivedPurchasingQuote.OriginalQuoteId), Width = 90 });
+        _archiveGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Lifecycle", DataPropertyName = nameof(ArchivedPurchasingQuote.LifecycleQuoteId), Width = 120 });
+        _archiveGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Customer", DataPropertyName = nameof(ArchivedPurchasingQuote.CustomerName), Width = 220 });
+        _archiveGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Archived (UTC)", DataPropertyName = nameof(ArchivedPurchasingQuote.ArchivedUtc), Width = 160 });
+    }
+
     private void ConfigureGrids()
     {
         _quotesGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Quote #", DataPropertyName = nameof(Quote.Id), Width = 80 });
@@ -321,6 +348,9 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
 
         var queue = quotes.Where(q => !inProductionQuoteIds.Contains(q.Id)).ToList();
         _quotesGrid.DataSource = queue;
+        var archived = await _quoteRepository.GetArchivedPurchasingQuotesAsync();
+        _archiveGrid.DataSource = archived.ToList();
+
         _feedback.Text = $"Loaded {queue.Count} quotes in Purchasing.";
 
         if (_quotesGrid.Rows.Count > 0)
@@ -814,6 +844,68 @@ public class PurchasingControl : UserControl, IRealtimeDataControl
 
         await LoadPurchasingQuotesAsync();
         _openSection("Production");
+    }
+
+    private async Task DeleteSelectedPurchasingQuoteAsync()
+    {
+        if (!_isAdmin)
+        {
+            _feedback.Text = "Only Administrators can delete purchasing jobs.";
+            return;
+        }
+
+        var quote = GetSelectedQuote();
+        if (quote is null)
+        {
+            _feedback.Text = "Select a Purchasing quote first.";
+            return;
+        }
+
+        await _quoteRepository.ArchiveAndDeletePurchasingQuoteAsync(quote.Id, _actorUserId);
+        await _userRepository.WriteAuditLogAsync(new AuditLogEntry
+        {
+            OccurredUtc = DateTime.UtcNow,
+            Username = _actorUserId,
+            RoleSnapshot = UserManagementRepository.BuildRoleSnapshot(_currentUser),
+            Module = "Purchasing",
+            Action = "Deleted purchasing job",
+            Details = $"Deleted purchasing quote {quote.Id}; archived to Purchasing archive."
+        });
+
+        _feedback.Text = $"Deleted and archived purchasing quote {quote.Id}.";
+        await LoadPurchasingQuotesAsync();
+    }
+
+    private async Task RestoreSelectedArchivedPurchasingQuoteAsync()
+    {
+        if (!_isAdmin)
+        {
+            _feedback.Text = "Only Administrators can restore purchasing archive entries.";
+            return;
+        }
+
+        if (_archiveGrid.CurrentRow?.DataBoundItem is not ArchivedPurchasingQuote archived)
+        {
+            _feedback.Text = "Select an archived purchasing item first.";
+            return;
+        }
+
+        var result = await _quoteRepository.RestoreArchivedPurchasingQuoteAsync(archived.ArchiveId);
+        if (result.Success)
+        {
+            await _userRepository.WriteAuditLogAsync(new AuditLogEntry
+            {
+                OccurredUtc = DateTime.UtcNow,
+                Username = _actorUserId,
+                RoleSnapshot = UserManagementRepository.BuildRoleSnapshot(_currentUser),
+                Module = "Purchasing",
+                Action = "Restored archived purchasing job",
+                Details = $"Restored purchasing quote {archived.OriginalQuoteId} from Purchasing archive."
+            });
+        }
+
+        _feedback.Text = result.Message;
+        await LoadPurchasingQuotesAsync();
     }
 
     private async Task OpenBlobFromGridAsync(DataGridView grid, int rowIndex)
