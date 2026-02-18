@@ -14,7 +14,7 @@ public class QuoteDraftForm : Form
     private const int MaximumLineItemHeight = 460;
     private const int MinimumBlobAreaWidth = 170;
     private const int MinimumBlobAreaHeight = 70;
-    private const int FixedBlobAreaHeight = 110;
+    private const int FixedBlobAreaHeight = 150;
     private const int MinimumTextBoxHeight = 24;
     private const int StandardGap = 8;
     private readonly QuoteRepository _quoteRepository;
@@ -214,17 +214,18 @@ public class QuoteDraftForm : Form
         var cardPanel = new Panel
         {
             AutoSize = false,
-            BorderStyle = BorderStyle.FixedSingle,
+            BorderStyle = BorderStyle.None,
             Margin = new Padding(0, 0, 0, 6),
             Padding = new Padding(6),
-            BackColor = index % 2 == 0 ? Color.FromArgb(245, 248, 252) : Color.FromArgb(234, 243, 250),
+            BackColor = index % 2 == 0 ? Color.FromArgb(245, 245, 245) : Color.FromArgb(232, 232, 232),
             MinimumSize = new Size(MinimumLineItemWidth, MinimumLineItemHeight),
             MaximumSize = new Size(int.MaxValue, MaximumLineItemHeight),
             Height = DefaultLineItemHeight
         };
         cardPanel.SuspendLayout();
 
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty, Padding = Padding.Empty };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty, Padding = Padding.Empty };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
@@ -266,6 +267,7 @@ public class QuoteDraftForm : Form
         removeButton.Click += async (_, _) => await RemoveLineItemAsync(model, cardPanel);
         headerRow.Controls.Add(title, 0, 0);
         headerRow.Controls.Add(removeButton, 1, 0);
+        layout.Controls.Add(headerRow, 0, 0);
 
         var detailsGrid = new TableLayoutPanel { AutoSize = true, ColumnCount = 3, Dock = DockStyle.Top, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 0, 0, 4) };
         detailsGrid.RowCount = 1;
@@ -340,13 +342,12 @@ public class QuoteDraftForm : Form
             (QuoteBlobType.PostOpPricing, "Post-Operation")
         }, model);
 
-        contentGrid.Controls.Add(headerRow, 0, 0);
-        contentGrid.Controls.Add(BuildCompactSection("Details", detailsGrid), 0, 1);
-        contentGrid.Controls.Add(BuildCompactSection("Costs", costsRow), 0, 2);
-        contentGrid.Controls.Add(BuildCompactSection("Production Flags", productionFlagsGrid), 0, 3);
-        contentGrid.Controls.Add(BuildCompactSection("Attachments", attachmentsTabs.TabControl), 0, 4);
+        contentGrid.Controls.Add(BuildCompactSection("Details", detailsGrid), 0, 0);
+        contentGrid.Controls.Add(BuildCompactSection("Costs", costsRow), 0, 1);
+        contentGrid.Controls.Add(BuildCompactSection("Production Flags", productionFlagsGrid), 0, 2);
+        contentGrid.Controls.Add(BuildCompactSection("Attachments", attachmentsTabs.TabControl), 0, 3);
         contentScroller.Controls.Add(contentGrid);
-        layout.Controls.Add(contentScroller, 0, 0);
+        layout.Controls.Add(contentScroller, 0, 1);
 
         var footer = new FlowLayoutPanel
         {
@@ -358,7 +359,7 @@ public class QuoteDraftForm : Form
             Padding = Padding.Empty
         };
         footer.Controls.Add(new Label { Text = "Live totals update on edit", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 8, 0, 0) });
-        layout.Controls.Add(footer, 0, 1);
+        layout.Controls.Add(footer, 0, 2);
 
         cardPanel.Controls.Add(layout);
         layout.ResumeLayout(true);
@@ -754,7 +755,7 @@ public class QuoteDraftForm : Form
         for (var i = 0; i < _lineItemCards.Count; i++)
         {
             _lineItemCards[i].Title.Text = $"Line Item {i + 1}";
-            _lineItemCards[i].Container.BackColor = i % 2 == 0 ? Color.FromArgb(245, 248, 252) : Color.FromArgb(234, 243, 250);
+            _lineItemCards[i].Container.BackColor = i % 2 == 0 ? Color.FromArgb(245, 245, 245) : Color.FromArgb(232, 232, 232);
         }
     }
 
