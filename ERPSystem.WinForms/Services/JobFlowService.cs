@@ -163,6 +163,66 @@ public class JobFlowService
         return true;
     }
 
+
+    public bool TryMoveToModule(ProductionJob job, WorkflowModule targetModule, bool bypassValidation, out string message)
+    {
+        if (!bypassValidation)
+        {
+            if (targetModule == WorkflowModule.Inspection)
+            {
+                return TryMoveToInspectionFromProduction(job, out message);
+            }
+
+            if (targetModule == WorkflowModule.Production)
+            {
+                var current = GetCurrentModule(job.JobNumber);
+                if (current == WorkflowModule.Production)
+                {
+                    message = $"Job {job.JobNumber} is already in Production.";
+                    return false;
+                }
+
+                _moduleByJobNumber[job.JobNumber] = WorkflowModule.Production;
+                message = $"Job {job.JobNumber} moved to Production.";
+                return true;
+            }
+        }
+
+        _moduleByJobNumber[job.JobNumber] = targetModule;
+        if (targetModule == WorkflowModule.Production)
+        {
+            _qualityApproved.Remove(job.JobNumber);
+            _inspectionPassed.Remove(job.JobNumber);
+            _inspectionRequested.Remove(job.JobNumber);
+            _shippingCompletedUtc.Remove(job.JobNumber);
+        }
+        else if (targetModule == WorkflowModule.Inspection)
+        {
+            _qualityApproved.Add(job.JobNumber);
+            _inspectionPassed.Remove(job.JobNumber);
+            _inspectionRequested.Remove(job.JobNumber);
+            _shippingCompletedUtc.Remove(job.JobNumber);
+        }
+        else if (targetModule == WorkflowModule.Shipping)
+        {
+            _qualityApproved.Add(job.JobNumber);
+            _inspectionPassed.Add(job.JobNumber);
+            _inspectionRequested.Remove(job.JobNumber);
+        }
+
+        message = $"Job {job.JobNumber} moved to {targetModule}.";
+        return true;
+    }
+
+    public void RemoveJobState(string jobNumber)
+    {
+        _qualityApproved.Remove(jobNumber);
+        _inspectionPassed.Remove(jobNumber);
+        _inspectionRequested.Remove(jobNumber);
+        _shippingCompletedUtc.Remove(jobNumber);
+        _moduleByJobNumber.Remove(jobNumber);
+    }
+
     public bool TryMarkShipped(ProductionJob job, out string message)
     {
         if (!_inspectionPassed.Contains(job.JobNumber))

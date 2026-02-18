@@ -24,6 +24,7 @@ public class ProductionControl : UserControl, IRealtimeDataControl
     private readonly ListBox _machinesList = new() { Dock = DockStyle.Fill, AllowDrop = true };
     private readonly Panel _scheduleCanvas = new() { Dock = DockStyle.Fill, BackColor = Color.WhiteSmoke };
     private readonly SplitContainer _productionSplit = new() { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 320 };
+    private readonly DataGridView _archiveGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
 
     private readonly DataGridView _machinesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Button _addMachineButton = new() { Text = "Add New Machine", AutoSize = true };
@@ -100,8 +101,10 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         var completeButton = new Button { Text = "Complete Production", AutoSize = true, Enabled = _isProductionManager };
         var requestInspectionButton = new Button { Text = "Request Inspection", AutoSize = true, Enabled = _isProductionEmployee && !_isProductionManager, Visible = _isProductionEmployee && !_isProductionManager };
         var openDetailsButton = new Button { Text = "Open Technical Documentation", AutoSize = true };
-        var advanceButton = new Button { Text = "Done → Inspection", AutoSize = true, Enabled = _isProductionManager };
-        var rewindButton = new Button { Text = "Return to Queue", AutoSize = true, Enabled = _isProductionManager };
+        var advanceButton = new Button { Text = _isAdmin ? "Admin Override: Move to Inspection" : "Done → Inspection", AutoSize = true, Enabled = _isProductionManager };
+        var rewindButton = new Button { Text = _isAdmin ? "Admin Override: Return to Purchasing" : "Return to Queue", AutoSize = true, Enabled = _isProductionManager };
+        var deleteButton = new Button { Text = "Admin: Delete Job", AutoSize = true, Visible = _isAdmin };
+        var restoreButton = new Button { Text = "Admin: Restore from Production Archive", AutoSize = true, Visible = _isAdmin };
 
         refreshButton.Click += async (_, _) => await SafeUiActionAsync(() => RefreshDataAsync(false));
         startButton.Click += async (_, _) => await SafeUiActionAsync(StartSelectedJobAsync);
@@ -110,6 +113,8 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         openDetailsButton.Click += (_, _) => OpenSelectedProductionWindow();
         advanceButton.Click += async (_, _) => await SafeUiActionAsync(() => MoveSelectedToInspectionAsync(isManagerAction: true));
         rewindButton.Click += async (_, _) => await SafeUiActionAsync(() => AdminMoveSelectedAsync(forward: false));
+        deleteButton.Click += async (_, _) => await SafeUiActionAsync(DeleteSelectedJobAsync);
+        restoreButton.Click += async (_, _) => await SafeUiActionAsync(RestoreSelectedArchivedJobAsync);
 
         actionsPanel.Controls.Add(refreshButton);
         actionsPanel.Controls.Add(startButton);
@@ -118,6 +123,8 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         actionsPanel.Controls.Add(openDetailsButton);
         actionsPanel.Controls.Add(advanceButton);
         actionsPanel.Controls.Add(rewindButton);
+        actionsPanel.Controls.Add(deleteButton);
+        actionsPanel.Controls.Add(restoreButton);
 
         var topSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 470 };
         var jobsPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8) };
@@ -146,7 +153,13 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         _machinesList.DragEnter += MachinesListOnDragEnter;
         _machinesList.DragDrop += async (_, e) => await MachinesListOnDragDropAsync(e);
 
+        var archivePanel = new Panel { Dock = DockStyle.Bottom, Height = 190, Padding = new Padding(8) };
+        ConfigureArchiveGrid();
+        archivePanel.Controls.Add(_archiveGrid);
+        archivePanel.Controls.Add(new Label { Text = "Production Archive (visible to all, restore is Administrator only)", Dock = DockStyle.Top, Height = 24, Font = new Font("Segoe UI", 9F, FontStyle.Bold) });
+
         productionTab.Controls.Add(_productionSplit);
+        productionTab.Controls.Add(archivePanel);
         _tabs.TabPages.Add(productionTab);
     }
 
@@ -215,6 +228,15 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         };
     }
 
+    private void ConfigureArchiveGrid()
+    {
+        _archiveGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Archive #", DataPropertyName = nameof(ArchivedWorkflowJob.ArchiveId), Width = 80 });
+        _archiveGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Job #", DataPropertyName = nameof(ArchivedWorkflowJob.JobNumber), Width = 120 });
+        _archiveGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Product", DataPropertyName = nameof(ArchivedWorkflowJob.ProductName), Width = 220 });
+        _archiveGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Archived By", DataPropertyName = nameof(ArchivedWorkflowJob.ArchivedByUserId), Width = 120 });
+        _archiveGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Archived (UTC)", DataPropertyName = nameof(ArchivedWorkflowJob.ArchivedUtc), Width = 160 });
+    }
+
     private async Task LoadJobsAsync()
     {
         var jobs = await _productionRepository.GetJobsAsync();
@@ -238,6 +260,9 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         var unassigned = queuedJobs.Where(job => !assigned.Contains(job.JobNumber)).ToList();
         _unassignedJobsList.DataSource = unassigned;
         _unassignedJobsList.DisplayMember = nameof(ProductionJob.JobNumber);
+
+        var archived = await _productionRepository.GetArchivedWorkflowJobsAsync(JobFlowService.WorkflowModule.Production);
+        _archiveGrid.DataSource = archived.ToList();
 
         _feedback.Text = $"Loaded {queuedJobs.Count} production jobs in queue.";
     }
@@ -573,6 +598,19 @@ public class ProductionControl : UserControl, IRealtimeDataControl
 
         if (moved && isManagerAction)
         {
+            if (_isAdmin)
+            {
+                await _userRepository.WriteAuditLogAsync(new AuditLogEntry
+                {
+                    OccurredUtc = DateTime.UtcNow,
+                    Username = _currentUser.Username,
+                    RoleSnapshot = UserManagementRepository.BuildRoleSnapshot(_currentUser),
+                    Module = "Production",
+                    Action = "Admin module override",
+                    Details = $"Moved job {selected.JobNumber} from Production to Inspection."
+                });
+            }
+
             _openSection("Inspection");
         }
     }
@@ -620,9 +658,21 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         }
 
         string message;
-        var moved = forward
-            ? _flowService.TryAdvanceModule(selected, out message)
-            : _flowService.TryRewindModule(selected, out message);
+        bool moved;
+        if (_isAdmin)
+        {
+            moved = _flowService.TryMoveToModule(
+                selected,
+                forward ? JobFlowService.WorkflowModule.Inspection : JobFlowService.WorkflowModule.Production,
+                bypassValidation: true,
+                out message);
+        }
+        else
+        {
+            moved = forward
+                ? _flowService.TryAdvanceModule(selected, out message)
+                : _flowService.TryRewindModule(selected, out message);
+        }
 
         _feedback.Text = message;
         await LoadJobsAsync();
@@ -632,11 +682,93 @@ public class ProductionControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        var currentModule = _flowService.GetCurrentModule(selected.JobNumber);
-        if (currentModule != JobFlowService.WorkflowModule.Production)
+        await _userRepository.WriteAuditLogAsync(new AuditLogEntry
         {
-            _openSection(currentModule.ToString());
+            OccurredUtc = DateTime.UtcNow,
+            Username = _currentUser.Username,
+            RoleSnapshot = UserManagementRepository.BuildRoleSnapshot(_currentUser),
+            Module = "Production",
+            Action = "Admin module override",
+            Details = $"Moved job {selected.JobNumber} to {(forward ? "Inspection" : "Purchasing")} from Production."
+        });
+
+        if (forward)
+        {
+            _openSection("Inspection");
         }
+        else
+        {
+            _openSection("Purchasing");
+        }
+    }
+
+    private async Task DeleteSelectedJobAsync()
+    {
+        if (!_isAdmin)
+        {
+            _feedback.Text = "Only Administrators can delete production jobs.";
+            return;
+        }
+
+        if (_jobsGrid.CurrentRow?.DataBoundItem is not ProductionJob selected)
+        {
+            _feedback.Text = "Select a job first.";
+            return;
+        }
+
+        await _productionRepository.ArchiveAndDeleteJobAsync(selected.JobNumber, JobFlowService.WorkflowModule.Production, _currentUser.Username);
+        _flowService.RemoveJobState(selected.JobNumber);
+        await _userRepository.WriteAuditLogAsync(new AuditLogEntry
+        {
+            OccurredUtc = DateTime.UtcNow,
+            Username = _currentUser.Username,
+            RoleSnapshot = UserManagementRepository.BuildRoleSnapshot(_currentUser),
+            Module = "Production",
+            Action = "Deleted job",
+            Details = $"Deleted production job {selected.JobNumber}; archived to Production archive."
+        });
+
+        _feedback.Text = $"Deleted and archived job {selected.JobNumber}.";
+        await LoadJobsAsync();
+    }
+
+    private async Task RestoreSelectedArchivedJobAsync()
+    {
+        if (!_isAdmin)
+        {
+            _feedback.Text = "Only Administrators can restore from archive.";
+            return;
+        }
+
+        if (_archiveGrid.CurrentRow?.DataBoundItem is not ArchivedWorkflowJob archived)
+        {
+            _feedback.Text = "Select an archived job first.";
+            return;
+        }
+
+        var result = await _productionRepository.RestoreArchivedWorkflowJobAsync(archived.ArchiveId);
+        if (result.Success)
+        {
+            var restored = new ProductionJob
+            {
+                JobNumber = archived.JobNumber,
+                Status = archived.Status
+            };
+            _flowService.TryMoveToModule(restored, JobFlowService.WorkflowModule.Production, bypassValidation: true, out _);
+
+            await _userRepository.WriteAuditLogAsync(new AuditLogEntry
+            {
+                OccurredUtc = DateTime.UtcNow,
+                Username = _currentUser.Username,
+                RoleSnapshot = UserManagementRepository.BuildRoleSnapshot(_currentUser),
+                Module = "Production",
+                Action = "Restored archived job",
+                Details = $"Restored production job {archived.JobNumber} from Production archive."
+            });
+        }
+
+        _feedback.Text = result.Message;
+        await LoadJobsAsync();
     }
 
     private async Task SafeUiActionAsync(Func<Task> action)

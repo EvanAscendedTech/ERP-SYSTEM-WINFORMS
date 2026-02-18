@@ -166,6 +166,17 @@ public class QuoteRepository
                 ArchivedUtc TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS ArchivedPurchasingQuotes (
+                ArchiveId INTEGER PRIMARY KEY AUTOINCREMENT,
+                OriginalQuoteId INTEGER NOT NULL,
+                LifecycleQuoteId TEXT NOT NULL DEFAULT '',
+                CustomerName TEXT NOT NULL,
+                Status INTEGER NOT NULL,
+                ArchivedByUserId TEXT NOT NULL,
+                ArchivedUtc TEXT NOT NULL
+            );
+
+
             CREATE TABLE IF NOT EXISTS ArchivedQuoteLineItems (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ArchiveId INTEGER NOT NULL,
@@ -1277,6 +1288,204 @@ public class QuoteRepository
             BlobData = blobData,
             UploadedUtc = uploadedUtc
         };
+    }
+
+
+    public async Task ArchiveAndDeletePurchasingQuoteAsync(int quoteId, string actorUserId)
+    {
+        var quote = await GetQuoteAsync(quoteId);
+        if (quote is null)
+        {
+            throw new InvalidOperationException($"Quote {quoteId} was not found.");
+        }
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
+
+        await using (var archive = connection.CreateCommand())
+        {
+            archive.Transaction = transaction;
+            archive.CommandText = @"
+                INSERT INTO ArchivedPurchasingQuotes (
+                    OriginalQuoteId,
+                    LifecycleQuoteId,
+                    CustomerName,
+                    Status,
+                    ArchivedByUserId,
+                    ArchivedUtc)
+                VALUES (
+                    $quoteId,
+                    $lifecycleQuoteId,
+                    $customerName,
+                    $status,
+                    $archivedByUserId,
+                    $archivedUtc);";
+            archive.Parameters.AddWithValue("$quoteId", quote.Id);
+            archive.Parameters.AddWithValue("$lifecycleQuoteId", quote.LifecycleQuoteId ?? string.Empty);
+            archive.Parameters.AddWithValue("$customerName", quote.CustomerName);
+            archive.Parameters.AddWithValue("$status", (int)quote.Status);
+            archive.Parameters.AddWithValue("$archivedByUserId", actorUserId);
+            archive.Parameters.AddWithValue("$archivedUtc", DateTime.UtcNow.ToString("O"));
+            await archive.ExecuteNonQueryAsync();
+        }
+
+        await DeleteStoredFilesForQuoteAsync(connection, transaction, quoteId);
+
+        await using (var deleteBlobFiles = connection.CreateCommand())
+        {
+            deleteBlobFiles.Transaction = transaction;
+            deleteBlobFiles.CommandText = @"
+                DELETE FROM QuoteBlobFiles
+                WHERE QuoteId = $id
+                   OR LineItemId IN (SELECT Id FROM QuoteLineItems WHERE QuoteId = $id);";
+            deleteBlobFiles.Parameters.AddWithValue("$id", quoteId);
+            await deleteBlobFiles.ExecuteNonQueryAsync();
+        }
+
+        await using (var deleteLineItemFiles = connection.CreateCommand())
+        {
+            deleteLineItemFiles.Transaction = transaction;
+            deleteLineItemFiles.CommandText = @"
+                DELETE FROM LineItemFiles
+                WHERE LineItemId IN (SELECT Id FROM QuoteLineItems WHERE QuoteId = $id);";
+            deleteLineItemFiles.Parameters.AddWithValue("$id", quoteId);
+            await deleteLineItemFiles.ExecuteNonQueryAsync();
+        }
+
+        await using (var deleteLineItems = connection.CreateCommand())
+        {
+            deleteLineItems.Transaction = transaction;
+            deleteLineItems.CommandText = "DELETE FROM QuoteLineItems WHERE QuoteId = $id;";
+            deleteLineItems.Parameters.AddWithValue("$id", quoteId);
+            await deleteLineItems.ExecuteNonQueryAsync();
+        }
+
+        await using (var deleteAuditEvents = connection.CreateCommand())
+        {
+            deleteAuditEvents.Transaction = transaction;
+            deleteAuditEvents.CommandText = "DELETE FROM QuoteAuditEvents WHERE QuoteId = $id;";
+            deleteAuditEvents.Parameters.AddWithValue("$id", quoteId);
+            await deleteAuditEvents.ExecuteNonQueryAsync();
+        }
+
+        await using (var deleteQuote = connection.CreateCommand())
+        {
+            deleteQuote.Transaction = transaction;
+            deleteQuote.CommandText = "DELETE FROM Quotes WHERE Id = $id;";
+            deleteQuote.Parameters.AddWithValue("$id", quoteId);
+            await deleteQuote.ExecuteNonQueryAsync();
+        }
+
+        await transaction.CommitAsync();
+
+        if (_realtimeDataService is not null)
+        {
+            await _realtimeDataService.PublishChangeAsync("Quotes", "archive-delete-purchasing");
+        }
+    }
+
+    public async Task<IReadOnlyList<ArchivedPurchasingQuote>> GetArchivedPurchasingQuotesAsync()
+    {
+        var archived = new List<ArchivedPurchasingQuote>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT ArchiveId, OriginalQuoteId, LifecycleQuoteId, CustomerName, Status, ArchivedByUserId, ArchivedUtc
+            FROM ArchivedPurchasingQuotes
+            ORDER BY ArchivedUtc DESC;";
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            archived.Add(new ArchivedPurchasingQuote
+            {
+                ArchiveId = reader.GetInt32(0),
+                OriginalQuoteId = reader.GetInt32(1),
+                LifecycleQuoteId = reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+                CustomerName = reader.GetString(3),
+                Status = (QuoteStatus)reader.GetInt32(4),
+                ArchivedByUserId = reader.GetString(5),
+                ArchivedUtc = DateTime.Parse(reader.GetString(6), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+            });
+        }
+
+        return archived;
+    }
+
+    public async Task<(bool Success, string Message)> RestoreArchivedPurchasingQuoteAsync(int archiveId)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
+
+        ArchivedPurchasingQuote? archived = null;
+        await using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = @"
+                SELECT ArchiveId, OriginalQuoteId, LifecycleQuoteId, CustomerName, Status, ArchivedByUserId, ArchivedUtc
+                FROM ArchivedPurchasingQuotes
+                WHERE ArchiveId = $archiveId;";
+            select.Parameters.AddWithValue("$archiveId", archiveId);
+
+            await using var reader = await select.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+            {
+                archived = new ArchivedPurchasingQuote
+                {
+                    ArchiveId = reader.GetInt32(0),
+                    OriginalQuoteId = reader.GetInt32(1),
+                    LifecycleQuoteId = reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+                    CustomerName = reader.GetString(3),
+                    Status = (QuoteStatus)reader.GetInt32(4),
+                    ArchivedByUserId = reader.GetString(5),
+                    ArchivedUtc = DateTime.Parse(reader.GetString(6), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+                };
+            }
+        }
+
+        if (archived is null)
+        {
+            await transaction.RollbackAsync();
+            return (false, $"Archive entry {archiveId} was not found.");
+        }
+
+        await using (var restore = connection.CreateCommand())
+        {
+            restore.Transaction = transaction;
+            restore.CommandText = @"
+                INSERT INTO Quotes (
+                    Id, CustomerId, CustomerName, ShopHourlyRateSnapshot, MasterTotal, LifecycleQuoteId, Status,
+                    CreatedUtc, LastUpdatedUtc, WonUtc, WonByUserId, LostUtc, LostByUserId,
+                    ExpiredUtc, ExpiredByUserId, CompletedUtc, CompletedByUserId, PassedToPurchasingUtc, PassedToPurchasingByUserId)
+                VALUES (
+                    $id, 0, $customerName, 0, 0, $lifecycleQuoteId, $status,
+                    $now, $now, NULL, NULL, NULL, NULL,
+                    NULL, NULL, NULL, NULL, $now, $actor)
+                ON CONFLICT(Id) DO NOTHING;";
+            restore.Parameters.AddWithValue("$id", archived.OriginalQuoteId);
+            restore.Parameters.AddWithValue("$customerName", archived.CustomerName);
+            restore.Parameters.AddWithValue("$lifecycleQuoteId", archived.LifecycleQuoteId);
+            restore.Parameters.AddWithValue("$status", (int)QuoteStatus.Won);
+            restore.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            restore.Parameters.AddWithValue("$actor", archived.ArchivedByUserId);
+            await restore.ExecuteNonQueryAsync();
+        }
+
+        await using (var delete = connection.CreateCommand())
+        {
+            delete.Transaction = transaction;
+            delete.CommandText = "DELETE FROM ArchivedPurchasingQuotes WHERE ArchiveId = $archiveId;";
+            delete.Parameters.AddWithValue("$archiveId", archiveId);
+            await delete.ExecuteNonQueryAsync();
+        }
+
+        await transaction.CommitAsync();
+        return (true, $"Restored purchasing quote {archived.OriginalQuoteId}.");
     }
 
     public async Task DeleteQuoteAsync(int quoteId)
