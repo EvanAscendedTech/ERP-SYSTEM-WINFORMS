@@ -112,10 +112,10 @@ public class UsersControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        var selectedRoles = Prompt.SelectRoles("Assign role(s)", RoleCatalog.AccountLevels, new[] { RoleCatalog.Production });
+        var selectedRoles = Prompt.SelectRoles("Assign role(s)", RoleCatalog.AccountLevels, new[] { RoleCatalog.ProductionEmployee });
         if (selectedRoles.Count == 0)
         {
-            selectedRoles.Add(RoleCatalog.Production);
+            selectedRoles.Add(RoleCatalog.ProductionEmployee);
         }
 
         await _userRepository.SaveUserAsync(new UserAccount
@@ -205,6 +205,9 @@ public class UsersControl : UserControl, IRealtimeDataControl
     private static List<RoleDefinition> BuildRoles(IEnumerable<string> roleNames)
     {
         return roleNames
+            .Select(RoleCatalog.NormalizeRoleName)
+            .Where(role => role is not null)
+            .Select(role => role!)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(AuthorizationService.BuildRole)
             .ToList();

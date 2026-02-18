@@ -386,12 +386,12 @@ public partial class ERPMainForm : Form
     private void BuildRolePreviewProfiles()
     {
         _rolePreviewUsers.Clear();
-        _rolePreviewUsers[RoleCatalog.Admin] = BuildPreviewUser(RoleCatalog.Admin);
-        _rolePreviewUsers[RoleCatalog.Inspector] = BuildPreviewUser(RoleCatalog.Inspector);
-        _rolePreviewUsers[RoleCatalog.ShippingReceiving] = BuildPreviewUser(RoleCatalog.ShippingReceiving);
-        _rolePreviewUsers[RoleCatalog.Production] = BuildPreviewUser(RoleCatalog.Production);
-        _rolePreviewUsers[RoleCatalog.Purchasing] = BuildPreviewUser(RoleCatalog.Purchasing);
-        _rolePreviewUsers["Quoting"] = BuildPreviewUser(RoleCatalog.Purchasing);
+        _rolePreviewUsers[RoleCatalog.Administrator] = BuildPreviewUser(RoleCatalog.Administrator);
+        _rolePreviewUsers[RoleCatalog.Inspection] = BuildPreviewUser(RoleCatalog.Inspection);
+        _rolePreviewUsers[RoleCatalog.Shipping] = BuildPreviewUser(RoleCatalog.Shipping);
+        _rolePreviewUsers[RoleCatalog.ProductionEmployee] = BuildPreviewUser(RoleCatalog.ProductionEmployee);
+        _rolePreviewUsers[RoleCatalog.Purchaser] = BuildPreviewUser(RoleCatalog.Purchaser);
+        _rolePreviewUsers[RoleCatalog.ProductionManager] = BuildPreviewUser(RoleCatalog.ProductionManager);
     }
 
     private UserAccount BuildPreviewUser(string roleName)
@@ -413,7 +413,7 @@ public partial class ERPMainForm : Form
 
     private void ConfigureRolePreviewSelector()
     {
-        var isAdmin = _currentUser.Roles.Any(role => role.Name.Equals(RoleCatalog.Admin, StringComparison.OrdinalIgnoreCase));
+        var isAdmin = AuthorizationService.HasRole(_currentUser, RoleCatalog.Administrator);
         lblRolePreview.Visible = isAdmin;
         cboRolePreview.Visible = isAdmin;
 
@@ -423,8 +423,8 @@ public partial class ERPMainForm : Form
         }
 
         cboRolePreview.Items.Clear();
-        cboRolePreview.Items.AddRange(new object[] { RoleCatalog.Admin, RoleCatalog.Inspector, "Shipping", RoleCatalog.Production, RoleCatalog.Purchasing, "Quoting" });
-        cboRolePreview.SelectedItem = RoleCatalog.Admin;
+        cboRolePreview.Items.AddRange(new object[] { RoleCatalog.Administrator, RoleCatalog.Purchaser, RoleCatalog.ProductionEmployee, RoleCatalog.ProductionManager, RoleCatalog.Inspection, RoleCatalog.Shipping });
+        cboRolePreview.SelectedItem = RoleCatalog.Administrator;
     }
 
     private void ApplySelectedRolePreview()
@@ -434,8 +434,8 @@ public partial class ERPMainForm : Form
             return;
         }
 
-        var lookupRole = selectedRole.Equals("Shipping", StringComparison.OrdinalIgnoreCase) ? RoleCatalog.ShippingReceiving : selectedRole;
-        if (!_rolePreviewUsers.TryGetValue(lookupRole, out var previewUser))
+        var lookupRole = RoleCatalog.NormalizeRoleName(selectedRole);
+        if (lookupRole is null || !_rolePreviewUsers.TryGetValue(lookupRole, out var previewUser))
         {
             return;
         }

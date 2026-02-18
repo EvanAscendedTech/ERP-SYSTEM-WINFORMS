@@ -22,8 +22,7 @@ public class InspectionControl : UserControl, IRealtimeDataControl
         _inspectionService = inspectionService;
         _openSection = openSection;
         _canEdit = canEdit;
-        _isAdmin = currentUser.Roles.Any(r => string.Equals(r.Name, "Admin", StringComparison.OrdinalIgnoreCase)
-                                           || string.Equals(r.Name, "Administrator", StringComparison.OrdinalIgnoreCase));
+        _isAdmin = AuthorizationService.HasRole(currentUser, RoleCatalog.Administrator);
         Dock = DockStyle.Fill;
 
         ConfigureGrid();

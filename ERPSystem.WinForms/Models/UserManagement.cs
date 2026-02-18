@@ -65,18 +65,48 @@ public class PurchasingLayoutSetting
 
 public static class RoleCatalog
 {
-    public const string Admin = "Admin";
-    public const string Purchasing = "Purchasing";
-    public const string Production = "Production";
-    public const string Inspector = "Inspector";
-    public const string ShippingReceiving = "Shipping/Receiving";
+    public const string Purchaser = "Purchaser";
+    public const string ProductionEmployee = "Production Employee";
+    public const string ProductionManager = "Production Manager";
+    public const string Inspection = "Inspection";
+    public const string Shipping = "Shipping";
+    public const string Administrator = "Administrator";
 
     public static readonly string[] AccountLevels =
     [
-        Admin,
-        Purchasing,
-        Production,
-        Inspector,
-        ShippingReceiving
+        Purchaser,
+        ProductionEmployee,
+        ProductionManager,
+        Inspection,
+        Shipping,
+        Administrator
     ];
+
+    public static string? NormalizeRoleName(string? roleName)
+    {
+        if (string.IsNullOrWhiteSpace(roleName))
+        {
+            return null;
+        }
+
+        var normalized = roleName.Trim();
+        return normalized.ToLowerInvariant() switch
+        {
+            "admin" => Administrator,
+            "administrator" => Administrator,
+            "purchasing" => Purchaser,
+            "purchaser" => Purchaser,
+            "production" => ProductionEmployee,
+            "production employee" => ProductionEmployee,
+            "production manager" => ProductionManager,
+            "inspector" => Inspection,
+            "inspection" => Inspection,
+            "shipping" => Shipping,
+            "shipping/receiving" => Shipping,
+            _ => AccountLevels.FirstOrDefault(x => x.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+        };
+    }
+
+    public static bool IsAllowedRole(string? roleName)
+        => NormalizeRoleName(roleName) is not null;
 }
