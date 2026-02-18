@@ -14,12 +14,15 @@ public class JobFlowService
 
     private readonly HashSet<string> _qualityApproved = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _inspectionPassed = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _inspectionRequested = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTime> _shippingCompletedUtc = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, WorkflowModule> _moduleByJobNumber = new(StringComparer.OrdinalIgnoreCase);
 
     public bool IsQualityApproved(string jobNumber) => _qualityApproved.Contains(jobNumber);
 
     public bool IsInspectionPassed(string jobNumber) => _inspectionPassed.Contains(jobNumber);
+
+    public bool IsInspectionRequested(string jobNumber) => _inspectionRequested.Contains(jobNumber);
 
     public bool IsShipped(string jobNumber) => _shippingCompletedUtc.ContainsKey(jobNumber);
 
@@ -62,6 +65,11 @@ public class JobFlowService
 
         var next = (WorkflowModule)((int)current + 1);
         _moduleByJobNumber[job.JobNumber] = next;
+        if (next == WorkflowModule.Inspection)
+        {
+            _inspectionRequested.Remove(job.JobNumber);
+        }
+
         message = $"Job {job.JobNumber} advanced to {next}.";
         return true;
     }
@@ -78,6 +86,52 @@ public class JobFlowService
         var previous = (WorkflowModule)((int)current - 1);
         _moduleByJobNumber[job.JobNumber] = previous;
         message = $"Job {job.JobNumber} moved back to {previous}.";
+        return true;
+    }
+
+    public bool TryRequestInspection(ProductionJob job, out string message)
+    {
+        if (GetCurrentModule(job.JobNumber) != WorkflowModule.Production)
+        {
+            message = $"Job {job.JobNumber} is no longer in the Production queue.";
+            return false;
+        }
+
+        if (job.Status != ProductionJobStatus.Completed)
+        {
+            message = $"Job {job.JobNumber} must be completed before requesting inspection.";
+            return false;
+        }
+
+        if (!_inspectionRequested.Add(job.JobNumber))
+        {
+            message = $"Inspection is already requested for {job.JobNumber}.";
+            return false;
+        }
+
+        message = $"Inspection requested for {job.JobNumber}.";
+        return true;
+    }
+
+
+    public bool TryMoveToInspectionFromProduction(ProductionJob job, out string message)
+    {
+        if (GetCurrentModule(job.JobNumber) != WorkflowModule.Production)
+        {
+            message = $"Job {job.JobNumber} is not in the Production queue.";
+            return false;
+        }
+
+        if (job.Status != ProductionJobStatus.Completed)
+        {
+            message = $"Job {job.JobNumber} must be completed before moving to Inspection.";
+            return false;
+        }
+
+        _qualityApproved.Add(job.JobNumber);
+        _inspectionRequested.Remove(job.JobNumber);
+        _moduleByJobNumber[job.JobNumber] = WorkflowModule.Inspection;
+        message = $"Job {job.JobNumber} moved to Inspection.";
         return true;
     }
 

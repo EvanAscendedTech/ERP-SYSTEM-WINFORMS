@@ -13,6 +13,8 @@ public class ProductionControl : UserControl, IRealtimeDataControl
     private readonly Action<string> _openSection;
     private readonly bool _isAdmin;
     private readonly bool _canEdit;
+    private readonly bool _isProductionEmployee;
+    private readonly bool _isProductionManager;
 
     private readonly TabControl _tabs = new() { Dock = DockStyle.Fill };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
@@ -72,6 +74,8 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         _openSection = openSection;
         _canEdit = canEdit;
         _isAdmin = AuthorizationService.HasRole(currentUser, RoleCatalog.Administrator);
+        _isProductionEmployee = AuthorizationService.HasRole(currentUser, RoleCatalog.ProductionEmployee);
+        _isProductionManager = AuthorizationService.HasRole(currentUser, RoleCatalog.ProductionManager) || _isAdmin;
         Dock = DockStyle.Fill;
 
         BuildProductionTab();
@@ -92,25 +96,25 @@ public class ProductionControl : UserControl, IRealtimeDataControl
 
         var actionsPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
         var refreshButton = new Button { Text = "Refresh Jobs", AutoSize = true };
-        var startButton = new Button { Text = "Start Production", AutoSize = true, Enabled = _canEdit };
-        var completeButton = new Button { Text = "Complete Production", AutoSize = true, Enabled = _canEdit };
-        var qualityButton = new Button { Text = "Move to Quality", AutoSize = true, Enabled = _canEdit };
-        var openDetailsButton = new Button { Text = "Open Production View", AutoSize = true };
-        var advanceButton = new Button { Text = "Admin: Push Forward", AutoSize = true, Visible = _isAdmin };
-        var rewindButton = new Button { Text = "Admin: Push Backward", AutoSize = true, Visible = _isAdmin };
+        var startButton = new Button { Text = "Start Production", AutoSize = true, Enabled = _isProductionManager };
+        var completeButton = new Button { Text = "Complete Production", AutoSize = true, Enabled = _isProductionManager };
+        var requestInspectionButton = new Button { Text = "Request Inspection", AutoSize = true, Enabled = _isProductionEmployee && !_isProductionManager, Visible = _isProductionEmployee && !_isProductionManager };
+        var openDetailsButton = new Button { Text = "Open Technical Documentation", AutoSize = true };
+        var advanceButton = new Button { Text = "Done → Inspection", AutoSize = true, Enabled = _isProductionManager };
+        var rewindButton = new Button { Text = "Return to Queue", AutoSize = true, Enabled = _isProductionManager };
 
-        refreshButton.Click += async (_, _) => await RefreshDataAsync(false);
-        startButton.Click += async (_, _) => await StartSelectedJobAsync();
-        completeButton.Click += async (_, _) => await CompleteSelectedJobAsync();
-        qualityButton.Click += async (_, _) => await MoveSelectedToQualityAsync();
+        refreshButton.Click += async (_, _) => await SafeUiActionAsync(() => RefreshDataAsync(false));
+        startButton.Click += async (_, _) => await SafeUiActionAsync(StartSelectedJobAsync);
+        completeButton.Click += async (_, _) => await SafeUiActionAsync(CompleteSelectedJobAsync);
+        requestInspectionButton.Click += async (_, _) => await SafeUiActionAsync(RequestInspectionAsync);
         openDetailsButton.Click += (_, _) => OpenSelectedProductionWindow();
-        advanceButton.Click += async (_, _) => await AdminMoveSelectedAsync(forward: true);
-        rewindButton.Click += async (_, _) => await AdminMoveSelectedAsync(forward: false);
+        advanceButton.Click += async (_, _) => await SafeUiActionAsync(() => MoveSelectedToInspectionAsync(isManagerAction: true));
+        rewindButton.Click += async (_, _) => await SafeUiActionAsync(() => AdminMoveSelectedAsync(forward: false));
 
         actionsPanel.Controls.Add(refreshButton);
         actionsPanel.Controls.Add(startButton);
         actionsPanel.Controls.Add(completeButton);
-        actionsPanel.Controls.Add(qualityButton);
+        actionsPanel.Controls.Add(requestInspectionButton);
         actionsPanel.Controls.Add(openDetailsButton);
         actionsPanel.Controls.Add(advanceButton);
         actionsPanel.Controls.Add(rewindButton);
@@ -188,13 +192,24 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         _jobsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "DueDate", HeaderText = "Due (UTC)", DataPropertyName = nameof(ProductionJob.DueDateUtc), Width = 180 });
         _jobsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuoteLifecycleId", HeaderText = "Quote Lifecycle #", DataPropertyName = nameof(ProductionJob.QuoteLifecycleId), Width = 150 });
         _jobsGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "QualityApproved", HeaderText = "Quality Approved", Width = 120 });
+        _jobsGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "InspectionRequested", HeaderText = "Inspection Requested", Width = 130 });
 
         _jobsGrid.CellFormatting += (_, e) =>
         {
-            if (_jobsGrid.Columns[e.ColumnIndex].Name == "QualityApproved"
-                && _jobsGrid.Rows[e.RowIndex].DataBoundItem is ProductionJob job)
+            if (_jobsGrid.Rows[e.RowIndex].DataBoundItem is not ProductionJob job)
+            {
+                return;
+            }
+
+            if (_jobsGrid.Columns[e.ColumnIndex].Name == "QualityApproved")
             {
                 e.Value = _flowService.IsQualityApproved(job.JobNumber);
+                e.FormattingApplied = true;
+            }
+
+            if (_jobsGrid.Columns[e.ColumnIndex].Name == "InspectionRequested")
+            {
+                e.Value = _flowService.IsInspectionRequested(job.JobNumber);
                 e.FormattingApplied = true;
             }
         };
@@ -224,7 +239,7 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         _unassignedJobsList.DataSource = unassigned;
         _unassignedJobsList.DisplayMember = nameof(ProductionJob.JobNumber);
 
-        _feedback.Text = $"Loaded {queuedJobs.Count} production jobs.";
+        _feedback.Text = $"Loaded {queuedJobs.Count} production jobs in queue.";
     }
 
     private async Task LoadMachinesAsync()
@@ -457,6 +472,12 @@ public class ProductionControl : UserControl, IRealtimeDataControl
 
     private async Task StartSelectedJobAsync()
     {
+        if (!_isProductionManager)
+        {
+            _feedback.Text = "Only Production Managers can start production.";
+            return;
+        }
+
         if (_jobsGrid.CurrentRow?.DataBoundItem is not ProductionJob selected)
         {
             _feedback.Text = "Select a job first.";
@@ -465,6 +486,12 @@ public class ProductionControl : UserControl, IRealtimeDataControl
 
         var result = await _productionRepository.StartJobAsync(selected.JobNumber, QuoteStatus.Won, selected.SourceQuoteId ?? 0, "system.user");
         _feedback.Text = result.Message;
+        if (!result.Success)
+        {
+            await LoadJobsAsync();
+            return;
+        }
+
         await _userRepository.WriteAuditLogAsync(new AuditLogEntry
         {
             OccurredUtc = DateTime.UtcNow,
@@ -479,6 +506,12 @@ public class ProductionControl : UserControl, IRealtimeDataControl
 
     private async Task CompleteSelectedJobAsync()
     {
+        if (!_isProductionManager)
+        {
+            _feedback.Text = "Only Production Managers can complete production.";
+            return;
+        }
+
         if (_jobsGrid.CurrentRow?.DataBoundItem is not ProductionJob selected)
         {
             _feedback.Text = "Select a job first.";
@@ -487,6 +520,12 @@ public class ProductionControl : UserControl, IRealtimeDataControl
 
         var result = await _productionRepository.CompleteJobAsync(selected.JobNumber, "system.user");
         _feedback.Text = result.Message;
+        if (!result.Success)
+        {
+            await LoadJobsAsync();
+            return;
+        }
+
         await _userRepository.WriteAuditLogAsync(new AuditLogEntry
         {
             OccurredUtc = DateTime.UtcNow,
@@ -499,7 +538,18 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         await LoadJobsAsync();
     }
 
-    private async Task MoveSelectedToQualityAsync()
+    private async Task RequestInspectionAsync()
+    {
+        if (!_isProductionEmployee || _isProductionManager)
+        {
+            _feedback.Text = "Only Production Employees can request inspection.";
+            return;
+        }
+
+        await MoveSelectedToInspectionAsync(isManagerAction: false);
+    }
+
+    private async Task MoveSelectedToInspectionAsync(bool isManagerAction)
     {
         if (_jobsGrid.CurrentRow?.DataBoundItem is not ProductionJob selected)
         {
@@ -507,15 +557,24 @@ public class ProductionControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        if (selected.Status != ProductionJobStatus.Completed)
+        bool moved;
+        string message;
+        if (isManagerAction)
         {
-            _feedback.Text = $"Job {selected.JobNumber} must be completed before Quality.";
-            return;
+            moved = _flowService.TryMoveToInspectionFromProduction(selected, out message);
+        }
+        else
+        {
+            moved = _flowService.TryRequestInspection(selected, out message);
         }
 
-        _feedback.Text = $"Job {selected.JobNumber} is ready for Quality.";
+        _feedback.Text = message;
         await LoadJobsAsync();
-        _openSection("Quality");
+
+        if (moved && isManagerAction)
+        {
+            _openSection("Inspection");
+        }
     }
 
     private void OpenSelectedProductionWindow()
@@ -528,7 +587,7 @@ public class ProductionControl : UserControl, IRealtimeDataControl
 
         using var window = new Form
         {
-            Text = $"Production View - {selected.JobNumber}",
+            Text = $"Technical Documentation - {selected.JobNumber}",
             Width = 780,
             Height = 520,
             StartPosition = FormStartPosition.CenterParent
@@ -538,7 +597,7 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         {
             Dock = DockStyle.Fill,
             Padding = new Padding(16),
-            Text = $"Production-only details\n\nJob: {selected.JobNumber}\nQuote Lifecycle: {selected.QuoteLifecycleId}\nDue Date: {selected.DueDateUtc:u}\nStatus: {selected.Status}\n\nInternal flow and technical BLOB data are accessible from this production view.",
+            Text = $"Technical documentation\n\nJob: {selected.JobNumber}\nQuote Lifecycle: {selected.QuoteLifecycleId}\nDue Date: {selected.DueDateUtc:u}\nStatus: {selected.Status}\n\nUse this view to access drawings, specs, and process notes.",
             Font = new Font("Segoe UI", 10F)
         };
 
@@ -548,6 +607,12 @@ public class ProductionControl : UserControl, IRealtimeDataControl
 
     private async Task AdminMoveSelectedAsync(bool forward)
     {
+        if (!_isProductionManager)
+        {
+            _feedback.Text = "Only Production Managers can move jobs between modules.";
+            return;
+        }
+
         if (_jobsGrid.CurrentRow?.DataBoundItem is not ProductionJob selected)
         {
             _feedback.Text = "Select a job first.";
@@ -571,6 +636,18 @@ public class ProductionControl : UserControl, IRealtimeDataControl
         if (currentModule != JobFlowService.WorkflowModule.Production)
         {
             _openSection(currentModule.ToString());
+        }
+    }
+
+    private async Task SafeUiActionAsync(Func<Task> action)
+    {
+        try
+        {
+            await action();
+        }
+        catch (Exception ex)
+        {
+            _feedback.Text = $"Action failed: {ex.Message}";
         }
     }
 
