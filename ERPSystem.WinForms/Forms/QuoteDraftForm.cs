@@ -1,5 +1,8 @@
 using System.Globalization;
+using System.Numerics;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
 
@@ -15,6 +18,7 @@ public class QuoteDraftForm : Form
     private const int MinimumBlobAreaWidth = 170;
     private const int MinimumBlobAreaHeight = 70;
     private const int FixedBlobAreaHeight = 150;
+    private const int CollapsedViewerHeight = 220;
     private const int MinimumTextBoxHeight = 24;
     private const int StandardGap = 8;
     private static readonly Color[] LineItemColorCycle =
@@ -269,10 +273,17 @@ public class QuoteDraftForm : Form
         headerRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         headerRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         var title = new Label { AutoSize = true, Font = new Font(Font, FontStyle.Bold), Anchor = AnchorStyles.Left, Margin = Padding.Empty };
+
+        var actionButtons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = Padding.Empty };
+        var doneButton = BuildCompactIconButton("✅ Done", Color.FromArgb(22, 163, 74));
+        var editButton = BuildCompactIconButton("✏️ Edit", Color.FromArgb(37, 99, 235)) { Visible = false };
         var removeButton = BuildCompactIconButton("🗑 Remove", Color.FromArgb(214, 77, 77));
-        removeButton.Click += async (_, _) => await RemoveLineItemAsync(model, cardPanel);
+        actionButtons.Controls.Add(doneButton);
+        actionButtons.Controls.Add(editButton);
+        actionButtons.Controls.Add(removeButton);
+
         headerRow.Controls.Add(title, 0, 0);
-        headerRow.Controls.Add(removeButton, 1, 0);
+        headerRow.Controls.Add(actionButtons, 1, 0);
         layout.Controls.Add(headerRow, 0, 0);
 
         var detailsGrid = new TableLayoutPanel { AutoSize = true, ColumnCount = 3, Dock = DockStyle.Top, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 0, 0, 4) };
@@ -355,6 +366,10 @@ public class QuoteDraftForm : Form
         contentScroller.Controls.Add(contentGrid);
         layout.Controls.Add(contentScroller, 0, 1);
 
+        var summaryView = BuildDoneSummaryView();
+        summaryView.Container.Visible = false;
+        layout.Controls.Add(summaryView.Container, 0, 1);
+
         var footer = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -391,14 +406,31 @@ public class QuoteDraftForm : Form
             RequiresMaterialTestReport = requiresMaterialTestReport,
             RequiresCertificateOfConformance = requiresCertificateOfConformance,
             RequiresSecondaryOperations = requiresSecondaryOperations,
-            BlobLists = attachmentsTabs.BlobLists
+            BlobLists = attachmentsTabs.BlobLists,
+            BlobActionButtons = attachmentsTabs.ActionButtons,
+            DoneButton = doneButton,
+            EditButton = editButton,
+            EditView = contentScroller,
+            DoneView = summaryView.Container,
+            StepViewer = summaryView.Viewer,
+            SummaryDrawingNumber = summaryView.DrawingNumber,
+            SummaryDrawingName = summaryView.DrawingName,
+            SummaryRevision = summaryView.Revision,
+            SummaryQuantity = summaryView.Quantity,
+            SummaryLineTotal = summaryView.LineTotal,
+            SummaryPerPiece = summaryView.PerPiece
         };
+
+        removeButton.Click += async (_, _) => await RemoveLineItemAsync(model, cardPanel);
+        doneButton.Click += (_, _) => SetLineItemDoneState(card, true);
+        editButton.Click += (_, _) => SetLineItemDoneState(card, false);
+        summaryView.ExpandButton.Click += (_, _) => ExpandModelViewer(card);
 
         RefreshBlobLists(card);
         return card;
     }
 
-    private (TabControl TabControl, Dictionary<QuoteBlobType, ListView> BlobLists) BuildAttachmentsTabs((QuoteBlobType Type, string Title)[] definitions, QuoteLineItem model)
+    private (TabControl TabControl, Dictionary<QuoteBlobType, ListView> BlobLists, Dictionary<QuoteBlobType, Button[]> ActionButtons) BuildAttachmentsTabs((QuoteBlobType Type, string Title)[] definitions, QuoteLineItem model)
     {
         var tabs = new TabControl
         {
@@ -410,6 +442,7 @@ public class QuoteDraftForm : Form
         };
 
         var lists = new Dictionary<QuoteBlobType, ListView>();
+        var buttonsByType = new Dictionary<QuoteBlobType, Button[]>();
 
         foreach (var (type, title) in definitions)
         {
@@ -419,9 +452,10 @@ public class QuoteDraftForm : Form
             page.Controls.Add(blobArea.SectionPanel);
             tabs.TabPages.Add(page);
             lists[type] = blobArea.List;
+            buttonsByType[type] = blobArea.ActionButtons;
         }
 
-        return (tabs, lists);
+        return (tabs, lists, buttonsByType);
     }
 
     private BlobArea BuildBlobArea(QuoteLineItem model, QuoteBlobType blobType, string title)
@@ -482,7 +516,155 @@ public class QuoteDraftForm : Form
         panel.Controls.Add(content);
         panel.ResumeLayout(true);
 
-        return new BlobArea { SectionPanel = panel, List = list };
+        return new BlobArea { SectionPanel = panel, List = list, ActionButtons = new[] { upload, delete, download } };
+    }
+
+    private DoneSummaryView BuildDoneSummaryView()
+    {
+        var container = new Panel { Dock = DockStyle.Fill, Padding = new Padding(2), Margin = Padding.Empty };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48f));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52f));
+
+        var viewerPanel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 8, 0) };
+        var viewer = new StepModelViewerControl { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
+        var expandButton = BuildCompactIconButton("⛶ Expand", Color.FromArgb(71, 85, 105));
+        expandButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        expandButton.Location = new Point(Math.Max(4, viewerPanel.Width - 96), 4);
+        expandButton.BringToFront();
+        viewerPanel.Controls.Add(viewer);
+        viewerPanel.Controls.Add(expandButton);
+        expandButton.Parent?.Resize += (_, _) =>
+        {
+            expandButton.Location = new Point(Math.Max(4, viewerPanel.ClientSize.Width - expandButton.Width - 4), 4);
+        };
+
+        var details = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+        details.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        details.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+
+        Label ValueLabel() => new() { AutoSize = true, Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 0, 0, 6) };
+        var drawingNumber = ValueLabel();
+        var drawingName = ValueLabel();
+        var revision = ValueLabel();
+        var quantity = ValueLabel();
+        var lineTotal = ValueLabel();
+        var perPiece = ValueLabel();
+
+        AddSummaryRow(details, 0, "Drawing #", drawingNumber);
+        AddSummaryRow(details, 1, "Drawing Name", drawingName);
+        AddSummaryRow(details, 2, "Revision", revision);
+        AddSummaryRow(details, 3, "Quantity", quantity);
+        AddSummaryRow(details, 4, "Line Item Total", lineTotal);
+        AddSummaryRow(details, 5, "Per-Piece", perPiece);
+
+        layout.Controls.Add(viewerPanel, 0, 0);
+        layout.Controls.Add(details, 1, 0);
+        container.Controls.Add(layout);
+
+        return new DoneSummaryView
+        {
+            Container = container,
+            Viewer = viewer,
+            ExpandButton = expandButton,
+            DrawingNumber = drawingNumber,
+            DrawingName = drawingName,
+            Revision = revision,
+            Quantity = quantity,
+            LineTotal = lineTotal,
+            PerPiece = perPiece
+        };
+    }
+
+    private static void AddSummaryRow(TableLayoutPanel details, int rowIndex, string label, Label value)
+    {
+        details.RowCount = Math.Max(details.RowCount, rowIndex + 1);
+        details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        details.Controls.Add(new Label { Text = label + ":", AutoSize = true, Margin = new Padding(0, 0, 8, 6) }, 0, rowIndex);
+        details.Controls.Add(value, 1, rowIndex);
+    }
+
+    private void SetLineItemDoneState(LineItemCard card, bool isDone)
+    {
+        card.IsDone = isDone;
+        card.EditView.Visible = !isDone;
+        card.DoneView.Visible = isDone;
+        card.DoneButton.Visible = !isDone;
+        card.EditButton.Visible = isDone;
+
+        if (isDone)
+        {
+            card.DoneButton.Parent?.Controls.SetChildIndex(card.EditButton, 0);
+            UpdateDoneSummary(card);
+        }
+        else
+        {
+            card.DoneButton.Parent?.Controls.SetChildIndex(card.DoneButton, 0);
+        }
+
+        card.Container.MinimumSize = new Size(MinimumLineItemWidth, isDone ? 280 : MinimumLineItemHeight);
+        card.Container.MaximumSize = new Size(int.MaxValue, isDone ? 340 : MaximumLineItemHeight);
+        ResizeCards();
+    }
+
+    private void UpdateDoneSummary(LineItemCard card)
+    {
+        card.SummaryDrawingNumber.Text = string.IsNullOrWhiteSpace(card.Model.DrawingNumber) ? "-" : card.Model.DrawingNumber;
+        card.SummaryDrawingName.Text = string.IsNullOrWhiteSpace(card.Model.DrawingName) ? "-" : card.Model.DrawingName;
+        card.SummaryRevision.Text = string.IsNullOrWhiteSpace(card.Model.Revision) ? "-" : card.Model.Revision;
+        card.SummaryQuantity.Text = card.Model.Quantity.ToString("0.##", CultureInfo.CurrentCulture);
+        card.SummaryLineTotal.Text = card.Model.LineItemTotal.ToString("C2", CultureInfo.CurrentCulture);
+        card.SummaryPerPiece.Text = card.Model.UnitPrice.ToString("C2", CultureInfo.CurrentCulture);
+
+        var stepAttachment = FindStepAttachment(card.Model);
+        if (stepAttachment?.BlobData?.Length > 0)
+        {
+            card.StepViewer.LoadStep(stepAttachment.BlobData);
+        }
+        else
+        {
+            card.StepViewer.LoadStep([]);
+        }
+    }
+
+    private static QuoteBlobAttachment? FindStepAttachment(QuoteLineItem model)
+    {
+        return model.BlobAttachments.FirstOrDefault(blob =>
+                   blob.BlobType == QuoteBlobType.ThreeDModel
+                   && IsStepFile(blob))
+               ?? model.BlobAttachments.FirstOrDefault(IsStepFile);
+    }
+
+    private static bool IsStepFile(QuoteBlobAttachment blob)
+    {
+        var ext = blob.Extension ?? string.Empty;
+        return ext.Equals(".step", StringComparison.OrdinalIgnoreCase)
+               || ext.Equals(".stp", StringComparison.OrdinalIgnoreCase)
+               || blob.FileName.EndsWith(".step", StringComparison.OrdinalIgnoreCase)
+               || blob.FileName.EndsWith(".stp", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void ExpandModelViewer(LineItemCard card)
+    {
+        var stepAttachment = FindStepAttachment(card.Model);
+        if (stepAttachment?.BlobData?.Length <= 0)
+        {
+            MessageBox.Show("No STEP model found for this line item.", "3D Model", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        using var viewerForm = new Form
+        {
+            Text = $"Line Item Viewer - {card.Model.DrawingNumber}",
+            Width = 1200,
+            Height = 800,
+            StartPosition = FormStartPosition.CenterParent,
+            WindowState = FormWindowState.Maximized
+        };
+        var viewer = new StepModelViewerControl { Dock = DockStyle.Fill };
+        viewer.LoadStep(stepAttachment.BlobData);
+        viewerForm.Controls.Add(viewer);
+        viewerForm.ShowDialog(this);
     }
 
     private async Task HandleBlobDropAsync(QuoteLineItem model, QuoteBlobType blobType, IEnumerable<string>? filePaths)
@@ -605,6 +787,19 @@ public class QuoteDraftForm : Form
 
             ResizeBlobListColumns(list);
             list.EndUpdate();
+
+            if (card.BlobActionButtons.TryGetValue(blobType, out var actionButtons))
+            {
+                foreach (var button in actionButtons)
+                {
+                    button.Enabled = !card.IsDone;
+                }
+            }
+        }
+
+        if (card.IsDone)
+        {
+            UpdateDoneSummary(card);
         }
     }
 
@@ -679,6 +874,12 @@ public class QuoteDraftForm : Form
 
     private async Task RemoveLineItemAsync(QuoteLineItem model, Control container)
     {
+        var confirm = MessageBox.Show("Remove this line item?", "Confirm Remove", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes)
+        {
+            return;
+        }
+
         if (model.Id > 0)
         {
             await _quoteRepository.DeleteQuoteLineItemAsync(model.Id);
@@ -773,7 +974,8 @@ public class QuoteDraftForm : Form
         foreach (var card in _lineItemCards)
         {
             card.Container.Width = Math.Max(MinimumLineItemWidth, _lineItemsPanel.ClientSize.Width - (_lineItemsPanel.Padding.Horizontal + 10));
-            card.Container.Height = Math.Clamp(DefaultLineItemHeight, card.Container.MinimumSize.Height, card.Container.MaximumSize.Height);
+            var targetHeight = card.IsDone ? 300 : DefaultLineItemHeight;
+            card.Container.Height = Math.Clamp(targetHeight, card.Container.MinimumSize.Height, card.Container.MaximumSize.Height);
         }
     }
 
@@ -806,6 +1008,11 @@ public class QuoteDraftForm : Form
             card.Total.Text = lineTotal.ToString("0.00", CultureInfo.CurrentCulture);
             card.PerPiecePrice.Text = perPiecePrice.ToString("0.00", CultureInfo.CurrentCulture);
             card.Quantity.Text = card.Model.Quantity.ToString("0.##", CultureInfo.CurrentCulture);
+
+            if (card.IsDone)
+            {
+                UpdateDoneSummary(card);
+            }
 
             totalHours += card.Model.ProductionHours + card.Model.SetupHours;
             masterTotal += lineTotal;
@@ -899,10 +1106,193 @@ public class QuoteDraftForm : Form
         Close();
     }
 
+    private sealed class StepModelViewerControl : Control
+    {
+        private readonly List<(Vector3 Start, Vector3 End)> _segments = new();
+        private float _yaw = -0.45f;
+        private float _pitch = 0.3f;
+        private float _zoom = 0.9f;
+        private Vector2 _pan = Vector2.Zero;
+        private Point _lastMouse;
+        private MouseButtons _activeButton;
+
+        public StepModelViewerControl()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
+            BackColor = Color.FromArgb(248, 250, 252);
+        }
+
+        public void LoadStep(byte[] stepBytes)
+        {
+            _segments.Clear();
+            foreach (var segment in StepWireframeParser.Parse(stepBytes))
+            {
+                _segments.Add(segment);
+            }
+
+            Invalidate();
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            _activeButton = e.Button;
+            _lastMouse = e.Location;
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            _activeButton = MouseButtons.None;
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            if (_activeButton == MouseButtons.None)
+            {
+                return;
+            }
+
+            var dx = e.X - _lastMouse.X;
+            var dy = e.Y - _lastMouse.Y;
+            _lastMouse = e.Location;
+
+            if (_activeButton == MouseButtons.Left)
+            {
+                _yaw += dx * 0.01f;
+                _pitch = Math.Clamp(_pitch + dy * 0.01f, -1.4f, 1.4f);
+            }
+            else if (_activeButton == MouseButtons.Right)
+            {
+                _pan += new Vector2(dx * 0.01f, -dy * 0.01f);
+            }
+
+            Invalidate();
+        }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            _zoom = Math.Clamp(_zoom + (e.Delta > 0 ? 0.08f : -0.08f), 0.2f, 3.0f);
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            e.Graphics.Clear(BackColor);
+
+            using var borderPen = new Pen(Color.FromArgb(180, 193, 205));
+            e.Graphics.DrawRectangle(borderPen, 0, 0, Width - 1, Height - 1);
+
+            if (_segments.Count == 0)
+            {
+                TextRenderer.DrawText(e.Graphics, "STEP model unavailable", Font, ClientRectangle, Color.DimGray, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                return;
+            }
+
+            var view = Matrix4x4.CreateRotationX(_pitch) * Matrix4x4.CreateRotationY(_yaw);
+            var scale = Math.Min(Width, Height) * 0.42f * _zoom;
+            var centerX = (Width / 2f) + (_pan.X * scale);
+            var centerY = (Height / 2f) + (_pan.Y * scale);
+
+            using var linePen = new Pen(Color.FromArgb(45, 86, 145), 1.1f);
+            foreach (var (start, end) in _segments)
+            {
+                var s = Vector3.Transform(start, view);
+                var t = Vector3.Transform(end, view);
+                var sx = centerX + (s.X * scale);
+                var sy = centerY - (s.Y * scale);
+                var tx = centerX + (t.X * scale);
+                var ty = centerY - (t.Y * scale);
+                e.Graphics.DrawLine(linePen, sx, sy, tx, ty);
+            }
+        }
+    }
+
+    private static class StepWireframeParser
+    {
+        private static readonly Regex PointRegex = new(@"#(?<id>\d+)\s*=\s*CARTESIAN_POINT\s*\(\s*'[^']*'\s*,\s*\((?<coords>[^)]*)\)\s*\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex PolylineRegex = new(@"#\d+\s*=\s*POLYLINE\s*\(\s*'[^']*'\s*,\s*\((?<refs>[^)]*)\)\s*\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        public static IEnumerable<(Vector3 Start, Vector3 End)> Parse(byte[] stepBytes)
+        {
+            if (stepBytes.Length == 0)
+            {
+                return Enumerable.Empty<(Vector3 Start, Vector3 End)>();
+            }
+
+            var content = Encoding.UTF8.GetString(stepBytes);
+            var points = new Dictionary<int, Vector3>();
+
+            foreach (Match match in PointRegex.Matches(content))
+            {
+                var pointId = int.Parse(match.Groups["id"].Value);
+                var coordParts = match.Groups["coords"].Value.Split(',');
+                if (coordParts.Length < 3)
+                {
+                    continue;
+                }
+
+                if (!float.TryParse(coordParts[0].Trim(), out var x)
+                    || !float.TryParse(coordParts[1].Trim(), out var y)
+                    || !float.TryParse(coordParts[2].Trim(), out var z))
+                {
+                    continue;
+                }
+
+                points[pointId] = new Vector3(x, y, z);
+            }
+
+            if (points.Count == 0)
+            {
+                return Enumerable.Empty<(Vector3 Start, Vector3 End)>();
+            }
+
+            var segments = new List<(Vector3 Start, Vector3 End)>();
+            foreach (Match match in PolylineRegex.Matches(content))
+            {
+                var references = match.Groups["refs"].Value
+                    .Split(',')
+                    .Select(value => value.Trim())
+                    .Where(value => value.StartsWith("#", StringComparison.Ordinal))
+                    .Select(value => int.TryParse(value.AsSpan(1), out var id) ? id : -1)
+                    .Where(id => id > 0)
+                    .ToList();
+
+                for (var i = 0; i < references.Count - 1; i++)
+                {
+                    if (points.TryGetValue(references[i], out var start) && points.TryGetValue(references[i + 1], out var end))
+                    {
+                        segments.Add((start, end));
+                    }
+                }
+            }
+
+            return segments;
+        }
+    }
+
     private sealed class BlobArea
     {
         public required Panel SectionPanel { get; init; }
         public required ListView List { get; init; }
+        public required Button[] ActionButtons { get; init; }
+    }
+
+    private sealed class DoneSummaryView
+    {
+        public required Panel Container { get; init; }
+        public required StepModelViewerControl Viewer { get; init; }
+        public required Button ExpandButton { get; init; }
+        public required Label DrawingNumber { get; init; }
+        public required Label DrawingName { get; init; }
+        public required Label Revision { get; init; }
+        public required Label Quantity { get; init; }
+        public required Label LineTotal { get; init; }
+        public required Label PerPiece { get; init; }
     }
 
     private sealed class LineItemCard
@@ -926,5 +1316,19 @@ public class QuoteDraftForm : Form
         public required CheckBox RequiresCertificateOfConformance { get; init; }
         public required CheckBox RequiresSecondaryOperations { get; init; }
         public required Dictionary<QuoteBlobType, ListView> BlobLists { get; init; }
+        public required Dictionary<QuoteBlobType, Button[]> BlobActionButtons { get; init; }
+        public required Button DoneButton { get; init; }
+        public required Button EditButton { get; init; }
+        public required Control EditView { get; init; }
+        public required Control DoneView { get; init; }
+        public required StepModelViewerControl StepViewer { get; init; }
+        public required Label SummaryDrawingNumber { get; init; }
+        public required Label SummaryDrawingName { get; init; }
+        public required Label SummaryRevision { get; init; }
+        public required Label SummaryQuantity { get; init; }
+        public required Label SummaryLineTotal { get; init; }
+        public required Label SummaryPerPiece { get; init; }
+        public bool IsDone { get; set; }
     }
+
 }
