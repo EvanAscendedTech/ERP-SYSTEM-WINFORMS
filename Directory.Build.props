@@ -10,7 +10,12 @@
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(OS)' == 'Windows_NT' and '$(UseLocalAppDataBuildPaths)' == 'true'">
-    <BaseIntermediateOutputPath>$(LocalAppData)\ERPSystemBuild\obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
-    <BaseOutputPath>$(LocalAppData)\ERPSystemBuild\bin\$(MSBuildProjectName)\</BaseOutputPath>
+    <!--
+      Include a stable hash of the repository path so multiple checkouts with the same
+      project names don't contend for the same AppData build artifacts.
+    -->
+    <BuildPathScope>$([MSBuild]::StableStringHash('$(MSBuildThisFileDirectory)', 'Sha256'))</BuildPathScope>
+    <BaseIntermediateOutputPath>$(LocalAppData)\ERPSystemBuild\obj\$(BuildPathScope)\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(LocalAppData)\ERPSystemBuild\bin\$(BuildPathScope)\$(MSBuildProjectName)\</BaseOutputPath>
   </PropertyGroup>
 </Project>
