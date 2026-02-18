@@ -188,4 +188,68 @@ public class UserManagementRepositoryTests
         File.Delete(dbPath);
     }
 
+
+    [Fact]
+    public async Task SaveUserAsync_EditById_DoesNotCreateDuplicateUser()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-user-edit-{Guid.NewGuid():N}.db");
+        var repository = new UserManagementRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        await repository.SaveUserAsync(new UserAccount
+        {
+            Username = "jdoe",
+            DisplayName = "John Doe",
+            PasswordHash = "hash",
+            IsActive = true,
+            Roles = [new RoleDefinition { Name = RoleCatalog.ProductionEmployee, Permissions = [UserPermission.ViewProduction] }]
+        });
+
+        var saved = Assert.Single(await repository.GetUsersAsync());
+        saved.DisplayName = "John D.";
+        saved.Roles = [new RoleDefinition { Name = RoleCatalog.Administrator, Permissions = [UserPermission.ManageUsers] }];
+
+        await repository.SaveUserAsync(saved);
+
+        var users = await repository.GetUsersAsync();
+        var loaded = Assert.Single(users);
+        Assert.Equal(saved.Id, loaded.Id);
+        Assert.Equal("John D.", loaded.DisplayName);
+        Assert.Contains(loaded.Roles, r => r.Name == RoleCatalog.Administrator);
+
+        File.Delete(dbPath);
+    }
+
+    [Fact]
+    public async Task GetAuditLogEntriesAsync_ReturnsAllEntriesWithoutHardLimit()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-audit-{Guid.NewGuid():N}.db");
+        var repository = new UserManagementRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        for (var i = 0; i < 650; i++)
+        {
+            await repository.WriteAuditLogAsync(new AuditLogEntry
+            {
+                OccurredUtc = DateTime.UtcNow.AddMinutes(-i),
+                Username = i % 2 == 0 ? "alice" : "bob",
+                RoleSnapshot = "Administrator",
+                Module = "Admin/User Access",
+                Action = "Test",
+                Details = $"Entry {i}"
+            });
+        }
+
+        var all = await repository.GetAuditLogEntriesAsync();
+        Assert.Equal(650, all.Count);
+
+        var aliceOnly = await repository.GetAuditLogEntriesAsync("alice");
+        Assert.Equal(325, aliceOnly.Count);
+
+        var from = DateTime.UtcNow.AddMinutes(-100);
+        var dateFiltered = await repository.GetAuditLogEntriesAsync(null, from, DateTime.UtcNow);
+        Assert.True(dateFiltered.Count >= 90);
+
+        File.Delete(dbPath);
+    }
 }

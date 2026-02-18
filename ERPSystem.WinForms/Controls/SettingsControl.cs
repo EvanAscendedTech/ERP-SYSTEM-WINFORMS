@@ -26,6 +26,7 @@ public class SettingsControl : UserControl, IRealtimeDataControl
     private readonly UsersControl _usersControl;
     private readonly AuditLogControl _auditLogControl;
     private readonly QuoteRepository _quoteRepository;
+    private readonly TabControl _settingsTabs = new() { Dock = DockStyle.Fill };
     private readonly NumericUpDown _shopRateInput = new() { Minimum = 0, Maximum = 10000, DecimalPlaces = 2, Increment = 1, Width = 140 };
     private readonly Label _quoteSettingsFeedback = new() { AutoSize = true };
 
@@ -56,10 +57,9 @@ public class SettingsControl : UserControl, IRealtimeDataControl
         _lastSyncText = lastSyncText;
         Dock = DockStyle.Fill;
 
-        _usersControl = new UsersControl(userRepository, currentUser, () => { }) { Dock = DockStyle.Fill };
         _auditLogControl = new AuditLogControl(userRepository) { Dock = DockStyle.Fill };
+        _usersControl = new UsersControl(userRepository, currentUser, () => { }, JumpToUserAuditLog) { Dock = DockStyle.Fill };
 
-        var tabs = new TabControl { Dock = DockStyle.Fill };
         var generalTab = new TabPage("General Settings");
         var accessTab = new TabPage("User Access");
         var quoteSettingsTab = new TabPage("Quote Settings");
@@ -70,16 +70,28 @@ public class SettingsControl : UserControl, IRealtimeDataControl
         quoteSettingsTab.Controls.Add(BuildQuoteSettingsPanel());
         auditLogTab.Controls.Add(_auditLogControl);
 
-        tabs.TabPages.Add(generalTab);
-        tabs.TabPages.Add(accessTab);
-        tabs.TabPages.Add(quoteSettingsTab);
-        tabs.TabPages.Add(auditLogTab);
+        _settingsTabs.TabPages.Add(generalTab);
+        _settingsTabs.TabPages.Add(accessTab);
+        _settingsTabs.TabPages.Add(quoteSettingsTab);
+        _settingsTabs.TabPages.Add(auditLogTab);
 
-        Controls.Add(tabs);
+        Controls.Add(_settingsTabs);
 
         _ = LoadSettingsAsync();
         UpdateThemeControls();
         UpdateLastSyncButtonText();
+    }
+
+
+    private void JumpToUserAuditLog(string username)
+    {
+        var auditTab = _settingsTabs.TabPages.Cast<TabPage>().FirstOrDefault(t => t.Text == "Audit Log");
+        if (auditTab is not null)
+        {
+            _settingsTabs.SelectedTab = auditTab;
+        }
+
+        _ = _auditLogControl.FocusUserAsync(username);
     }
 
     private Control BuildGeneralSettingsPanel()
