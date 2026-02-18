@@ -40,4 +40,31 @@ public class JobFlowServiceTests
         Assert.True(service.TryMarkShipped(job, out _));
         Assert.NotNull(service.GetShippedUtc(job.JobNumber));
     }
+
+
+    [Fact]
+    public void TryRequestInspection_RequiresCompletedProduction()
+    {
+        var service = new JobFlowService();
+        var job = new ProductionJob { JobNumber = "JOB-4", Status = ProductionJobStatus.InProgress };
+
+        var requested = service.TryRequestInspection(job, out var message);
+
+        Assert.False(requested);
+        Assert.Contains("must be completed", message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TryMoveToInspectionFromProduction_MovesCompletedJobToInspection()
+    {
+        var service = new JobFlowService();
+        var job = new ProductionJob { JobNumber = "JOB-5", Status = ProductionJobStatus.Completed };
+
+        var moved = service.TryMoveToInspectionFromProduction(job, out var message);
+
+        Assert.True(moved);
+        Assert.Contains("moved to Inspection", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(JobFlowService.WorkflowModule.Inspection, service.GetCurrentModule(job.JobNumber));
+    }
+
 }
