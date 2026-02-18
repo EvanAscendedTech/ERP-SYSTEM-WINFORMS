@@ -27,18 +27,18 @@ public class UsersControl : UserControl, IRealtimeDataControl
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 40));
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true };
-        var addUserButton = new Button { Text = "Create User", AutoSize = true, Enabled = canManageUsers };
-        var assignRolesButton = new Button { Text = "Assign Role(s)", AutoSize = true, Enabled = canManageUsers };
-        var deactivateButton = new Button { Text = "Kick / Deactivate", AutoSize = true, Enabled = canManageUsers };
+        var addUserButton = new Button { Text = "Add User", AutoSize = true, Enabled = canManageUsers };
+        var editUserButton = new Button { Text = "Edit Selected User", AutoSize = true, Enabled = canManageUsers };
+        var deactivateButton = new Button { Text = "Toggle Active", AutoSize = true, Enabled = canManageUsers };
         var uploadIconButton = new Button { Text = "Upload My Icon", AutoSize = true };
 
-        addUserButton.Click += async (_, _) => await CreateUserAsync();
-        assignRolesButton.Click += async (_, _) => await AssignRolesToSelectedAsync();
-        deactivateButton.Click += async (_, _) => await DeactivateSelectedAsync();
+        addUserButton.Click += async (_, _) => await OpenUserEditorForNewAsync();
+        editUserButton.Click += async (_, _) => await OpenUserEditorForSelectedAsync();
+        deactivateButton.Click += async (_, _) => await ToggleSelectedActiveAsync();
         uploadIconButton.Click += async (_, _) => await UploadCurrentUserIconAsync();
 
         actions.Controls.Add(addUserButton);
-        actions.Controls.Add(assignRolesButton);
+        actions.Controls.Add(editUserButton);
         actions.Controls.Add(deactivateButton);
         actions.Controls.Add(uploadIconButton);
 
@@ -57,11 +57,21 @@ public class UsersControl : UserControl, IRealtimeDataControl
     {
         _usersGrid.RowTemplate.Height = 36;
         _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Id", DataPropertyName = nameof(UserAccount.Id), Width = 50 });
-        _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Username", DataPropertyName = nameof(UserAccount.Username), Width = 180 });
-        _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Display Name", DataPropertyName = nameof(UserAccount.DisplayName), Width = 200 });
-        _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Roles", DataPropertyName = "Roles", Width = 260 });
-        _usersGrid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Active", DataPropertyName = nameof(UserAccount.IsActive), Width = 70 });
-        _usersGrid.Columns.Add(new DataGridViewImageColumn { HeaderText = "Icon", DataPropertyName = nameof(UserAccount.IconBlob), Width = 52, ImageLayout = DataGridViewImageCellLayout.Zoom });
+        _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Username", DataPropertyName = nameof(UserAccount.Username), Width = 160 });
+        _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Display Name", DataPropertyName = nameof(UserAccount.DisplayName), Width = 190 });
+        _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Roles", DataPropertyName = "Roles", Width = 230 });
+        _usersGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Status", DataPropertyName = "Status", Width = 120 });
+        _usersGrid.Columns.Add(new DataGridViewImageColumn { HeaderText = "Profile", DataPropertyName = nameof(UserAccount.IconBlob), Width = 52, ImageLayout = DataGridViewImageCellLayout.Zoom });
+        _usersGrid.Columns.Add(new DataGridViewButtonColumn { HeaderText = "", Text = "Edit", UseColumnTextForButtonValue = true, Width = 70 });
+        _usersGrid.CellContentClick += async (_, e) =>
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex != _usersGrid.Columns.Count - 1)
+            {
+                return;
+            }
+
+            await OpenUserEditorForSelectedAsync(e.RowIndex);
+        };
     }
 
     private void ConfigureRequestsGrid()
@@ -87,88 +97,87 @@ public class UsersControl : UserControl, IRealtimeDataControl
             icon = new Bitmap(image);
         }
 
+        var dot = user.IsActive ? "🟢" : "⚪";
         return new
         {
             user.Id,
             user.Username,
             user.DisplayName,
             Roles = string.Join(", ", user.Roles.Select(r => r.Name)),
-            user.IsActive,
+            Status = $"{dot} {(user.IsActive ? "Active" : "Inactive")}",
             IconBlob = icon
         };
     }
 
-    private async Task CreateUserAsync()
+    private async Task OpenUserEditorForNewAsync()
     {
-        var username = Prompt.Show("Username");
+        using var editor = new UserEditorDialog(_userRepository, null);
+        if (editor.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        await _userRepository.SaveUserAsync(editor.User);
+        await _userRepository.WriteAuditLogAsync(new AuditLogEntry
+        {
+            OccurredUtc = DateTime.UtcNow,
+            Username = _currentUser.Username,
+            RoleSnapshot = UserManagementRepository.BuildRoleSnapshot(_currentUser),
+            Module = "Admin/User Access",
+            Action = "Created user",
+            Details = $"Created account for {editor.User.Username}."
+        });
+        await ReloadAsync();
+        _onUsersChanged();
+    }
+
+    private async Task OpenUserEditorForSelectedAsync(int? rowIndex = null)
+    {
+        var row = rowIndex.HasValue ? _usersGrid.Rows[rowIndex.Value] : _usersGrid.CurrentRow;
+        var username = row?.Cells[1].Value?.ToString();
         if (string.IsNullOrWhiteSpace(username))
         {
             return;
         }
 
-        var password = Prompt.Show("Password");
-        if (string.IsNullOrWhiteSpace(password))
+        var users = await _userRepository.GetUsersAsync();
+        var selected = users.FirstOrDefault(u => string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase));
+        if (selected is null)
         {
             return;
         }
 
-        var selectedRoles = Prompt.SelectRoles("Assign role(s)", RoleCatalog.AccountLevels, new[] { RoleCatalog.ProductionEmployee });
-        if (selectedRoles.Count == 0)
+        using var editor = new UserEditorDialog(_userRepository, selected);
+        if (editor.ShowDialog(this) != DialogResult.OK)
         {
-            selectedRoles.Add(RoleCatalog.ProductionEmployee);
+            return;
         }
 
-        await _userRepository.SaveUserAsync(new UserAccount
+        await _userRepository.SaveUserAsync(editor.User);
+
+        if (!string.IsNullOrWhiteSpace(editor.TemporaryPasswordIssued))
         {
-            Username = username.Trim(),
-            DisplayName = username.Trim(),
-            PasswordHash = AuthorizationService.HashPassword(password),
-            IsActive = true,
-            Roles = BuildRoles(selectedRoles)
+            await _userRepository.IssueTemporaryPasswordAsync(editor.User.Id, editor.TemporaryPasswordIssued);
+            MessageBox.Show($"Temporary password for {editor.User.Username}: {editor.TemporaryPasswordIssued}", "Temporary Password Issued", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        await _userRepository.WriteAuditLogAsync(new AuditLogEntry
+        {
+            OccurredUtc = DateTime.UtcNow,
+            Username = _currentUser.Username,
+            RoleSnapshot = UserManagementRepository.BuildRoleSnapshot(_currentUser),
+            Module = "Admin/User Access",
+            Action = "Edited user",
+            Details = $"Updated account settings for {editor.User.Username}."
         });
 
         await ReloadAsync();
         _onUsersChanged();
     }
 
-    private async Task AssignRolesToSelectedAsync()
+    private async Task ToggleSelectedActiveAsync()
     {
-        if (_usersGrid.CurrentRow?.Cells[1].Value?.ToString() is not { } username || string.IsNullOrWhiteSpace(username))
-        {
-            return;
-        }
-
-        var users = await _userRepository.GetUsersAsync();
-        var selected = users.FirstOrDefault(u => string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase));
-        if (selected is null)
-        {
-            return;
-        }
-
-        var chosen = Prompt.SelectRoles(
-            $"Assign role(s) for {selected.Username}",
-            RoleCatalog.AccountLevels,
-            selected.Roles.Select(r => r.Name));
-
-        if (chosen.Count == 0)
-        {
-            return;
-        }
-
-        selected.Roles = BuildRoles(chosen);
-        await _userRepository.SaveUserAsync(selected);
-        await ReloadAsync();
-        _onUsersChanged();
-    }
-
-    private async Task DeactivateSelectedAsync()
-    {
-        if (_usersGrid.CurrentRow?.DataBoundItem is null)
-        {
-            return;
-        }
-
-        var username = _usersGrid.CurrentRow.Cells[1].Value?.ToString();
+        var username = _usersGrid.CurrentRow?.Cells[1].Value?.ToString();
         if (string.IsNullOrWhiteSpace(username))
         {
             return;
@@ -181,7 +190,7 @@ public class UsersControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        selected.IsActive = false;
+        selected.IsActive = !selected.IsActive;
         await _userRepository.SaveUserAsync(selected);
         await ReloadAsync();
         _onUsersChanged();
@@ -213,42 +222,186 @@ public class UsersControl : UserControl, IRealtimeDataControl
             .ToList();
     }
 
-    private static class Prompt
+    private sealed class UserEditorDialog : Form
     {
-        public static string Show(string caption)
+        private readonly CheckedListBox _roleList = new() { Width = 320, Height = 120, CheckOnClick = true };
+        private readonly TextBox _username = new() { Width = 320 };
+        private readonly TextBox _displayName = new() { Width = 320 };
+        private readonly PictureBox _profilePreview = new() { Width = 64, Height = 64, SizeMode = PictureBoxSizeMode.Zoom, BorderStyle = BorderStyle.FixedSingle };
+        private readonly ListBox _passwordRequests = new() { Width = 320, Height = 110 };
+        private readonly UserManagementRepository _repo;
+
+        public UserAccount User { get; private set; }
+        public string? TemporaryPasswordIssued { get; private set; }
+
+        public UserEditorDialog(UserManagementRepository repo, UserAccount? existing)
         {
-            using var form = new Form { Width = 360, Height = 140, Text = caption, StartPosition = FormStartPosition.CenterParent };
-            var box = new TextBox { Left = 12, Top = 12, Width = 320 };
-            var ok = new Button { Text = "OK", Left = 252, Top = 44, Width = 80, DialogResult = DialogResult.OK };
-            form.Controls.Add(box);
-            form.Controls.Add(ok);
-            form.AcceptButton = ok;
-            return form.ShowDialog() == DialogResult.OK ? box.Text : string.Empty;
+            _repo = repo;
+            User = existing is null ? new UserAccount
+            {
+                IsActive = true,
+                Roles = [AuthorizationService.BuildRole(RoleCatalog.ProductionEmployee)]
+            } : Clone(existing);
+
+            Width = 430;
+            Height = 620;
+            StartPosition = FormStartPosition.CenterParent;
+            Text = existing is null ? "Add User" : $"Edit {existing.Username}";
+
+            var layout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(12) };
+            layout.Controls.Add(new Label { Text = "Username", AutoSize = true });
+            _username.Text = User.Username;
+            layout.Controls.Add(_username);
+
+            layout.Controls.Add(new Label { Text = "Display Name", AutoSize = true });
+            _displayName.Text = User.DisplayName;
+            layout.Controls.Add(_displayName);
+
+            layout.Controls.Add(new Label { Text = "Roles (multi-select)", AutoSize = true });
+            var selectedRoles = new HashSet<string>(User.Roles.Select(r => r.Name), StringComparer.OrdinalIgnoreCase);
+            foreach (var role in RoleCatalog.AccountLevels)
+            {
+                var idx = _roleList.Items.Add(role);
+                _roleList.SetItemChecked(idx, selectedRoles.Contains(role));
+            }
+            layout.Controls.Add(_roleList);
+
+            var iconRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
+            var uploadIcon = new Button { Text = "Upload Profile Picture", AutoSize = true };
+            uploadIcon.Click += (_, _) => UploadIcon();
+            iconRow.Controls.Add(uploadIcon);
+            iconRow.Controls.Add(_profilePreview);
+            layout.Controls.Add(iconRow);
+            SetPreview(User.IconBlob);
+
+            var issueTempPasswordButton = new Button { Text = "Issue Temporary Password", AutoSize = true };
+            issueTempPasswordButton.Click += (_, _) => IssueTempPassword();
+            layout.Controls.Add(issueTempPasswordButton);
+
+            layout.Controls.Add(new Label { Text = "Password reset requests", AutoSize = true });
+            layout.Controls.Add(_passwordRequests);
+
+            var save = new Button { Text = "Save", AutoSize = true, DialogResult = DialogResult.OK };
+            save.Click += (_, e) =>
+            {
+                if (!BuildUser())
+                {
+                    e.Cancel = true;
+                }
+            };
+            layout.Controls.Add(save);
+
+            Controls.Add(layout);
+            AcceptButton = save;
+            _ = LoadPasswordResetRequestsAsync();
         }
 
-        public static List<string> SelectRoles(string caption, IEnumerable<string> allRoles, IEnumerable<string> selectedRoles)
+        private async Task LoadPasswordResetRequestsAsync()
         {
-            using var form = new Form { Width = 380, Height = 320, Text = caption, StartPosition = FormStartPosition.CenterParent };
-            var roleDropDown = new CheckedListBox { Left = 12, Top = 12, Width = 340, Height = 220, CheckOnClick = true };
-            var selectedSet = new HashSet<string>(selectedRoles, StringComparer.OrdinalIgnoreCase);
-
-            foreach (var role in allRoles)
+            _passwordRequests.Items.Clear();
+            if (User.Id <= 0)
             {
-                var index = roleDropDown.Items.Add(role);
-                roleDropDown.SetItemChecked(index, selectedSet.Contains(role));
+                _passwordRequests.Items.Add("No requests yet.");
+                return;
             }
 
-            var ok = new Button { Text = "OK", Left = 272, Top = 240, Width = 80, DialogResult = DialogResult.OK };
-            form.Controls.Add(roleDropDown);
-            form.Controls.Add(ok);
-            form.AcceptButton = ok;
-
-            if (form.ShowDialog() != DialogResult.OK)
+            var requests = await _repo.GetPasswordResetRequestsAsync(User.Id);
+            if (requests.Count == 0)
             {
-                return new List<string>();
+                _passwordRequests.Items.Add("No requests.");
+                return;
             }
 
-            return roleDropDown.CheckedItems.Cast<string>().ToList();
+            foreach (var req in requests)
+            {
+                _passwordRequests.Items.Add($"{req.RequestedUtc.ToLocalTime():g} - {(req.IsResolved ? "Resolved" : "Open")} - {req.Note}");
+            }
+        }
+
+        private void IssueTempPassword()
+        {
+            TemporaryPasswordIssued = $"Temp{Guid.NewGuid().ToString("N")[..8]}!";
+            MessageBox.Show("Temporary password will be applied on save.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private bool BuildUser()
+        {
+            var username = _username.Text.Trim();
+            var displayName = _displayName.Text.Trim();
+            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(displayName))
+            {
+                MessageBox.Show("Username and display name are required.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            var selectedRoles = _roleList.CheckedItems.Cast<string>().ToList();
+            if (selectedRoles.Count == 0)
+            {
+                selectedRoles.Add(RoleCatalog.ProductionEmployee);
+            }
+
+            User.Username = username;
+            User.DisplayName = displayName;
+            User.Roles = BuildRoles(selectedRoles);
+            if (string.IsNullOrWhiteSpace(User.PasswordHash))
+            {
+                User.PasswordHash = AuthorizationService.HashPassword($"{username}!123");
+            }
+
+            if (!string.IsNullOrWhiteSpace(TemporaryPasswordIssued))
+            {
+                User.PasswordHash = AuthorizationService.HashPassword(TemporaryPasswordIssued);
+                User.MustResetPassword = true;
+                User.TemporaryPasswordIssuedUtc = DateTime.UtcNow;
+            }
+
+            return true;
+        }
+
+        private void UploadIcon()
+        {
+            using var picker = new OpenFileDialog { Filter = "Image Files|*.png;*.jpg;*.jpeg;*.bmp", Multiselect = false };
+            if (picker.ShowDialog(this) != DialogResult.OK)
+            {
+                return;
+            }
+
+            User.IconBlob = File.ReadAllBytes(picker.FileName);
+            User.IconPath = string.Empty;
+            SetPreview(User.IconBlob);
+        }
+
+        private void SetPreview(byte[]? icon)
+        {
+            _profilePreview.Image?.Dispose();
+            _profilePreview.Image = null;
+            if (icon is null || icon.Length == 0)
+            {
+                return;
+            }
+
+            using var stream = new MemoryStream(icon);
+            using var image = Image.FromStream(stream);
+            _profilePreview.Image = new Bitmap(image);
+        }
+
+        private static UserAccount Clone(UserAccount user)
+        {
+            return new UserAccount
+            {
+                Id = user.Id,
+                Username = user.Username,
+                DisplayName = user.DisplayName,
+                PasswordHash = user.PasswordHash,
+                IsActive = user.IsActive,
+                IconPath = user.IconPath,
+                IconBlob = user.IconBlob,
+                IsOnline = user.IsOnline,
+                LastActivityUtc = user.LastActivityUtc,
+                MustResetPassword = user.MustResetPassword,
+                TemporaryPasswordIssuedUtc = user.TemporaryPasswordIssuedUtc,
+                Roles = user.Roles.Select(r => new RoleDefinition { Id = r.Id, Name = r.Name, Permissions = r.Permissions.ToList() }).ToList()
+            };
         }
     }
 

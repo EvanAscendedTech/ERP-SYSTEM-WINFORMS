@@ -13,6 +13,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
     private readonly QuoteRepository _quoteRepository;
     private readonly ProductionRepository _productionRepository;
+    private readonly UserManagementRepository _userRepository;
     private readonly Action<string> _openSection;
     private readonly UserAccount _currentUser;
     private readonly FlowLayoutPanel _customerCardsPanel = new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(8, 4, 8, 8) };
@@ -25,10 +26,11 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private List<Quote> _activeQuotesCache = new();
     private string? _selectedCustomer;
 
-    public QuotesControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, UserAccount currentUser, Action<string> openSection)
+    public QuotesControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, UserManagementRepository userRepository, UserAccount currentUser, Action<string> openSection)
     {
         _quoteRepository = quoteRepository;
         _productionRepository = productionRepository;
+        _userRepository = userRepository;
         _openSection = openSection;
         _currentUser = currentUser;
         Dock = DockStyle.Fill;
@@ -159,6 +161,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         if (draft.ShowDialog(this) == DialogResult.OK)
         {
             _feedback.Text = $"Created quote {draft.CreatedQuoteId}.";
+            await LogAuditAsync("Quotes", "Created quote", $"Quote #{draft.CreatedQuoteId} created.");
             await LoadActiveQuotesAsync();
         }
     }
@@ -209,12 +212,14 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             return;
         }
 
+        await LogAuditAsync("Quotes", "Reviewed quote", $"Opened quote #{fullQuote.Id} for review/edit.");
         using var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing), _currentUser.Username, fullQuote);
         if (draft.ShowDialog(this) == DialogResult.OK)
         {
             _feedback.Text = draft.WasDeleted
                 ? $"Quote {fullQuote.Id} deleted."
                 : $"Quote {fullQuote.Id} updated.";
+            await LogAuditAsync("Quotes", draft.WasDeleted ? "Deleted quote" : "Updated quote", $"Quote #{fullQuote.Id} {(draft.WasDeleted ? "deleted" : "updated")}.");
             await LoadActiveQuotesAsync();
         }
     }
@@ -253,6 +258,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         try
         {
             await _quoteRepository.DeleteQuoteAsync(selected.Id);
+            await LogAuditAsync("Quotes", "Deleted quote", $"Quote #{selected.Id} deleted.");
             _feedback.Text = $"Quote {selected.Id} deleted.";
             await LoadActiveQuotesAsync();
         }
@@ -658,6 +664,20 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             path.CloseFigure();
             return path;
         }
+    }
+
+
+    private async Task LogAuditAsync(string module, string action, string details)
+    {
+        await _userRepository.WriteAuditLogAsync(new AuditLogEntry
+        {
+            OccurredUtc = DateTime.UtcNow,
+            Username = _currentUser.Username,
+            RoleSnapshot = UserManagementRepository.BuildRoleSnapshot(_currentUser),
+            Module = module,
+            Action = action,
+            Details = details
+        });
     }
 
     private static string NormalizeCustomerName(string? customerName)

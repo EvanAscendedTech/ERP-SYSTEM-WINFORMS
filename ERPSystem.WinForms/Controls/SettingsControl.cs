@@ -24,6 +24,7 @@ public class SettingsControl : UserControl, IRealtimeDataControl
     private readonly Button _toggleThemeButton = new() { AutoSize = true };
     private readonly Button _lastSyncButton = new() { AutoSize = true, Enabled = false };
     private readonly UsersControl _usersControl;
+    private readonly AuditLogControl _auditLogControl;
     private readonly QuoteRepository _quoteRepository;
     private readonly NumericUpDown _shopRateInput = new() { Minimum = 0, Maximum = 10000, DecimalPlaces = 2, Increment = 1, Width = 140 };
     private readonly Label _quoteSettingsFeedback = new() { AutoSize = true };
@@ -56,19 +57,23 @@ public class SettingsControl : UserControl, IRealtimeDataControl
         Dock = DockStyle.Fill;
 
         _usersControl = new UsersControl(userRepository, currentUser, () => { }) { Dock = DockStyle.Fill };
+        _auditLogControl = new AuditLogControl(userRepository) { Dock = DockStyle.Fill };
 
         var tabs = new TabControl { Dock = DockStyle.Fill };
         var generalTab = new TabPage("General Settings");
         var accessTab = new TabPage("User Access");
         var quoteSettingsTab = new TabPage("Quote Settings");
+        var auditLogTab = new TabPage("Audit Log");
 
         generalTab.Controls.Add(BuildGeneralSettingsPanel());
         accessTab.Controls.Add(_usersControl);
         quoteSettingsTab.Controls.Add(BuildQuoteSettingsPanel());
+        auditLogTab.Controls.Add(_auditLogControl);
 
         tabs.TabPages.Add(generalTab);
         tabs.TabPages.Add(accessTab);
         tabs.TabPages.Add(quoteSettingsTab);
+        tabs.TabPages.Add(auditLogTab);
 
         Controls.Add(tabs);
 
@@ -259,6 +264,7 @@ public class SettingsControl : UserControl, IRealtimeDataControl
     private async Task LoadQuoteSettingsAsync()
     {
         _shopRateInput.Value = Math.Clamp(await _quoteRepository.GetShopHourlyRateAsync(), (decimal)_shopRateInput.Minimum, (decimal)_shopRateInput.Maximum);
+        await _auditLogControl.RefreshDataAsync(fromFailSafeCheckpoint);
     }
 
     private async Task RunSyncAsync()
@@ -298,5 +304,6 @@ public class SettingsControl : UserControl, IRealtimeDataControl
         await LoadSettingsAsync();
         await _usersControl.RefreshDataAsync(fromFailSafeCheckpoint);
         _shopRateInput.Value = Math.Clamp(await _quoteRepository.GetShopHourlyRateAsync(), (decimal)_shopRateInput.Minimum, (decimal)_shopRateInput.Maximum);
+        await _auditLogControl.RefreshDataAsync(fromFailSafeCheckpoint);
     }
 }

@@ -15,6 +15,7 @@ public class LoginForm : Form
     private readonly TextBox _password = new() { Width = 340, PlaceholderText = "Password", UseSystemPasswordChar = true };
     private readonly TextBox _requestNote = new() { Width = 340, Height = 78, Multiline = true, PlaceholderText = "Request note for admin" };
     private readonly CheckBox _requestTerms = new() { Text = "I understand account creation is admin approved only.", AutoSize = true };
+    private readonly TextBox _passwordResetNote = new() { Width = 340, Height = 58, Multiline = true, PlaceholderText = "Password reset note" };
 
     public UserAccount? AuthenticatedUser { get; private set; }
 
@@ -140,6 +141,7 @@ public class LoginForm : Form
         StyleInput(_username);
         StyleInput(_password);
         StyleInput(_requestNote);
+        StyleInput(_passwordResetNote);
 
         var loginButton = new ModernButton
         {
@@ -155,7 +157,7 @@ public class LoginForm : Form
         {
             Text = "Need an account?",
             Width = 366,
-            Height = 265,
+            Height = 340,
             ForeColor = Color.White,
             Padding = new Padding(12)
         };
@@ -163,6 +165,8 @@ public class LoginForm : Form
         var requestLayout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, AutoSize = false, WrapContents = false };
         var requestButton = new ModernButton { Text = "Submit Account Request", Width = 340, Height = 40, CornerRadius = 10 };
         requestButton.Click += async (_, _) => await SubmitAccountRequestAsync();
+        var passwordResetButton = new ModernButton { Text = "Request Password Reset", Width = 340, Height = 40, CornerRadius = 10 };
+        passwordResetButton.Click += async (_, _) => await SubmitPasswordResetRequestAsync();
 
         requestLayout.Controls.Add(new Label { Text = "Requested username", AutoSize = true, ForeColor = ColorTranslator.FromHtml("#CBD5E1") });
         requestLayout.Controls.Add(new TextBox
@@ -179,6 +183,9 @@ public class LoginForm : Form
         requestLayout.Controls.Add(_requestNote);
         requestLayout.Controls.Add(_requestTerms);
         requestLayout.Controls.Add(requestButton);
+        requestLayout.Controls.Add(new Label { Text = "Password reset request", AutoSize = true, ForeColor = ColorTranslator.FromHtml("#CBD5E1") });
+        requestLayout.Controls.Add(_passwordResetNote);
+        requestLayout.Controls.Add(passwordResetButton);
         requestGroup.Controls.Add(requestLayout);
 
         AcceptButton = loginButton;
@@ -221,9 +228,41 @@ public class LoginForm : Form
             return;
         }
 
+        if (user.MustResetPassword)
+        {
+            using var resetForm = new ForcePasswordResetDialog();
+            if (resetForm.ShowDialog(this) != DialogResult.OK)
+            {
+                return;
+            }
+
+            user.PasswordHash = AuthorizationService.HashPassword(resetForm.NewPassword);
+            user.MustResetPassword = false;
+            user.TemporaryPasswordIssuedUtc = null;
+            await _userRepository.SaveUserAsync(user);
+            await _userRepository.WriteAuditLogAsync(new AuditLogEntry
+            {
+                OccurredUtc = DateTime.UtcNow,
+                Username = user.Username,
+                RoleSnapshot = UserManagementRepository.BuildRoleSnapshot(user),
+                Module = "Security",
+                Action = "Forced password reset",
+                Details = "User reset password after temporary password sign-in."
+            });
+        }
+
         user.IsOnline = true;
         user.LastActivityUtc = DateTime.UtcNow;
         await _userRepository.SetOnlineStatusAsync(user.Id, true);
+        await _userRepository.WriteAuditLogAsync(new AuditLogEntry
+        {
+            OccurredUtc = DateTime.UtcNow,
+            Username = user.Username,
+            RoleSnapshot = UserManagementRepository.BuildRoleSnapshot(user),
+            Module = "Security",
+            Action = "Login",
+            Details = "User logged into ERP."
+        });
         AuthenticatedUser = user;
         DialogResult = DialogResult.OK;
         Close();
@@ -254,4 +293,57 @@ public class LoginForm : Form
 
         MessageBox.Show("Account request submitted.", "Account Request", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
+
+    private async Task SubmitPasswordResetRequestAsync()
+    {
+        var username = _username.Text.Trim();
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            MessageBox.Show("Enter your username first.", "Password Reset", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var user = await _userRepository.FindByUsernameAsync(username);
+        if (user is null)
+        {
+            MessageBox.Show("User not found.", "Password Reset", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        await _userRepository.SavePasswordResetRequestAsync(user.Id, _passwordResetNote.Text);
+        MessageBox.Show("Password reset request submitted to admin.", "Password Reset", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private sealed class ForcePasswordResetDialog : Form
+    {
+        private readonly TextBox _newPassword = new() { Width = 260, UseSystemPasswordChar = true };
+        private readonly TextBox _confirmPassword = new() { Width = 260, UseSystemPasswordChar = true };
+        public string NewPassword => _newPassword.Text;
+
+        public ForcePasswordResetDialog()
+        {
+            Width = 320;
+            Height = 200;
+            Text = "Reset Password";
+            StartPosition = FormStartPosition.CenterParent;
+            var layout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(12) };
+            layout.Controls.Add(new Label { Text = "Enter new password", AutoSize = true });
+            layout.Controls.Add(_newPassword);
+            layout.Controls.Add(new Label { Text = "Confirm password", AutoSize = true });
+            layout.Controls.Add(_confirmPassword);
+            var save = new Button { Text = "Save", DialogResult = DialogResult.OK, AutoSize = true };
+            save.Click += (_, e) =>
+            {
+                if (string.IsNullOrWhiteSpace(_newPassword.Text) || _newPassword.Text != _confirmPassword.Text)
+                {
+                    e.Cancel = true;
+                    MessageBox.Show("Passwords must match.", "Reset Password", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            };
+            layout.Controls.Add(save);
+            Controls.Add(layout);
+            AcceptButton = save;
+        }
+    }
+
 }

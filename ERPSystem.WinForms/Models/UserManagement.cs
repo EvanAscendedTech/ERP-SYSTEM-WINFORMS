@@ -33,7 +33,31 @@ public class UserAccount
     public byte[]? IconBlob { get; set; }
     public bool IsOnline { get; set; }
     public DateTime? LastActivityUtc { get; set; }
+    public bool MustResetPassword { get; set; }
+    public DateTime? TemporaryPasswordIssuedUtc { get; set; }
     public List<RoleDefinition> Roles { get; set; } = new();
+}
+
+public class PasswordResetRequest
+{
+    public int Id { get; set; }
+    public int UserId { get; set; }
+    public string Username { get; set; } = string.Empty;
+    public DateTime RequestedUtc { get; set; }
+    public string Note { get; set; } = string.Empty;
+    public bool IsResolved { get; set; }
+    public DateTime? ResolvedUtc { get; set; }
+}
+
+public class AuditLogEntry
+{
+    public long Id { get; set; }
+    public DateTime OccurredUtc { get; set; } = DateTime.UtcNow;
+    public string Username { get; set; } = string.Empty;
+    public string RoleSnapshot { get; set; } = string.Empty;
+    public string Module { get; set; } = string.Empty;
+    public string Action { get; set; } = string.Empty;
+    public string Details { get; set; } = string.Empty;
 }
 
 public class AccountRequest
