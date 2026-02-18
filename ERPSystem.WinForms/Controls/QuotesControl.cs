@@ -269,7 +269,10 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             if (columnName == "Customer")
             {
                 e.Value = row.DetailsDisplay;
-                e.CellStyle.WrapMode = DataGridViewTriState.True;
+                if (e.CellStyle is not null)
+                {
+                    e.CellStyle.WrapMode = DataGridViewTriState.True;
+                }
                 e.FormattingApplied = true;
                 return;
             }
@@ -1122,7 +1125,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             var contextMenu = new ContextMenuStrip();
             contextMenu.Items.Add("Enlarge", null, (_, _) => OpenEnlargedViewer());
             ContextMenuStrip = contextMenu;
-            _webView.ContextMenuStrip = contextMenu;
 
             Controls.Add(_webView);
             Controls.Add(_statusLabel);
