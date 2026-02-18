@@ -2,6 +2,7 @@ using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Forms;
 using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
+using System.Drawing.Drawing2D;
 using System.Text;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
