@@ -21,6 +21,8 @@ public partial class ERPMainForm : Form
     private readonly JobFlowService _jobFlow = new();
     private readonly ThemeManager _themeManager = new();
     private readonly Models.UserAccount _currentUser;
+    private readonly Dictionary<string, UserAccount> _rolePreviewUsers = new(StringComparer.OrdinalIgnoreCase);
+    private UserAccount _activeUser;
 
     private readonly Dictionary<string, ModernButton> _navButtons;
     private readonly Stack<string> _backHistory = new();
@@ -49,6 +51,7 @@ public partial class ERPMainForm : Form
         _archive = archive;
         _realtimeData = realtimeData;
         _currentUser = currentUser;
+        _activeUser = currentUser;
 
         InitializeComponent();
         DoubleBuffered = true;
@@ -69,9 +72,11 @@ public partial class ERPMainForm : Form
         WireEvents();
         _ = LoadAndApplySettingsAsync();
         InitializeSyncClock();
+        BuildRolePreviewProfiles();
+        ConfigureRolePreviewSelector();
         ApplyNavigationPermissions();
 
-        LoadSection(AuthorizationService.CanAccessSection(_currentUser, "Dashboard") ? "Dashboard" : GetFirstAccessibleSection());
+        LoadSection(AuthorizationService.CanAccessSection(_activeUser, "Dashboard") ? "Dashboard" : GetFirstAccessibleSection());
         ApplyTheme();
     }
 
@@ -375,6 +380,76 @@ public partial class ERPMainForm : Form
         btnSettingsMenu.Click += (_, _) => LoadSection("Settings");
         btnBack.Click += (_, _) => NavigateBack();
         btnForward.Click += (_, _) => NavigateForward();
+        cboRolePreview.SelectedIndexChanged += (_, _) => ApplySelectedRolePreview();
+    }
+
+    private void BuildRolePreviewProfiles()
+    {
+        _rolePreviewUsers.Clear();
+        _rolePreviewUsers[RoleCatalog.Admin] = BuildPreviewUser(RoleCatalog.Admin);
+        _rolePreviewUsers[RoleCatalog.Inspector] = BuildPreviewUser(RoleCatalog.Inspector);
+        _rolePreviewUsers[RoleCatalog.ShippingReceiving] = BuildPreviewUser(RoleCatalog.ShippingReceiving);
+        _rolePreviewUsers[RoleCatalog.Production] = BuildPreviewUser(RoleCatalog.Production);
+        _rolePreviewUsers[RoleCatalog.Purchasing] = BuildPreviewUser(RoleCatalog.Purchasing);
+        _rolePreviewUsers["Quoting"] = BuildPreviewUser(RoleCatalog.Purchasing);
+    }
+
+    private UserAccount BuildPreviewUser(string roleName)
+    {
+        return new UserAccount
+        {
+            Id = _currentUser.Id,
+            Username = _currentUser.Username,
+            DisplayName = _currentUser.DisplayName,
+            PasswordHash = _currentUser.PasswordHash,
+            IsActive = _currentUser.IsActive,
+            IconPath = _currentUser.IconPath,
+            IconBlob = _currentUser.IconBlob,
+            IsOnline = _currentUser.IsOnline,
+            LastActivityUtc = _currentUser.LastActivityUtc,
+            Roles = [AuthorizationService.BuildRole(roleName)]
+        };
+    }
+
+    private void ConfigureRolePreviewSelector()
+    {
+        var isAdmin = _currentUser.Roles.Any(role => role.Name.Equals(RoleCatalog.Admin, StringComparison.OrdinalIgnoreCase));
+        lblRolePreview.Visible = isAdmin;
+        cboRolePreview.Visible = isAdmin;
+
+        if (!isAdmin)
+        {
+            return;
+        }
+
+        cboRolePreview.Items.Clear();
+        cboRolePreview.Items.AddRange(new object[] { RoleCatalog.Admin, RoleCatalog.Inspector, "Shipping", RoleCatalog.Production, RoleCatalog.Purchasing, "Quoting" });
+        cboRolePreview.SelectedItem = RoleCatalog.Admin;
+    }
+
+    private void ApplySelectedRolePreview()
+    {
+        if (!cboRolePreview.Visible || cboRolePreview.SelectedItem is not string selectedRole || string.IsNullOrWhiteSpace(selectedRole))
+        {
+            return;
+        }
+
+        var lookupRole = selectedRole.Equals("Shipping", StringComparison.OrdinalIgnoreCase) ? RoleCatalog.ShippingReceiving : selectedRole;
+        if (!_rolePreviewUsers.TryGetValue(lookupRole, out var previewUser))
+        {
+            return;
+        }
+
+        _activeUser = previewUser;
+        ApplyNavigationPermissions();
+
+        if (!AuthorizationService.CanAccessSection(_activeUser, _activeSectionKey))
+        {
+            LoadSection(GetFirstAccessibleSection());
+            return;
+        }
+
+        LoadSection(_activeSectionKey);
     }
 
 
@@ -382,14 +457,14 @@ public partial class ERPMainForm : Form
     {
         foreach (var pair in _navButtons)
         {
-            pair.Value.Visible = AuthorizationService.CanAccessSection(_currentUser, pair.Key);
+            pair.Value.Visible = AuthorizationService.CanAccessSection(_activeUser, pair.Key);
         }
     }
 
     private string GetFirstAccessibleSection()
     {
         var orderedSections = new[] { "Dashboard", "Quotes", "Purchasing", "Production", "Inspection", "Shipping", "Settings" };
-        return orderedSections.FirstOrDefault(section => AuthorizationService.CanAccessSection(_currentUser, section)) ?? "Dashboard";
+        return orderedSections.FirstOrDefault(section => AuthorizationService.CanAccessSection(_activeUser, section)) ?? "Dashboard";
     }
 
     private void NavigateBack()
@@ -504,7 +579,7 @@ public partial class ERPMainForm : Form
 
     private void LoadSection(string key)
     {
-        if (!AuthorizationService.CanAccessSection(_currentUser, key))
+        if (!AuthorizationService.CanAccessSection(_activeUser, key))
         {
             return;
         }
@@ -541,18 +616,18 @@ public partial class ERPMainForm : Form
         return key switch
         {
             "Dashboard" => new DashboardControl(_quoteRepo, _prodRepo, _jobFlow, OpenDashboardTarget),
-            "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, _currentUser, LoadSection),
-            "Purchasing" => new PurchasingControl(_quoteRepo, _prodRepo, _userRepo, _currentUser, LoadSection, AuthorizationService.CanEditSection(_currentUser, "Purchasing")),
-            "Production" => new ProductionControl(_prodRepo, _jobFlow, _currentUser, LoadSection, AuthorizationService.CanEditSection(_currentUser, "Production")),
+            "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, _activeUser, LoadSection),
+            "Purchasing" => new PurchasingControl(_quoteRepo, _prodRepo, _userRepo, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Purchasing")),
+            "Production" => new ProductionControl(_prodRepo, _jobFlow, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Production")),
             "CRM" => new CRMControl(_quoteRepo),
-            "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, _currentUser, LoadSection, AuthorizationService.CanEditSection(_currentUser, "Inspection")),
-            "Shipping" => new ShippingControl(_prodRepo, _jobFlow, _currentUser, LoadSection, AuthorizationService.CanEditSection(_currentUser, "Shipping")),
+            "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Inspection")),
+            "Shipping" => new ShippingControl(_prodRepo, _jobFlow, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Shipping")),
             "Settings" => new SettingsControl(
                 _settings,
                 _userRepo,
                 _quoteRepo,
-                _currentUser,
-                canManageSettings: AuthorizationService.HasPermission(_currentUser, UserPermission.ManageSettings),
+                _activeUser,
+                canManageSettings: AuthorizationService.HasPermission(_activeUser, UserPermission.ManageSettings),
                 settingsChanged: ApplySettings,
                 currentTheme: _themeManager.CurrentTheme,
                 themeChanged: OnThemeChanged,

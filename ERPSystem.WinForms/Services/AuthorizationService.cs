@@ -16,7 +16,7 @@ public static class AuthorizationService
         return sectionKey switch
         {
             "Dashboard" => true,
-            "Quotes" => true,
+            "Quotes" => HasPermission(user, UserPermission.ViewPricing),
             "CRM" => true,
             "Purchasing" => HasPermission(user, UserPermission.ViewPurchasing),
             "Production" => HasPermission(user, UserPermission.ViewProduction),
