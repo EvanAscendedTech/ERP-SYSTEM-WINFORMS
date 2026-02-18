@@ -331,14 +331,17 @@ public class LoginForm : Form
             layout.Controls.Add(_newPassword);
             layout.Controls.Add(new Label { Text = "Confirm password", AutoSize = true });
             layout.Controls.Add(_confirmPassword);
-            var save = new Button { Text = "Save", DialogResult = DialogResult.OK, AutoSize = true };
-            save.Click += (_, e) =>
+            var save = new Button { Text = "Save", AutoSize = true };
+            save.Click += (_, _) =>
             {
                 if (string.IsNullOrWhiteSpace(_newPassword.Text) || _newPassword.Text != _confirmPassword.Text)
                 {
-                    e.Cancel = true;
                     MessageBox.Show("Passwords must match.", "Reset Password", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
                 }
+
+                DialogResult = DialogResult.OK;
+                Close();
             };
             layout.Controls.Add(save);
             Controls.Add(layout);

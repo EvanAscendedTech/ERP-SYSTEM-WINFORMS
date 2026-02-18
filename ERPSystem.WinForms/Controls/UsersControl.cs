@@ -281,13 +281,16 @@ public class UsersControl : UserControl, IRealtimeDataControl
             layout.Controls.Add(new Label { Text = "Password reset requests", AutoSize = true });
             layout.Controls.Add(_passwordRequests);
 
-            var save = new Button { Text = "Save", AutoSize = true, DialogResult = DialogResult.OK };
-            save.Click += (_, e) =>
+            var save = new Button { Text = "Save", AutoSize = true };
+            save.Click += (_, _) =>
             {
                 if (!BuildUser())
                 {
-                    e.Cancel = true;
+                    return;
                 }
+
+                DialogResult = DialogResult.OK;
+                Close();
             };
             layout.Controls.Add(save);
 
