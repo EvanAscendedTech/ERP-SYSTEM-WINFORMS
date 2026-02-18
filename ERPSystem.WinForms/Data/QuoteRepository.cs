@@ -624,7 +624,9 @@ public class QuoteRepository
                     insertBlob.Parameters.AddWithValue("$contentType", blob.ContentType);
                     insertBlob.Parameters.AddWithValue("$fileSizeBytes", blob.FileSizeBytes);
                     insertBlob.Parameters.AddWithValue("$sha256", blob.Sha256);
-                    var storageRelativePath = string.IsNullOrWhiteSpace(blob.StorageRelativePath)
+                    var shouldStoreBlobFile = string.IsNullOrWhiteSpace(blob.StorageRelativePath)
+                        || !File.Exists(Path.Combine(_blobStorageRoot, blob.StorageRelativePath));
+                    var storageRelativePath = shouldStoreBlobFile
                         ? SaveBlobToStorage(quote.Id, lineItem.Id, blob.BlobType, blob.FileName, blob.BlobData)
                         : blob.StorageRelativePath;
                     insertBlob.Parameters.AddWithValue("$uploadedBy", blob.UploadedBy);
@@ -632,6 +634,11 @@ public class QuoteRepository
                     insertBlob.Parameters.AddWithValue("$blobData", blob.BlobData);
                     insertBlob.Parameters.AddWithValue("$uploadedUtc", blob.UploadedUtc.ToString("O"));
                     await insertBlob.ExecuteNonQueryAsync();
+
+                    blob.QuoteId = quote.Id;
+                    blob.LineItemId = lineItem.Id;
+                    blob.LifecycleId = quote.LifecycleQuoteId;
+                    blob.StorageRelativePath = storageRelativePath;
                 }
             }
 
