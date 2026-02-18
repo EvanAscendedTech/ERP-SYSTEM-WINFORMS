@@ -8,11 +8,12 @@ namespace ERPSystem.WinForms.Forms;
 public class QuoteDraftForm : Form
 {
     private const int DefaultLineItemWidth = 860;
-    private const int DefaultLineItemHeight = 320;
+    private const int DefaultLineItemHeight = 290;
     private const int MinimumLineItemWidth = 620;
-    private const int MinimumLineItemHeight = 280;
-    private const int MinimumBlobAreaWidth = 210;
-    private const int MinimumBlobAreaHeight = 110;
+    private const int MinimumLineItemHeight = 260;
+    private const int MinimumBlobAreaWidth = 170;
+    private const int MinimumBlobAreaHeight = 78;
+    private const int FixedBlobAreaHeight = 90;
     private const float MinScaledFontSize = 8f;
     private const float MaxScaledFontSize = 13f;
     private const int ResizeGripSize = 16;
@@ -179,6 +180,8 @@ public class QuoteDraftForm : Form
                 MaterialCost = source.MaterialCost,
                 ToolingCost = source.ToolingCost,
                 SecondaryOperationsCost = source.SecondaryOperationsCost,
+                Quantity = source.Quantity,
+                UnitPrice = source.UnitPrice,
                 LineItemTotal = source.LineItemTotal,
                 BlobAttachments = source.BlobAttachments.Select(x => new QuoteBlobAttachment
                 {
@@ -248,17 +251,18 @@ public class QuoteDraftForm : Form
         var drawingDocs = BuildBlobArea(model, QuoteBlobType.Technical, "Drawings (PDF / STEP)");
         var modelDocs = BuildBlobArea(model, QuoteBlobType.ThreeDModel, "3D Models");
 
-        var costsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 5, Dock = DockStyle.Top, Margin = new Padding(0, 2, 0, 2), RowCount = 1 };
+        var costsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 6, Dock = DockStyle.Top, Margin = new Padding(0, 2, 0, 2), RowCount = 1 };
         costsRow.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        for (var i = 0; i < 5; i++) costsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
+        for (var i = 0; i < 6; i++) costsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16.666f));
 
         var productionHours = NewNumericField(model.ProductionHours);
         var setupHours = NewNumericField(model.SetupHours);
         var materialCost = NewNumericField(model.MaterialCost);
         var toolingCost = NewNumericField(model.ToolingCost);
         var secondaryCost = NewNumericField(model.SecondaryOperationsCost);
+        var quantity = NewNumericField(model.Quantity <= 0 ? 1 : model.Quantity);
 
-        foreach (var box in new[] { productionHours, setupHours, materialCost, toolingCost, secondaryCost })
+        foreach (var box in new[] { productionHours, setupHours, materialCost, toolingCost, secondaryCost, quantity })
         {
             box.TextChanged += (_, _) => RecalculateQuoteTotals();
         }
@@ -268,6 +272,7 @@ public class QuoteDraftForm : Form
         costsRow.Controls.Add(NewFieldPanel("Material Cost", materialCost), 2, 0);
         costsRow.Controls.Add(NewFieldPanel("Tooling Cost", toolingCost), 3, 0);
         costsRow.Controls.Add(NewFieldPanel("Secondary Operations Cost", secondaryCost), 4, 0);
+        costsRow.Controls.Add(NewFieldPanel("Quantity", quantity), 5, 0);
 
         var productionFlagsGrid = new TableLayoutPanel
         {
@@ -357,23 +362,35 @@ public class QuoteDraftForm : Form
         contentScroller.Controls.Add(contentGrid);
         layout.Controls.Add(contentScroller, 0, 1);
 
-        var footer = new TableLayoutPanel { ColumnCount = 3, RowCount = 1, Dock = DockStyle.Fill, Margin = Padding.Empty };
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40f));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60f));
+        var footer = new TableLayoutPanel { ColumnCount = 5, RowCount = 1, Dock = DockStyle.Fill, Margin = Padding.Empty };
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45f));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55f));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         var totalBox = new TextBox
         {
             ReadOnly = true,
             Dock = DockStyle.Fill,
-            Margin = new Padding(6, 3, 0, 3),
+            Margin = new Padding(6, 3, 12, 3),
             MinimumSize = new Size(0, MinimumTextBoxHeight),
             Text = model.LineItemTotal.ToString("0.00", CultureInfo.CurrentCulture)
         };
+        var perPieceBox = new TextBox
+        {
+            ReadOnly = true,
+            Dock = DockStyle.Fill,
+            Margin = new Padding(6, 3, 12, 3),
+            MinimumSize = new Size(0, MinimumTextBoxHeight),
+            Text = model.UnitPrice.ToString("0.00", CultureInfo.CurrentCulture)
+        };
         footer.Controls.Add(new Label { Text = "Line Item Total", AutoSize = true, Anchor = AnchorStyles.Left, Font = new Font(Font, FontStyle.Bold) }, 0, 0);
         footer.Controls.Add(totalBox, 1, 0);
+        footer.Controls.Add(new Label { Text = "Per-Piece Price", AutoSize = true, Anchor = AnchorStyles.Left, Font = new Font(Font, FontStyle.Bold) }, 2, 0);
+        footer.Controls.Add(perPieceBox, 3, 0);
         removeButton.Anchor = AnchorStyles.Right;
-        footer.Controls.Add(removeButton, 2, 0);
+        footer.Controls.Add(removeButton, 4, 0);
         layout.Controls.Add(footer, 0, 2);
 
         cardPanel.Controls.Add(layout);
@@ -402,7 +419,9 @@ public class QuoteDraftForm : Form
             MaterialCost = materialCost,
             ToolingCost = toolingCost,
             SecondaryCost = secondaryCost,
+            Quantity = quantity,
             Total = totalBox,
+            PerPiecePrice = perPieceBox,
             RequiresDfars = requiresDfars,
             RequiresMaterialTestReport = requiresMaterialTestReport,
             RequiresCertificateOfConformance = requiresCertificateOfConformance,
@@ -523,11 +542,13 @@ public class QuoteDraftForm : Form
             Padding = new Padding(StandardGap / 2),
             Margin = new Padding(StandardGap / 2),
             Dock = DockStyle.Fill,
-            MinimumSize = new Size(MinimumBlobAreaWidth, MinimumBlobAreaHeight)
+            MinimumSize = new Size(MinimumBlobAreaWidth, MinimumBlobAreaHeight),
+            MaximumSize = new Size(int.MaxValue, FixedBlobAreaHeight),
+            Height = FixedBlobAreaHeight
         };
         panel.SuspendLayout();
         var titleLabel = new Label { Text = title, AutoSize = true, Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 0, 0, 4) };
-        var list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = false, HeaderStyle = ColumnHeaderStyle.Nonclickable, HideSelection = false };
+        var list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = false, HeaderStyle = ColumnHeaderStyle.Nonclickable, HideSelection = false, MinimumSize = new Size(0, 36) };
         list.Columns.Add("File", 180);
         list.Columns.Add("Size", 90, HorizontalAlignment.Right);
 
@@ -850,7 +871,7 @@ public class QuoteDraftForm : Form
             var maximumWidth = Math.Max(MinimumLineItemWidth, _lineItemsPanel.ClientSize.Width - (_lineItemsPanel.Padding.Horizontal + 12));
             var proportionalHeight = Math.Max(
                 card.Container.MinimumSize.Height,
-                (int)Math.Round(_lineItemsPanel.ClientSize.Height / 3f));
+                (int)Math.Round(_lineItemsPanel.ClientSize.Height / 4f));
             card.Container.Width = maximumWidth;
             if (!card.IsUserResized)
             {
@@ -881,14 +902,20 @@ public class QuoteDraftForm : Form
             card.Model.MaterialCost = ParseDecimal(card.MaterialCost.Text);
             card.Model.ToolingCost = ParseDecimal(card.ToolingCost.Text);
             card.Model.SecondaryOperationsCost = ParseDecimal(card.SecondaryCost.Text);
+            card.Model.Quantity = Math.Max(1m, ParseDecimal(card.Quantity.Text));
 
-            var lineTotal = ((card.Model.ProductionHours + card.Model.SetupHours) * _shopHourlyRate)
-                            + card.Model.MaterialCost
-                            + card.Model.ToolingCost
-                            + card.Model.SecondaryOperationsCost;
+            var baseCost = ((card.Model.ProductionHours + card.Model.SetupHours) * _shopHourlyRate)
+                           + card.Model.MaterialCost
+                           + card.Model.ToolingCost
+                           + card.Model.SecondaryOperationsCost;
+            var lineTotal = baseCost * card.Model.Quantity;
+            var perPiecePrice = card.Model.Quantity > 0 ? lineTotal / card.Model.Quantity : 0m;
 
             card.Model.LineItemTotal = lineTotal;
+            card.Model.UnitPrice = perPiecePrice;
             card.Total.Text = lineTotal.ToString("0.00", CultureInfo.CurrentCulture);
+            card.PerPiecePrice.Text = perPiecePrice.ToString("0.00", CultureInfo.CurrentCulture);
+            card.Quantity.Text = card.Model.Quantity.ToString("0.##", CultureInfo.CurrentCulture);
 
             totalHours += card.Model.ProductionHours + card.Model.SetupHours;
             masterTotal += lineTotal;
@@ -927,8 +954,8 @@ public class QuoteDraftForm : Form
         {
             var line = card.Model;
             line.Description = string.IsNullOrWhiteSpace(line.DrawingName) ? card.Title.Text : line.DrawingName;
-            line.Quantity = 1;
-            line.UnitPrice = line.LineItemTotal;
+            line.Quantity = Math.Max(1m, line.Quantity);
+            line.UnitPrice = line.Quantity > 0 ? line.LineItemTotal / line.Quantity : 0m;
             line.RequiresDfars = card.RequiresDfars.Checked;
             line.RequiresMaterialTestReport = card.RequiresMaterialTestReport.Checked;
             line.RequiresCertificateOfConformance = card.RequiresCertificateOfConformance.Checked;
@@ -1005,7 +1032,9 @@ public class QuoteDraftForm : Form
         public required TextBox MaterialCost { get; init; }
         public required TextBox ToolingCost { get; init; }
         public required TextBox SecondaryCost { get; init; }
+        public required TextBox Quantity { get; init; }
         public required TextBox Total { get; init; }
+        public required TextBox PerPiecePrice { get; init; }
         public required CheckBox RequiresDfars { get; init; }
         public required CheckBox RequiresMaterialTestReport { get; init; }
         public required CheckBox RequiresCertificateOfConformance { get; init; }
