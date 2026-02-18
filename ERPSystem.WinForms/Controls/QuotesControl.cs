@@ -926,7 +926,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         infoPanel.Controls.Add(CreateMetadataLabel($"Drawing Name: {lineItem.Description}"), 0, 1);
         infoPanel.Controls.Add(CreateMetadataLabel($"Drawing Number: {lineItem.DrawingNumber}"), 0, 2);
         infoPanel.Controls.Add(CreateMetadataLabel($"Customer: {quote.CustomerName}"), 0, 3);
-        infoPanel.Controls.Add(CreateMetadataLabel($"Drawing Revision: {lineItem.DrawingRevision}"), 0, 4);
+        infoPanel.Controls.Add(CreateMetadataLabel($"Drawing Revision: {lineItem.Revision}"), 0, 4);
         infoPanel.Controls.Add(CreateMetadataLabel($"Qty: {lineItem.Quantity:0.##}"), 0, 5);
         infoPanel.Controls.Add(CreateMetadataLabel($"Line Total: {lineItem.LineItemTotal:C2}"), 0, 6);
         infoPanel.Controls.Add(CreateMetadataLabel("3D Controls: rotate / pan / zoom", bold: true), 0, 7);
