@@ -106,14 +106,14 @@ internal static class Program
         await userRepository.SaveUserAsync(new UserAccount
         {
             Username = "ASTECH",
-            DisplayName = "Admin",
+            DisplayName = "Administrator",
             PasswordHash = AuthorizationService.HashPassword("ASTECH123!"),
             IsActive = true,
             Roles =
             [
                 new RoleDefinition
                 {
-                    Name = RoleCatalog.Admin,
+                    Name = RoleCatalog.Administrator,
                     Permissions = Enum.GetValues<UserPermission>().ToList()
                 }
             ]

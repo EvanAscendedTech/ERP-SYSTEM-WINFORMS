@@ -163,9 +163,16 @@ public class UserManagementRepository
         deleteUserRoles.Parameters.AddWithValue("$userId", userId);
         await deleteUserRoles.ExecuteNonQueryAsync();
 
-        foreach (var role in user.Roles)
+        var normalizedRoleNames = user.Roles
+            .Select(role => RoleCatalog.NormalizeRoleName(role.Name))
+            .Where(roleName => roleName is not null)
+            .Select(roleName => roleName!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var roleName in normalizedRoleNames)
         {
-            var roleId = await UpsertRoleAsync(connection, transaction, role);
+            var roleId = await UpsertRoleAsync(connection, transaction, AuthorizationService.BuildRole(roleName));
             await using var insertUserRole = connection.CreateCommand();
             insertUserRole.Transaction = transaction;
             insertUserRole.CommandText = "INSERT INTO UserRoles (UserId, RoleId) VALUES ($userId, $roleId)";

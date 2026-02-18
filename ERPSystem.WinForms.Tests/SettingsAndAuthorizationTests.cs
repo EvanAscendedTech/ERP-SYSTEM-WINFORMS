@@ -39,13 +39,13 @@ public class SettingsAndAuthorizationTests
             [
                 new RoleDefinition
                 {
-                    Name = "Inspector",
-                    Permissions = [UserPermission.ViewInspection, UserPermission.ManageInspection]
+                    Name = RoleCatalog.Inspection,
+                    Permissions = [UserPermission.ViewInspection, UserPermission.EditInspection]
                 }
             ]
         };
 
-        Assert.True(AuthorizationService.HasPermission(user, UserPermission.ManageInspection));
+        Assert.True(AuthorizationService.HasPermission(user, UserPermission.EditInspection));
         Assert.False(AuthorizationService.HasPermission(user, UserPermission.ManageUsers));
     }
 
@@ -59,7 +59,7 @@ public class SettingsAndAuthorizationTests
             [
                 new RoleDefinition
                 {
-                    Name = RoleCatalog.Production,
+                    Name = RoleCatalog.ProductionEmployee,
                     Permissions = [UserPermission.ViewProduction]
                 }
             ]
@@ -67,6 +67,16 @@ public class SettingsAndAuthorizationTests
 
         Assert.True(AuthorizationService.CanAccessSection(user, "Settings"));
         Assert.False(AuthorizationService.CanEditSection(user, "Settings"));
+    }
+
+
+    [Fact]
+    public void RoleCatalog_NormalizeRoleName_MapsToFixedCatalog()
+    {
+        Assert.Equal(RoleCatalog.Purchaser, RoleCatalog.NormalizeRoleName("Purchasing"));
+        Assert.Equal(RoleCatalog.Administrator, RoleCatalog.NormalizeRoleName("Admin"));
+        Assert.Equal(RoleCatalog.Shipping, RoleCatalog.NormalizeRoleName("Shipping/Receiving"));
+        Assert.Null(RoleCatalog.NormalizeRoleName("Unknown"));
     }
 
 }

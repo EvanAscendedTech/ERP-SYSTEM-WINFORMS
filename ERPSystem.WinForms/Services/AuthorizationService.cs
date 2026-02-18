@@ -40,20 +40,35 @@ public static class AuthorizationService
         };
     }
 
+
+    public static bool HasRole(UserAccount user, string roleName)
+    {
+        var targetRole = RoleCatalog.NormalizeRoleName(roleName);
+        if (targetRole is null)
+        {
+            return false;
+        }
+
+        return user.Roles.Any(role =>
+            string.Equals(RoleCatalog.NormalizeRoleName(role.Name), targetRole, StringComparison.OrdinalIgnoreCase));
+    }
+
     public static RoleDefinition BuildRole(string roleName)
     {
-        var normalized = roleName.Trim();
+        var normalized = RoleCatalog.NormalizeRoleName(roleName) ?? roleName.Trim();
         var permissions = normalized switch
         {
-            var r when r.Equals(RoleCatalog.Admin, StringComparison.OrdinalIgnoreCase)
+            var r when r.Equals(RoleCatalog.Administrator, StringComparison.OrdinalIgnoreCase)
                 => Enum.GetValues<UserPermission>().ToList(),
-            var r when r.Equals(RoleCatalog.Purchasing, StringComparison.OrdinalIgnoreCase)
+            var r when r.Equals(RoleCatalog.Purchaser, StringComparison.OrdinalIgnoreCase)
                 => new List<UserPermission> { UserPermission.ViewPurchasing, UserPermission.EditPurchasing, UserPermission.ViewPricing },
-            var r when r.Equals(RoleCatalog.Production, StringComparison.OrdinalIgnoreCase)
+            var r when r.Equals(RoleCatalog.ProductionEmployee, StringComparison.OrdinalIgnoreCase)
                 => new List<UserPermission> { UserPermission.ViewProduction, UserPermission.EditProduction },
-            var r when r.Equals(RoleCatalog.Inspector, StringComparison.OrdinalIgnoreCase)
+            var r when r.Equals(RoleCatalog.ProductionManager, StringComparison.OrdinalIgnoreCase)
+                => new List<UserPermission> { UserPermission.ViewProduction, UserPermission.EditProduction },
+            var r when r.Equals(RoleCatalog.Inspection, StringComparison.OrdinalIgnoreCase)
                 => new List<UserPermission> { UserPermission.ViewInspection, UserPermission.EditInspection },
-            var r when r.Equals(RoleCatalog.ShippingReceiving, StringComparison.OrdinalIgnoreCase)
+            var r when r.Equals(RoleCatalog.Shipping, StringComparison.OrdinalIgnoreCase)
                 => new List<UserPermission> { UserPermission.ViewShipping, UserPermission.EditShipping },
             _ => new List<UserPermission>()
         };
