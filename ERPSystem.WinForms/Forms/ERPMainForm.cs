@@ -137,6 +137,15 @@ public partial class ERPMainForm : Form
         {
             _syncClockTimer.Stop();
             await _userRepo.SetOnlineStatusAsync(_currentUser.Id, false);
+            await _userRepo.WriteAuditLogAsync(new AuditLogEntry
+            {
+                OccurredUtc = DateTime.UtcNow,
+                Username = _currentUser.Username,
+                RoleSnapshot = UserManagementRepository.BuildRoleSnapshot(_currentUser),
+                Module = "Security",
+                Action = "Logout",
+                Details = "User logged out or closed the ERP application."
+            });
         };
     }
 
@@ -616,9 +625,9 @@ public partial class ERPMainForm : Form
         return key switch
         {
             "Dashboard" => new DashboardControl(_quoteRepo, _prodRepo, _jobFlow, OpenDashboardTarget),
-            "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, _activeUser, LoadSection),
+            "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, _userRepo, _activeUser, LoadSection),
             "Purchasing" => new PurchasingControl(_quoteRepo, _prodRepo, _userRepo, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Purchasing")),
-            "Production" => new ProductionControl(_prodRepo, _jobFlow, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Production")),
+            "Production" => new ProductionControl(_prodRepo, _userRepo, _jobFlow, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Production")),
             "CRM" => new CRMControl(_quoteRepo),
             "Inspection" => new InspectionControl(_prodRepo, _jobFlow, _inspection, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Inspection")),
             "Shipping" => new ShippingControl(_prodRepo, _jobFlow, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Shipping")),

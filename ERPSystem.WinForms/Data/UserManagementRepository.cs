@@ -72,6 +72,26 @@ public class UserManagementRepository
                 RightBottomPanelProportion REAL NOT NULL,
                 LastUpdatedUtc TEXT NOT NULL,
                 FOREIGN KEY(UserId) REFERENCES Users(Id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS PasswordResetRequests (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                UserId INTEGER NOT NULL,
+                RequestedUtc TEXT NOT NULL,
+                Note TEXT NOT NULL DEFAULT '',
+                IsResolved INTEGER NOT NULL DEFAULT 0,
+                ResolvedUtc TEXT,
+                FOREIGN KEY(UserId) REFERENCES Users(Id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS AuditLogEntries (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                OccurredUtc TEXT NOT NULL,
+                Username TEXT NOT NULL,
+                RoleSnapshot TEXT NOT NULL,
+                Module TEXT NOT NULL,
+                Action TEXT NOT NULL,
+                Details TEXT NOT NULL DEFAULT ''
             );";
 
         await using var command = connection.CreateCommand();
@@ -82,6 +102,8 @@ public class UserManagementRepository
         await EnsureColumnExistsAsync(connection, "Users", "IconBlob", "BLOB");
         await EnsureColumnExistsAsync(connection, "Users", "IsOnline", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnExistsAsync(connection, "Users", "LastActivityUtc", "TEXT");
+        await EnsureColumnExistsAsync(connection, "Users", "MustResetPassword", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnExistsAsync(connection, "Users", "TemporaryPasswordIssuedUtc", "TEXT");
     }
 
 
@@ -138,14 +160,16 @@ public class UserManagementRepository
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = @"
-            INSERT INTO Users (Username, DisplayName, PasswordHash, IsActive, IconPath, IconBlob)
-            VALUES ($username, $displayName, $passwordHash, $isActive, $iconPath, $iconBlob)
+            INSERT INTO Users (Username, DisplayName, PasswordHash, IsActive, IconPath, IconBlob, MustResetPassword, TemporaryPasswordIssuedUtc)
+            VALUES ($username, $displayName, $passwordHash, $isActive, $iconPath, $iconBlob, $mustResetPassword, $temporaryPasswordIssuedUtc)
             ON CONFLICT(Username) DO UPDATE SET
                 DisplayName = excluded.DisplayName,
                 PasswordHash = excluded.PasswordHash,
                 IsActive = excluded.IsActive,
                 IconPath = excluded.IconPath,
-                IconBlob = excluded.IconBlob;
+                IconBlob = excluded.IconBlob,
+                MustResetPassword = excluded.MustResetPassword,
+                TemporaryPasswordIssuedUtc = excluded.TemporaryPasswordIssuedUtc;
 
             SELECT Id FROM Users WHERE Username = $username;";
 
@@ -155,6 +179,8 @@ public class UserManagementRepository
         command.Parameters.AddWithValue("$isActive", user.IsActive ? 1 : 0);
         command.Parameters.AddWithValue("$iconPath", user.IconPath ?? string.Empty);
         command.Parameters.AddWithValue("$iconBlob", (object?)user.IconBlob ?? DBNull.Value);
+        command.Parameters.AddWithValue("$mustResetPassword", user.MustResetPassword ? 1 : 0);
+        command.Parameters.AddWithValue("$temporaryPasswordIssuedUtc", user.TemporaryPasswordIssuedUtc?.ToString("O") ?? (object)DBNull.Value);
         var userId = Convert.ToInt32(await command.ExecuteScalarAsync());
 
         await using var deleteUserRoles = connection.CreateCommand();
@@ -216,7 +242,7 @@ public class UserManagementRepository
         await using var command = connection.CreateCommand();
         command.CommandText = @"
             SELECT u.Id, u.Username, u.DisplayName, u.PasswordHash, u.IsActive, u.IconPath,
-                   u.IconBlob, u.IsOnline, u.LastActivityUtc,
+                   u.IconBlob, u.IsOnline, u.LastActivityUtc, u.MustResetPassword, u.TemporaryPasswordIssuedUtc,
                    r.Id, r.Name, r.Permissions
             FROM Users u
             LEFT JOIN UserRoles ur ON ur.UserId = u.Id
@@ -243,18 +269,22 @@ public class UserManagementRepository
                     IsOnline = !reader.IsDBNull(7) && reader.GetInt32(7) == 1,
                     LastActivityUtc = reader.IsDBNull(8)
                         ? null
-                        : DateTime.Parse(reader.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+                        : DateTime.Parse(reader.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    MustResetPassword = !reader.IsDBNull(9) && reader.GetInt32(9) == 1,
+                    TemporaryPasswordIssuedUtc = reader.IsDBNull(10)
+                        ? null
+                        : DateTime.Parse(reader.GetString(10), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
                 };
                 map[userId] = user;
                 users.Add(user);
             }
 
-            if (reader.IsDBNull(9))
+            if (reader.IsDBNull(11))
             {
                 continue;
             }
 
-            var permissionsText = reader.GetString(11);
+            var permissionsText = reader.GetString(13);
             var permissions = string.IsNullOrWhiteSpace(permissionsText)
                 ? new List<UserPermission>()
                 : permissionsText.Split(',', StringSplitOptions.RemoveEmptyEntries)
@@ -264,8 +294,8 @@ public class UserManagementRepository
 
             user.Roles.Add(new RoleDefinition
             {
-                Id = reader.GetInt32(9),
-                Name = reader.GetString(10),
+                Id = reader.GetInt32(11),
+                Name = reader.GetString(12),
                 Permissions = permissions
             });
         }
@@ -477,5 +507,148 @@ public class UserManagementRepository
 
         return requests;
     }
+
+
+    public async Task SavePasswordResetRequestAsync(int userId, string note)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO PasswordResetRequests (UserId, RequestedUtc, Note, IsResolved)
+            VALUES ($userId, $requestedUtc, $note, 0);";
+        command.Parameters.AddWithValue("$userId", userId);
+        command.Parameters.AddWithValue("$requestedUtc", DateTime.UtcNow.ToString("O"));
+        command.Parameters.AddWithValue("$note", note.Trim());
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<IReadOnlyList<PasswordResetRequest>> GetPasswordResetRequestsAsync(int? userId = null)
+    {
+        var requests = new List<PasswordResetRequest>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT pr.Id, pr.UserId, u.Username, pr.RequestedUtc, pr.Note, pr.IsResolved, pr.ResolvedUtc
+            FROM PasswordResetRequests pr
+            INNER JOIN Users u ON u.Id = pr.UserId
+            WHERE ($userId IS NULL OR pr.UserId = $userId)
+            ORDER BY pr.RequestedUtc DESC;";
+        command.Parameters.AddWithValue("$userId", userId.HasValue ? userId.Value : DBNull.Value);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            requests.Add(new PasswordResetRequest
+            {
+                Id = reader.GetInt32(0),
+                UserId = reader.GetInt32(1),
+                Username = reader.GetString(2),
+                RequestedUtc = DateTime.Parse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                Note = reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+                IsResolved = reader.GetInt32(5) == 1,
+                ResolvedUtc = reader.IsDBNull(6) ? null : DateTime.Parse(reader.GetString(6), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+            });
+        }
+
+        return requests;
+    }
+
+    public async Task IssueTemporaryPasswordAsync(int userId, string temporaryPassword)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var tx = (SqliteTransaction)await connection.BeginTransactionAsync();
+
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = tx;
+            command.CommandText = @"
+                UPDATE Users
+                SET PasswordHash = $passwordHash,
+                    MustResetPassword = 1,
+                    TemporaryPasswordIssuedUtc = $issuedUtc
+                WHERE Id = $userId;";
+            command.Parameters.AddWithValue("$passwordHash", AuthorizationService.HashPassword(temporaryPassword));
+            command.Parameters.AddWithValue("$issuedUtc", DateTime.UtcNow.ToString("O"));
+            command.Parameters.AddWithValue("$userId", userId);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await using (var markRequests = connection.CreateCommand())
+        {
+            markRequests.Transaction = tx;
+            markRequests.CommandText = @"
+                UPDATE PasswordResetRequests
+                SET IsResolved = 1,
+                    ResolvedUtc = $resolvedUtc
+                WHERE UserId = $userId AND IsResolved = 0;";
+            markRequests.Parameters.AddWithValue("$resolvedUtc", DateTime.UtcNow.ToString("O"));
+            markRequests.Parameters.AddWithValue("$userId", userId);
+            await markRequests.ExecuteNonQueryAsync();
+        }
+
+        await tx.CommitAsync();
+    }
+
+    public async Task WriteAuditLogAsync(AuditLogEntry entry)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO AuditLogEntries (OccurredUtc, Username, RoleSnapshot, Module, Action, Details)
+            VALUES ($occurredUtc, $username, $roleSnapshot, $module, $action, $details);";
+        command.Parameters.AddWithValue("$occurredUtc", entry.OccurredUtc.ToString("O"));
+        command.Parameters.AddWithValue("$username", entry.Username);
+        command.Parameters.AddWithValue("$roleSnapshot", entry.RoleSnapshot);
+        command.Parameters.AddWithValue("$module", entry.Module);
+        command.Parameters.AddWithValue("$action", entry.Action);
+        command.Parameters.AddWithValue("$details", entry.Details);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<IReadOnlyList<AuditLogEntry>> GetAuditLogEntriesAsync(string? username = null)
+    {
+        var logs = new List<AuditLogEntry>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT Id, OccurredUtc, Username, RoleSnapshot, Module, Action, Details
+            FROM AuditLogEntries
+            WHERE ($username IS NULL OR Username = $username)
+            ORDER BY OccurredUtc DESC
+            LIMIT 500;";
+        command.Parameters.AddWithValue("$username", string.IsNullOrWhiteSpace(username) ? DBNull.Value : username.Trim());
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            logs.Add(new AuditLogEntry
+            {
+                Id = reader.GetInt64(0),
+                OccurredUtc = DateTime.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                Username = reader.GetString(2),
+                RoleSnapshot = reader.GetString(3),
+                Module = reader.GetString(4),
+                Action = reader.GetString(5),
+                Details = reader.GetString(6)
+            });
+        }
+
+        return logs;
+    }
+
+    public static string BuildRoleSnapshot(UserAccount user)
+        => string.Join(", ", user.Roles.Select(r => r.Name).Distinct(StringComparer.OrdinalIgnoreCase));
 
 }

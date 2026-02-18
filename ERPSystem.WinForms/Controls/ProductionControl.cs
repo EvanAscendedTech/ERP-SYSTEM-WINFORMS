@@ -8,6 +8,8 @@ public class ProductionControl : UserControl, IRealtimeDataControl
 {
     private readonly ProductionRepository _productionRepository;
     private readonly JobFlowService _flowService;
+    private readonly UserManagementRepository _userRepository;
+    private readonly UserAccount _currentUser;
     private readonly Action<string> _openSection;
     private readonly bool _isAdmin;
     private readonly bool _canEdit;
@@ -61,10 +63,12 @@ public class ProductionControl : UserControl, IRealtimeDataControl
     private string? _selectedMachineCode;
     private List<MachineSchedule> _selectedMachineSchedules = new();
 
-    public ProductionControl(ProductionRepository productionRepository, JobFlowService flowService, Models.UserAccount currentUser, Action<string> openSection, bool canEdit)
+    public ProductionControl(ProductionRepository productionRepository, UserManagementRepository userRepository, JobFlowService flowService, Models.UserAccount currentUser, Action<string> openSection, bool canEdit)
     {
         _productionRepository = productionRepository;
         _flowService = flowService;
+        _userRepository = userRepository;
+        _currentUser = currentUser;
         _openSection = openSection;
         _canEdit = canEdit;
         _isAdmin = AuthorizationService.HasRole(currentUser, RoleCatalog.Administrator);
@@ -461,6 +465,15 @@ public class ProductionControl : UserControl, IRealtimeDataControl
 
         var result = await _productionRepository.StartJobAsync(selected.JobNumber, QuoteStatus.Won, selected.SourceQuoteId ?? 0, "system.user");
         _feedback.Text = result.Message;
+        await _userRepository.WriteAuditLogAsync(new AuditLogEntry
+        {
+            OccurredUtc = DateTime.UtcNow,
+            Username = _currentUser.Username,
+            RoleSnapshot = UserManagementRepository.BuildRoleSnapshot(_currentUser),
+            Module = "Production",
+            Action = "Started production job",
+            Details = $"Started job {selected.JobNumber}."
+        });
         await LoadJobsAsync();
     }
 
@@ -474,6 +487,15 @@ public class ProductionControl : UserControl, IRealtimeDataControl
 
         var result = await _productionRepository.CompleteJobAsync(selected.JobNumber, "system.user");
         _feedback.Text = result.Message;
+        await _userRepository.WriteAuditLogAsync(new AuditLogEntry
+        {
+            OccurredUtc = DateTime.UtcNow,
+            Username = _currentUser.Username,
+            RoleSnapshot = UserManagementRepository.BuildRoleSnapshot(_currentUser),
+            Module = "Production",
+            Action = "Completed production job",
+            Details = $"Completed job {selected.JobNumber}."
+        });
         await LoadJobsAsync();
     }
 
