@@ -3,6 +3,9 @@ using ERPSystem.WinForms.Forms;
 using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
 using System.Drawing.Drawing2D;
+using System.Numerics;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace ERPSystem.WinForms.Controls;
 
@@ -532,10 +535,15 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
     private Control CreateCustomerCard(string customerName, IReadOnlyCollection<Quote> quotes)
     {
+        var completedQuotes = quotes
+            .Where(q => q.Status == QuoteStatus.Completed)
+            .OrderByDescending(q => q.CompletedUtc ?? q.LastUpdatedUtc)
+            .ToList();
+
         var card = new CustomerCardPanel
         {
-            Width = 250,
-            Height = 116,
+            Width = 840,
+            Height = completedQuotes.Count > 0 ? 350 : 170,
             Margin = new Padding(0, 0, 12, 0),
             FillColor = ResolveCustomerCardColor(customerName),
             Cursor = Cursors.Hand
@@ -545,14 +553,17 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         var completedCount = quotes.Count(q => q.Status == QuoteStatus.Completed);
         var wonCount = quotes.Count(q => q.Status == QuoteStatus.Won);
 
-        var nameLabel = new Label { Text = customerName, Dock = DockStyle.Top, Height = 44, Padding = new Padding(10, 12, 10, 4), Font = new Font(Font, FontStyle.Bold) };
+        var nameLabel = new Label { Text = customerName, Dock = DockStyle.Top, Height = 40, Padding = new Padding(10, 10, 10, 4), Font = new Font(Font, FontStyle.Bold) };
         var summaryLabel = new Label
         {
             Text = $"Open: {openCount}    Completed: {completedCount}    Total: {quotes.Count}    Won: {wonCount}",
-            Dock = DockStyle.Fill,
-            Padding = new Padding(10, 4, 10, 8),
+            Dock = DockStyle.Top,
+            Height = 30,
+            Padding = new Padding(10, 2, 10, 6),
             Font = new Font(Font.FontFamily, 9f, FontStyle.Regular)
         };
+
+        var completedQuotesPanel = CreateCompletedQuotesTable(completedQuotes, customerName);
 
         void selectCustomer(object? _, EventArgs __)
         {
@@ -563,9 +574,266 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         card.Click += selectCustomer;
         nameLabel.Click += selectCustomer;
         summaryLabel.Click += selectCustomer;
-        card.Controls.Add(summaryLabel);
+        card.Controls.Add(completedQuotesPanel);
         card.Controls.Add(nameLabel);
+        card.Controls.Add(summaryLabel);
         return card;
+    }
+
+    private Control CreateCompletedQuotesTable(IReadOnlyList<Quote> completedQuotes, string customerName)
+    {
+        var container = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(10, 4, 10, 10)
+        };
+
+        var sectionLabel = new Label
+        {
+            Text = "Completed Quotes",
+            Dock = DockStyle.Top,
+            Height = 24,
+            Font = new Font(Font, FontStyle.Bold)
+        };
+
+        var rowsPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoScroll = true,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty
+        };
+
+        rowsPanel.Controls.Add(CreateCompletedQuotesHeaderRow());
+
+        if (completedQuotes.Count == 0)
+        {
+            rowsPanel.Controls.Add(new Label
+            {
+                Text = $"No completed quotes for {customerName}.",
+                AutoSize = false,
+                Width = 780,
+                Height = 30,
+                Padding = new Padding(6),
+                ForeColor = Color.DimGray
+            });
+        }
+        else
+        {
+            foreach (var quote in completedQuotes)
+            {
+                rowsPanel.Controls.Add(CreateCompletedQuoteExpandableRow(quote));
+            }
+        }
+
+        container.Controls.Add(rowsPanel);
+        container.Controls.Add(sectionLabel);
+        return container;
+    }
+
+    private static Control CreateCompletedQuotesHeaderRow()
+    {
+        var table = new TableLayoutPanel
+        {
+            Width = 780,
+            Height = 26,
+            ColumnCount = 6,
+            RowCount = 1,
+            Margin = new Padding(0, 0, 0, 2),
+            BackColor = Color.FromArgb(235, 241, 248)
+        };
+
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 28));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
+
+        AddHeaderLabel(table, "", 0);
+        AddHeaderLabel(table, "Quote #", 1);
+        AddHeaderLabel(table, "Customer Name", 2);
+        AddHeaderLabel(table, "Line Items", 3);
+        AddHeaderLabel(table, "Time Since Quoted", 4);
+        AddHeaderLabel(table, "Total $ Value", 5);
+        return table;
+    }
+
+    private Control CreateCompletedQuoteExpandableRow(Quote quote)
+    {
+        var wrapper = new Panel
+        {
+            Width = 780,
+            Height = 34,
+            Margin = new Padding(0, 0, 0, 6),
+            BorderStyle = BorderStyle.FixedSingle
+        };
+
+        var row = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            Height = 32,
+            ColumnCount = 6,
+            RowCount = 1,
+            BackColor = Color.WhiteSmoke
+        };
+
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 28));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
+
+        var arrow = new Label
+        {
+            Text = "▶",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font(SystemFonts.DefaultFont.FontFamily, 9f, FontStyle.Bold),
+            Cursor = Cursors.Hand
+        };
+
+        var age = DateTime.UtcNow - quote.CreatedUtc;
+        var details = CreateLineItemsNestedTable(quote.LineItems);
+        details.Dock = DockStyle.Top;
+        details.Visible = false;
+
+        void toggleExpand(object? _, EventArgs __)
+        {
+            details.Visible = !details.Visible;
+            arrow.Text = details.Visible ? "▼" : "▶";
+            wrapper.Height = details.Visible ? 34 + details.Height + 4 : 34;
+        }
+
+        row.Click += toggleExpand;
+        arrow.Click += toggleExpand;
+
+        row.Controls.Add(arrow, 0, 0);
+        row.Controls.Add(CreateBodyLabel($"#{quote.Id}"), 1, 0);
+        row.Controls.Add(CreateBodyLabel(quote.CustomerName), 2, 0);
+        row.Controls.Add(CreateBodyLabel(quote.LineItems.Count.ToString()), 3, 0);
+        row.Controls.Add(CreateBodyLabel($"{Math.Max(0, age.Days)}d {Math.Max(0, age.Hours)}h"), 4, 0);
+        row.Controls.Add(CreateBodyLabel(quote.MasterTotal.ToString("C2")), 5, 0);
+
+        foreach (Control ctl in row.Controls)
+        {
+            ctl.Click += toggleExpand;
+        }
+
+        wrapper.Controls.Add(details);
+        wrapper.Controls.Add(row);
+        return wrapper;
+    }
+
+    private static Control CreateLineItemsNestedTable(IReadOnlyList<QuoteLineItem> lineItems)
+    {
+        var container = new Panel
+        {
+            Width = 772,
+            AutoSize = false,
+            Height = lineItems.Count == 0 ? 40 : (lineItems.Count * 184) + 36,
+            Padding = new Padding(8),
+            BackColor = Color.FromArgb(248, 251, 255)
+        };
+
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 4,
+            RowCount = lineItems.Count + 1,
+            AutoSize = false
+        };
+
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 72));
+
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        AddHeaderLabel(layout, "Line Item", 0);
+        AddHeaderLabel(layout, "Qty", 1);
+        AddHeaderLabel(layout, "Line Total", 2);
+        AddHeaderLabel(layout, "3D Model (STEP)", 3);
+
+        if (lineItems.Count == 0)
+        {
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+            var noItems = new Label { Text = "No line items.", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.DimGray };
+            layout.Controls.Add(noItems, 0, 1);
+            layout.SetColumnSpan(noItems, 4);
+        }
+        else
+        {
+            for (var index = 0; index < lineItems.Count; index++)
+            {
+                var lineItem = lineItems[index];
+                var rowIndex = index + 1;
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 180));
+
+                layout.Controls.Add(CreateBodyLabel($"{lineItem.DrawingNumber} {lineItem.Description}"), 0, rowIndex);
+                layout.Controls.Add(CreateBodyLabel(lineItem.Quantity.ToString("0.##")), 1, rowIndex);
+                layout.Controls.Add(CreateBodyLabel(lineItem.LineItemTotal.ToString("C2")), 2, rowIndex);
+                layout.Controls.Add(CreateModelCell(lineItem), 3, rowIndex);
+            }
+        }
+
+        container.Controls.Add(layout);
+        return container;
+    }
+
+    private static Control CreateModelCell(QuoteLineItem lineItem)
+    {
+        var stepAttachment = lineItem.BlobAttachments.FirstOrDefault(blob =>
+            blob.BlobType == QuoteBlobType.ThreeDModel
+            && (blob.Extension.Equals(".step", StringComparison.OrdinalIgnoreCase)
+                || blob.Extension.Equals(".stp", StringComparison.OrdinalIgnoreCase)
+                || blob.FileName.EndsWith(".step", StringComparison.OrdinalIgnoreCase)
+                || blob.FileName.EndsWith(".stp", StringComparison.OrdinalIgnoreCase))
+            && blob.BlobData.Length > 0);
+
+        if (stepAttachment is null)
+        {
+            return new Label
+            {
+                Text = "No STEP file",
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleCenter,
+                ForeColor = Color.DimGray
+            };
+        }
+
+        var viewer = new StepModelViewerControl
+        {
+            Dock = DockStyle.Fill,
+            Margin = new Padding(4)
+        };
+        viewer.LoadStep(stepAttachment.BlobData);
+        return viewer;
+    }
+
+    private static Label CreateBodyLabel(string value)
+        => new()
+        {
+            Text = value,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(6, 0, 6, 0),
+            AutoEllipsis = true
+        };
+
+    private static void AddHeaderLabel(TableLayoutPanel table, string text, int columnIndex)
+    {
+        table.Controls.Add(new Label
+        {
+            Text = text,
+            Dock = DockStyle.Fill,
+            Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(6, 0, 2, 0)
+        }, columnIndex, 0);
     }
 
     private Color ResolveCustomerCardColor(string customerName)
@@ -716,6 +984,217 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private enum QuoteGridRowType
     {
         QuoteSummary
+    }
+
+    private sealed class StepModelViewerControl : Control
+    {
+        private readonly List<(Vector3 Start, Vector3 End)> _segments = new();
+        private float _yaw = -0.45f;
+        private float _pitch = 0.3f;
+        private float _zoom = 0.9f;
+        private Vector2 _pan = Vector2.Zero;
+        private Point _lastMouse;
+        private MouseButtons _activeButton;
+
+        public StepModelViewerControl()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
+            BackColor = Color.FromArgb(248, 250, 252);
+        }
+
+        public void LoadStep(byte[] stepBytes)
+        {
+            _segments.Clear();
+            foreach (var segment in StepWireframeParser.Parse(stepBytes))
+            {
+                _segments.Add(segment);
+            }
+
+            Invalidate();
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            _activeButton = e.Button;
+            _lastMouse = e.Location;
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            _activeButton = MouseButtons.None;
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            if (_activeButton == MouseButtons.None)
+            {
+                return;
+            }
+
+            var dx = e.X - _lastMouse.X;
+            var dy = e.Y - _lastMouse.Y;
+            _lastMouse = e.Location;
+
+            if (_activeButton == MouseButtons.Left)
+            {
+                _yaw += dx * 0.01f;
+                _pitch = Math.Clamp(_pitch + dy * 0.01f, -1.4f, 1.4f);
+            }
+            else if (_activeButton == MouseButtons.Right)
+            {
+                _pan += new Vector2(dx * 0.01f, -dy * 0.01f);
+            }
+
+            Invalidate();
+        }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            _zoom = Math.Clamp(_zoom + (e.Delta > 0 ? 0.08f : -0.08f), 0.2f, 3.0f);
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            e.Graphics.Clear(BackColor);
+
+            using var borderPen = new Pen(Color.FromArgb(180, 193, 205));
+            e.Graphics.DrawRectangle(borderPen, 0, 0, Width - 1, Height - 1);
+
+            if (_segments.Count == 0)
+            {
+                TextRenderer.DrawText(e.Graphics, "STEP model unavailable", Font, ClientRectangle, Color.DimGray, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                return;
+            }
+
+            var view = Matrix4x4.CreateRotationX(_pitch) * Matrix4x4.CreateRotationY(_yaw);
+            var scale = Math.Min(Width, Height) * 0.42f * _zoom;
+            var centerX = (Width / 2f) + (_pan.X * scale);
+            var centerY = (Height / 2f) + (_pan.Y * scale);
+
+            using var linePen = new Pen(Color.FromArgb(45, 86, 145), 1.1f);
+            foreach (var (start, end) in _segments)
+            {
+                var s = Vector3.Transform(start, view);
+                var t = Vector3.Transform(end, view);
+                var sx = centerX + (s.X * scale);
+                var sy = centerY - (s.Y * scale);
+                var tx = centerX + (t.X * scale);
+                var ty = centerY - (t.Y * scale);
+                e.Graphics.DrawLine(linePen, sx, sy, tx, ty);
+            }
+        }
+    }
+
+    private static class StepWireframeParser
+    {
+        private static readonly Regex PointRegex = new(@"#(?<id>\d+)\s*=\s*CARTESIAN_POINT\s*\(\s*'[^']*'\s*,\s*\((?<coords>[^)]*)\)\s*\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex PolylineRegex = new(@"#\d+\s*=\s*POLYLINE\s*\(\s*'[^']*'\s*,\s*\((?<refs>[^)]*)\)\s*\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        public static IEnumerable<(Vector3 Start, Vector3 End)> Parse(byte[] stepBytes)
+        {
+            if (stepBytes.Length == 0)
+            {
+                return Enumerable.Empty<(Vector3 Start, Vector3 End)>();
+            }
+
+            var content = Encoding.UTF8.GetString(stepBytes);
+            var points = new Dictionary<int, Vector3>();
+
+            foreach (Match match in PointRegex.Matches(content))
+            {
+                var pointId = int.Parse(match.Groups["id"].Value);
+                var coordParts = match.Groups["coords"].Value.Split(',');
+                if (coordParts.Length < 3)
+                {
+                    continue;
+                }
+
+                if (!float.TryParse(coordParts[0].Trim(), out var x)
+                    || !float.TryParse(coordParts[1].Trim(), out var y)
+                    || !float.TryParse(coordParts[2].Trim(), out var z))
+                {
+                    continue;
+                }
+
+                points[pointId] = new Vector3(x, y, z);
+            }
+
+            if (points.Count == 0)
+            {
+                return Enumerable.Empty<(Vector3 Start, Vector3 End)>();
+            }
+
+            var segments = new List<(Vector3 Start, Vector3 End)>();
+            foreach (Match match in PolylineRegex.Matches(content))
+            {
+                var references = match.Groups["refs"].Value
+                    .Split(',')
+                    .Select(value => value.Trim())
+                    .Where(value => value.StartsWith("#", StringComparison.Ordinal))
+                    .Select(value => int.TryParse(value.AsSpan(1), out var id) ? id : -1)
+                    .Where(id => id > 0)
+                    .ToList();
+
+                for (var i = 0; i < references.Count - 1; i++)
+                {
+                    if (points.TryGetValue(references[i], out var start) && points.TryGetValue(references[i + 1], out var end))
+                    {
+                        segments.Add((start, end));
+                    }
+                }
+            }
+
+            if (segments.Count == 0)
+            {
+                var boundsMin = new Vector3(points.Values.Min(p => p.X), points.Values.Min(p => p.Y), points.Values.Min(p => p.Z));
+                var boundsMax = new Vector3(points.Values.Max(p => p.X), points.Values.Max(p => p.Y), points.Values.Max(p => p.Z));
+                segments.AddRange(CreateBoundingBox(boundsMin, boundsMax));
+            }
+
+            return NormalizeToUnitCube(segments);
+        }
+
+        private static IEnumerable<(Vector3 Start, Vector3 End)> CreateBoundingBox(Vector3 min, Vector3 max)
+        {
+            var p000 = new Vector3(min.X, min.Y, min.Z);
+            var p001 = new Vector3(min.X, min.Y, max.Z);
+            var p010 = new Vector3(min.X, max.Y, min.Z);
+            var p011 = new Vector3(min.X, max.Y, max.Z);
+            var p100 = new Vector3(max.X, min.Y, min.Z);
+            var p101 = new Vector3(max.X, min.Y, max.Z);
+            var p110 = new Vector3(max.X, max.Y, min.Z);
+            var p111 = new Vector3(max.X, max.Y, max.Z);
+
+            return new[]
+            {
+                (p000,p001), (p001,p011), (p011,p010), (p010,p000),
+                (p100,p101), (p101,p111), (p111,p110), (p110,p100),
+                (p000,p100), (p001,p101), (p010,p110), (p011,p111)
+            };
+        }
+
+        private static IEnumerable<(Vector3 Start, Vector3 End)> NormalizeToUnitCube(IReadOnlyCollection<(Vector3 Start, Vector3 End)> segments)
+        {
+            var allPoints = segments.SelectMany(s => new[] { s.Start, s.End }).ToList();
+            var min = new Vector3(allPoints.Min(p => p.X), allPoints.Min(p => p.Y), allPoints.Min(p => p.Z));
+            var max = new Vector3(allPoints.Max(p => p.X), allPoints.Max(p => p.Y), allPoints.Max(p => p.Z));
+            var center = (min + max) / 2f;
+            var maxDimension = Math.Max(0.001f, Math.Max(max.X - min.X, Math.Max(max.Y - min.Y, max.Z - min.Z)));
+
+            return segments.Select(segment =>
+            {
+                var normalizedStart = (segment.Start - center) / maxDimension;
+                var normalizedEnd = (segment.End - center) / maxDimension;
+                return (normalizedStart, normalizedEnd);
+            }).ToList();
+        }
     }
 
 }
