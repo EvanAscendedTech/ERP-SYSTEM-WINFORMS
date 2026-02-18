@@ -8,7 +8,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
-    <GenerateTargetPlatformAttribute>false</GenerateTargetPlatformAttribute>
+    <!--
+      Keep the SDK-generated [assembly: SupportedOSPlatform("windows...")] attribute
+      so platform-compat analyzers understand this project is Windows-only.
+      Disabling this attribute causes widespread CA1416 warnings for WinForms APIs.
+    -->
+    <GenerateTargetPlatformAttribute>true</GenerateTargetPlatformAttribute>
     <CopyRetryCount>20</CopyRetryCount>
     <CopyRetryDelayMilliseconds>250</CopyRetryDelayMilliseconds>
   </PropertyGroup>
