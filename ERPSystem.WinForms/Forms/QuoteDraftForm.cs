@@ -276,7 +276,8 @@ public class QuoteDraftForm : Form
 
         var actionButtons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = Padding.Empty };
         var doneButton = BuildCompactIconButton("✅ Done", Color.FromArgb(22, 163, 74));
-        var editButton = BuildCompactIconButton("✏️ Edit", Color.FromArgb(37, 99, 235)) { Visible = false };
+        var editButton = BuildCompactIconButton("✏️ Edit", Color.FromArgb(37, 99, 235));
+        editButton.Visible = false;
         var removeButton = BuildCompactIconButton("🗑 Remove", Color.FromArgb(214, 77, 77));
         actionButtons.Controls.Add(doneButton);
         actionButtons.Controls.Add(editButton);
