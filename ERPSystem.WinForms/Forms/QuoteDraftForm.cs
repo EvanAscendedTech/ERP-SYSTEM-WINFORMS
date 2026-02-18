@@ -650,8 +650,7 @@ public class QuoteDraftForm : Form
 
     private void ExpandModelViewer(LineItemCard card)
     {
-        var stepAttachment = FindStepAttachment(card.Model);
-        if (stepAttachment?.BlobData?.Length <= 0)
+        if (FindStepAttachment(card.Model)?.BlobData is not { Length: > 0 } stepData)
         {
             MessageBox.Show("No STEP model found for this line item.", "3D Model", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
@@ -666,12 +665,6 @@ public class QuoteDraftForm : Form
             WindowState = FormWindowState.Maximized
         };
         var viewer = new StepModelViewerControl { Dock = DockStyle.Fill };
-        var stepData = stepAttachment.BlobData;
-        if (stepData is null || stepData.Length == 0)
-        {
-            MessageBox.Show("No STEP model found for this line item.", "3D Model", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
 
         viewer.LoadStep(stepData);
         viewerForm.Controls.Add(viewer);
