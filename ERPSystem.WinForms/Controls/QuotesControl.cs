@@ -84,9 +84,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         {
             Dock = DockStyle.Fill,
             Orientation = Orientation.Horizontal,
-            FixedPanel = FixedPanel.None,
-            Panel1MinSize = 160,
-            Panel2MinSize = 160
+            FixedPanel = FixedPanel.None
         };
 
         var inProgressPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 0, 6) };
@@ -111,7 +109,11 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
         quoteTablesSplit.Panel1.Controls.Add(inProgressPanel);
         quoteTablesSplit.Panel2.Controls.Add(completedWorkPanel);
-        quoteTablesSplit.Resize += (_, _) => SetSafeSplitterDistance(quoteTablesSplit, quoteTablesSplit.Height / 2);
+        quoteTablesSplit.Resize += (_, _) =>
+        {
+            ApplySafePanelMinSizes(quoteTablesSplit, desiredPanel1MinSize: 160, desiredPanel2MinSize: 160);
+            SetSafeSplitterDistance(quoteTablesSplit, quoteTablesSplit.Height / 2);
+        };
 
         var topContent = new Panel { Dock = DockStyle.Fill };
         topContent.Controls.Add(quoteTablesSplit);
@@ -141,11 +143,13 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         {
             Dock = DockStyle.Fill,
             Orientation = Orientation.Horizontal,
-            FixedPanel = FixedPanel.Panel2,
-            Panel1MinSize = 300,
-            Panel2MinSize = 140
+            FixedPanel = FixedPanel.Panel2
         };
-        split.Resize += (_, _) => SetSafeSplitterDistance(split, 560);
+        split.Resize += (_, _) =>
+        {
+            ApplySafePanelMinSizes(split, desiredPanel1MinSize: 300, desiredPanel2MinSize: 140);
+            SetSafeSplitterDistance(split, 560);
+        };
         split.Panel1.Controls.Add(topContent);
         split.Panel2.Controls.Add(archivePanel);
 
@@ -173,6 +177,27 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         if (splitContainer.SplitterDistance != safeDistance)
         {
             splitContainer.SplitterDistance = safeDistance;
+        }
+    }
+
+    private static void ApplySafePanelMinSizes(SplitContainer splitContainer, int desiredPanel1MinSize, int desiredPanel2MinSize)
+    {
+        var availableSize = splitContainer.Orientation == Orientation.Horizontal
+            ? splitContainer.ClientSize.Height
+            : splitContainer.ClientSize.Width;
+
+        var availableWithoutSplitter = Math.Max(0, availableSize - splitContainer.SplitterWidth);
+        var panel1Min = Math.Min(desiredPanel1MinSize, availableWithoutSplitter);
+        var panel2Min = Math.Min(desiredPanel2MinSize, Math.Max(0, availableWithoutSplitter - panel1Min));
+
+        if (splitContainer.Panel1MinSize != panel1Min)
+        {
+            splitContainer.Panel1MinSize = panel1Min;
+        }
+
+        if (splitContainer.Panel2MinSize != panel2Min)
+        {
+            splitContainer.Panel2MinSize = panel2Min;
         }
     }
 
