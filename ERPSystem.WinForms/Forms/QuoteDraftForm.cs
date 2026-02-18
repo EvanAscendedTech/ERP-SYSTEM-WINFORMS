@@ -17,6 +17,12 @@ public class QuoteDraftForm : Form
     private const int FixedBlobAreaHeight = 150;
     private const int MinimumTextBoxHeight = 24;
     private const int StandardGap = 8;
+    private static readonly Color[] LineItemColorCycle =
+    {
+        Color.FromArgb(232, 245, 233),
+        Color.FromArgb(227, 242, 253),
+        Color.FromArgb(243, 229, 245)
+    };
     private readonly QuoteRepository _quoteRepository;
     private readonly bool _canViewPricing;
     private readonly string _uploadedBy;
@@ -214,10 +220,10 @@ public class QuoteDraftForm : Form
         var cardPanel = new Panel
         {
             AutoSize = false,
-            BorderStyle = BorderStyle.None,
+            BorderStyle = BorderStyle.FixedSingle,
             Margin = new Padding(0, 0, 0, 6),
             Padding = new Padding(6),
-            BackColor = index % 2 == 0 ? Color.FromArgb(245, 245, 245) : Color.FromArgb(232, 232, 232),
+            BackColor = GetLineItemBackgroundColor(index),
             MinimumSize = new Size(MinimumLineItemWidth, MinimumLineItemHeight),
             MaximumSize = new Size(int.MaxValue, MaximumLineItemHeight),
             Height = DefaultLineItemHeight
@@ -755,9 +761,12 @@ public class QuoteDraftForm : Form
         for (var i = 0; i < _lineItemCards.Count; i++)
         {
             _lineItemCards[i].Title.Text = $"Line Item {i + 1}";
-            _lineItemCards[i].Container.BackColor = i % 2 == 0 ? Color.FromArgb(245, 245, 245) : Color.FromArgb(232, 232, 232);
+            _lineItemCards[i].Container.BackColor = GetLineItemBackgroundColor(i);
         }
     }
+
+    private static Color GetLineItemBackgroundColor(int index)
+        => LineItemColorCycle[index % LineItemColorCycle.Length];
 
     private void ResizeCards()
     {
