@@ -535,10 +535,13 @@ public class QuoteDraftForm : Form
         expandButton.BringToFront();
         viewerPanel.Controls.Add(viewer);
         viewerPanel.Controls.Add(expandButton);
-        expandButton.Parent?.Resize += (_, _) =>
+        if (expandButton.Parent is not null)
         {
-            expandButton.Location = new Point(Math.Max(4, viewerPanel.ClientSize.Width - expandButton.Width - 4), 4);
-        };
+            expandButton.Parent.Resize += (_, _) =>
+            {
+                expandButton.Location = new Point(Math.Max(4, viewerPanel.ClientSize.Width - expandButton.Width - 4), 4);
+            };
+        }
 
         var details = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
         details.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -663,7 +666,14 @@ public class QuoteDraftForm : Form
             WindowState = FormWindowState.Maximized
         };
         var viewer = new StepModelViewerControl { Dock = DockStyle.Fill };
-        viewer.LoadStep(stepAttachment.BlobData);
+        var stepData = stepAttachment.BlobData;
+        if (stepData is null || stepData.Length == 0)
+        {
+            MessageBox.Show("No STEP model found for this line item.", "3D Model", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        viewer.LoadStep(stepData);
         viewerForm.Controls.Add(viewer);
         viewerForm.ShowDialog(this);
     }
