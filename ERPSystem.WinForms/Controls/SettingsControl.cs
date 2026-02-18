@@ -264,7 +264,7 @@ public class SettingsControl : UserControl, IRealtimeDataControl
     private async Task LoadQuoteSettingsAsync()
     {
         _shopRateInput.Value = Math.Clamp(await _quoteRepository.GetShopHourlyRateAsync(), (decimal)_shopRateInput.Minimum, (decimal)_shopRateInput.Maximum);
-        await _auditLogControl.RefreshDataAsync(fromFailSafeCheckpoint);
+        await _auditLogControl.RefreshDataAsync(false);
     }
 
     private async Task RunSyncAsync()
