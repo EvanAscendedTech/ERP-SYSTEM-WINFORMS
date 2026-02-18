@@ -111,7 +111,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
         quoteTablesSplit.Panel1.Controls.Add(inProgressPanel);
         quoteTablesSplit.Panel2.Controls.Add(completedWorkPanel);
-        quoteTablesSplit.Resize += (_, _) => quoteTablesSplit.SplitterDistance = Math.Max(quoteTablesSplit.Panel1MinSize, quoteTablesSplit.Height / 2);
+        quoteTablesSplit.Resize += (_, _) => SetSafeSplitterDistance(quoteTablesSplit, quoteTablesSplit.Height / 2);
 
         var topContent = new Panel { Dock = DockStyle.Fill };
         topContent.Controls.Add(quoteTablesSplit);
@@ -142,10 +142,10 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             Dock = DockStyle.Fill,
             Orientation = Orientation.Horizontal,
             FixedPanel = FixedPanel.Panel2,
-            SplitterDistance = 560,
             Panel1MinSize = 300,
             Panel2MinSize = 140
         };
+        split.Resize += (_, _) => SetSafeSplitterDistance(split, 560);
         split.Panel1.Controls.Add(topContent);
         split.Panel2.Controls.Add(archivePanel);
 
@@ -154,6 +154,26 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         Controls.Add(_feedback);
 
         _ = LoadActiveQuotesAsync();
+    }
+
+    private static void SetSafeSplitterDistance(SplitContainer splitContainer, int preferredDistance)
+    {
+        var availableSize = splitContainer.Orientation == Orientation.Horizontal
+            ? splitContainer.ClientSize.Height
+            : splitContainer.ClientSize.Width;
+
+        var minDistance = splitContainer.Panel1MinSize;
+        var maxDistance = availableSize - splitContainer.Panel2MinSize - splitContainer.SplitterWidth;
+        if (maxDistance < minDistance)
+        {
+            return;
+        }
+
+        var safeDistance = Math.Clamp(preferredDistance, minDistance, maxDistance);
+        if (splitContainer.SplitterDistance != safeDistance)
+        {
+            splitContainer.SplitterDistance = safeDistance;
+        }
     }
 
     private void OpenArchivedQuotesWindow()
