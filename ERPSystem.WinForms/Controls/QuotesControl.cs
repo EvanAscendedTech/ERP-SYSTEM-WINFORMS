@@ -2,10 +2,9 @@ using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Forms;
 using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
-using System.Drawing.Drawing2D;
-using System.Numerics;
 using System.Text;
-using System.Text.RegularExpressions;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
 
 namespace ERPSystem.WinForms.Controls;
 
@@ -1092,214 +1091,359 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         CompletedDetail
     }
 
-    private sealed class StepModelViewerControl : Control
+    private sealed class StepModelViewerControl : UserControl
     {
-        private readonly List<(Vector3 Start, Vector3 End)> _segments = new();
-        private float _yaw = -0.45f;
-        private float _pitch = 0.3f;
-        private float _zoom = 0.9f;
-        private Vector2 _pan = Vector2.Zero;
-        private Point _lastMouse;
-        private MouseButtons _activeButton;
+        private readonly WebView2 _webView;
+        private readonly Label _statusLabel;
+        private byte[] _stepBytes = Array.Empty<byte>();
+        private bool _initialized;
+        private static readonly string HtmlShell = BuildHtmlShell();
 
         public StepModelViewerControl()
         {
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
             BackColor = Color.FromArgb(248, 250, 252);
+
+            _webView = new WebView2
+            {
+                Dock = DockStyle.Fill,
+                Visible = false,
+                DefaultBackgroundColor = Color.FromArgb(248, 250, 252)
+            };
+
+            _statusLabel = new Label
+            {
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleCenter,
+                ForeColor = Color.DimGray,
+                Text = "Loading 3D viewer..."
+            };
+
+            var contextMenu = new ContextMenuStrip();
+            contextMenu.Items.Add("Enlarge", null, (_, _) => OpenEnlargedViewer());
+            ContextMenuStrip = contextMenu;
+            _webView.ContextMenuStrip = contextMenu;
+
+            Controls.Add(_webView);
+            Controls.Add(_statusLabel);
+
+            Resize += (_, _) => _ = ResizeRendererAsync();
         }
 
         public void LoadStep(byte[] stepBytes)
         {
-            _segments.Clear();
-            foreach (var segment in StepWireframeParser.Parse(stepBytes))
+            _stepBytes = stepBytes;
+            _ = LoadStepInternalAsync();
+        }
+
+        private async Task LoadStepInternalAsync()
+        {
+            if (_stepBytes.Length == 0)
             {
-                _segments.Add(segment);
+                _statusLabel.Text = "STEP model unavailable";
+                _statusLabel.Visible = true;
+                _webView.Visible = false;
+                return;
             }
 
-            Invalidate();
+            _statusLabel.Text = "Loading 3D viewer...";
+            _statusLabel.Visible = true;
+
+            try
+            {
+                await EnsureInitializedAsync();
+                var base64 = Convert.ToBase64String(_stepBytes);
+                var payload = System.Text.Json.JsonSerializer.Serialize(base64);
+                var script = $"window.renderStepFromBase64({payload});";
+                var result = await _webView.CoreWebView2.ExecuteScriptAsync(script);
+                var rendered = string.Equals(result, "true", StringComparison.OrdinalIgnoreCase);
+                if (!rendered)
+                {
+                    _statusLabel.Text = "Unable to render STEP geometry";
+                    _statusLabel.Visible = true;
+                    _webView.Visible = false;
+                    return;
+                }
+
+                _webView.Visible = true;
+                _statusLabel.Visible = false;
+            }
+            catch
+            {
+                _statusLabel.Text = "WebView2 runtime unavailable for STEP preview";
+                _statusLabel.Visible = true;
+                _webView.Visible = false;
+            }
         }
 
-        protected override void OnMouseDown(MouseEventArgs e)
+        private async Task EnsureInitializedAsync()
         {
-            base.OnMouseDown(e);
-            _activeButton = e.Button;
-            _lastMouse = e.Location;
-        }
-
-        protected override void OnMouseUp(MouseEventArgs e)
-        {
-            base.OnMouseUp(e);
-            _activeButton = MouseButtons.None;
-        }
-
-        protected override void OnMouseMove(MouseEventArgs e)
-        {
-            base.OnMouseMove(e);
-            if (_activeButton == MouseButtons.None)
+            if (_initialized)
             {
                 return;
             }
 
-            var dx = e.X - _lastMouse.X;
-            var dy = e.Y - _lastMouse.Y;
-            _lastMouse = e.Location;
-
-            if (_activeButton == MouseButtons.Left)
-            {
-                _yaw += dx * 0.01f;
-                _pitch = Math.Clamp(_pitch + dy * 0.01f, -1.4f, 1.4f);
-            }
-            else if (_activeButton == MouseButtons.Right)
-            {
-                _pan += new Vector2(dx * 0.01f, -dy * 0.01f);
-            }
-
-            Invalidate();
+            await _webView.EnsureCoreWebView2Async();
+            _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+            _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+            _webView.NavigateToString(HtmlShell);
+            _initialized = true;
+            await Task.Delay(200);
         }
 
-        protected override void OnMouseWheel(MouseEventArgs e)
+        private async Task ResizeRendererAsync()
         {
-            base.OnMouseWheel(e);
-            _zoom = Math.Clamp(_zoom + (e.Delta > 0 ? 0.08f : -0.08f), 0.2f, 3.0f);
-            Invalidate();
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            base.OnPaint(e);
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            e.Graphics.Clear(BackColor);
-
-            using var borderPen = new Pen(Color.FromArgb(180, 193, 205));
-            e.Graphics.DrawRectangle(borderPen, 0, 0, Width - 1, Height - 1);
-
-            if (_segments.Count == 0)
+            if (!_initialized || !_webView.Visible)
             {
-                TextRenderer.DrawText(e.Graphics, "STEP model unavailable", Font, ClientRectangle, Color.DimGray, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                 return;
             }
 
-            var view = Matrix4x4.CreateRotationX(_pitch) * Matrix4x4.CreateRotationY(_yaw);
-            var scale = Math.Min(Width, Height) * 0.42f * _zoom;
-            var centerX = (Width / 2f) + (_pan.X * scale);
-            var centerY = (Height / 2f) + (_pan.Y * scale);
-
-            using var linePen = new Pen(Color.FromArgb(45, 86, 145), 1.1f);
-            foreach (var (start, end) in _segments)
-            {
-                var s = Vector3.Transform(start, view);
-                var t = Vector3.Transform(end, view);
-                var sx = centerX + (s.X * scale);
-                var sy = centerY - (s.Y * scale);
-                var tx = centerX + (t.X * scale);
-                var ty = centerY - (t.Y * scale);
-                e.Graphics.DrawLine(linePen, sx, sy, tx, ty);
-            }
+            await _webView.CoreWebView2.ExecuteScriptAsync("window.resizeRenderer?.();");
         }
+
+        private void OpenEnlargedViewer()
+        {
+            if (_stepBytes.Length == 0)
+            {
+                return;
+            }
+
+            using var enlargedWindow = new Form
+            {
+                Text = "STEP Model Viewer",
+                Width = 1200,
+                Height = 840,
+                StartPosition = FormStartPosition.CenterParent,
+                MinimizeBox = false,
+                MaximizeBox = true
+            };
+
+            var closeButton = new Button
+            {
+                Text = "Close",
+                AutoSize = true,
+                Anchor = AnchorStyles.Right | AnchorStyles.Top
+            };
+            closeButton.Click += (_, _) => enlargedWindow.Close();
+
+            var topBar = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                Height = 42,
+                FlowDirection = FlowDirection.RightToLeft,
+                Padding = new Padding(8, 8, 8, 0)
+            };
+            topBar.Controls.Add(closeButton);
+
+            var enlargedViewer = new StepModelViewerControl
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(8)
+            };
+            enlargedViewer.LoadStep(_stepBytes);
+
+            enlargedWindow.Controls.Add(enlargedViewer);
+            enlargedWindow.Controls.Add(topBar);
+
+            var owner = FindForm();
+            if (owner is null)
+            {
+                enlargedWindow.ShowDialog();
+                return;
+            }
+
+            enlargedWindow.ShowDialog(owner);
+        }
+
+        private static string BuildHtmlShell()
+        {
+            var html = """
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body, #viewport { margin:0; padding:0; width:100%; height:100%; background:#f8fafc; overflow:hidden; }
+  </style>
+</head>
+<body>
+  <div id="viewport"></div>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/occt-import-js.js"></script>
+  <script>
+    const viewport = document.getElementById('viewport');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#f8fafc');
+
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 5000);
+    camera.position.set(1.2, 0.9, 1.5);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    viewport.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enablePan = true;
+    controls.enableZoom = true;
+    controls.target.set(0, 0, 0);
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x6f7a88, 0.95));
+    const keyLight = new THREE.DirectionalLight(0xffffff, 0.75);
+    keyLight.position.set(3, 6, 5);
+    scene.add(keyLight);
+
+    let activeMeshRoot = null;
+    let occtModulePromise = null;
+
+    function base64ToUint8Array(base64) {
+      const raw = atob(base64);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) {
+        bytes[i] = raw.charCodeAt(i);
+      }
+      return bytes;
     }
 
-    private static class StepWireframeParser
-    {
-        private static readonly Regex PointRegex = new(@"#(?<id>\d+)\s*=\s*CARTESIAN_POINT\s*\(\s*'[^']*'\s*,\s*\((?<coords>[^)]*)\)\s*\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        private static readonly Regex PolylineRegex = new(@"#\d+\s*=\s*POLYLINE\s*\(\s*'[^']*'\s*,\s*\((?<refs>[^)]*)\)\s*\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    function clearScene() {
+      if (!activeMeshRoot) {
+        return;
+      }
 
-        public static IEnumerable<(Vector3 Start, Vector3 End)> Parse(byte[] stepBytes)
-        {
-            if (stepBytes.Length == 0)
-            {
-                return Enumerable.Empty<(Vector3 Start, Vector3 End)>();
-            }
-
-            var content = Encoding.UTF8.GetString(stepBytes);
-            var points = new Dictionary<int, Vector3>();
-
-            foreach (Match match in PointRegex.Matches(content))
-            {
-                var pointId = int.Parse(match.Groups["id"].Value);
-                var coordParts = match.Groups["coords"].Value.Split(',');
-                if (coordParts.Length < 3)
-                {
-                    continue;
-                }
-
-                if (!float.TryParse(coordParts[0].Trim(), out var x)
-                    || !float.TryParse(coordParts[1].Trim(), out var y)
-                    || !float.TryParse(coordParts[2].Trim(), out var z))
-                {
-                    continue;
-                }
-
-                points[pointId] = new Vector3(x, y, z);
-            }
-
-            if (points.Count == 0)
-            {
-                return Enumerable.Empty<(Vector3 Start, Vector3 End)>();
-            }
-
-            var segments = new List<(Vector3 Start, Vector3 End)>();
-            foreach (Match match in PolylineRegex.Matches(content))
-            {
-                var references = match.Groups["refs"].Value
-                    .Split(',')
-                    .Select(value => value.Trim())
-                    .Where(value => value.StartsWith("#", StringComparison.Ordinal))
-                    .Select(value => int.TryParse(value.AsSpan(1), out var id) ? id : -1)
-                    .Where(id => id > 0)
-                    .ToList();
-
-                for (var i = 0; i < references.Count - 1; i++)
-                {
-                    if (points.TryGetValue(references[i], out var start) && points.TryGetValue(references[i + 1], out var end))
-                    {
-                        segments.Add((start, end));
-                    }
-                }
-            }
-
-            if (segments.Count == 0)
-            {
-                var boundsMin = new Vector3(points.Values.Min(p => p.X), points.Values.Min(p => p.Y), points.Values.Min(p => p.Z));
-                var boundsMax = new Vector3(points.Values.Max(p => p.X), points.Values.Max(p => p.Y), points.Values.Max(p => p.Z));
-                segments.AddRange(CreateBoundingBox(boundsMin, boundsMax));
-            }
-
-            return NormalizeToUnitCube(segments);
+      scene.remove(activeMeshRoot);
+      activeMeshRoot.traverse(node => {
+        if (node.geometry) {
+          node.geometry.dispose();
         }
 
-        private static IEnumerable<(Vector3 Start, Vector3 End)> CreateBoundingBox(Vector3 min, Vector3 max)
-        {
-            var p000 = new Vector3(min.X, min.Y, min.Z);
-            var p001 = new Vector3(min.X, min.Y, max.Z);
-            var p010 = new Vector3(min.X, max.Y, min.Z);
-            var p011 = new Vector3(min.X, max.Y, max.Z);
-            var p100 = new Vector3(max.X, min.Y, min.Z);
-            var p101 = new Vector3(max.X, min.Y, max.Z);
-            var p110 = new Vector3(max.X, max.Y, min.Z);
-            var p111 = new Vector3(max.X, max.Y, max.Z);
+        if (node.material) {
+          if (Array.isArray(node.material)) {
+            node.material.forEach(material => material.dispose());
+          } else {
+            node.material.dispose();
+          }
+        }
+      });
 
-            return new[]
-            {
-                (p000,p001), (p001,p011), (p011,p010), (p010,p000),
-                (p100,p101), (p101,p111), (p111,p110), (p110,p100),
-                (p000,p100), (p001,p101), (p010,p110), (p011,p111)
-            };
+      activeMeshRoot = null;
+    }
+
+    async function getOcctModule() {
+      if (!occtModulePromise) {
+        occtModulePromise = occtimportjs();
+      }
+
+      return occtModulePromise;
+    }
+
+    function fitCameraToObject(object3D) {
+      const box = new THREE.Box3().setFromObject(object3D);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z, 0.001);
+      const distance = maxDim * 2.4;
+
+      controls.target.copy(center);
+      camera.position.set(center.x + distance, center.y + distance * 0.7, center.z + distance);
+      camera.near = Math.max(maxDim / 1000, 0.001);
+      camera.far = Math.max(maxDim * 200, 500);
+      camera.updateProjectionMatrix();
+      controls.update();
+    }
+
+    function buildMeshGroup(result) {
+      const group = new THREE.Group();
+
+      for (const meshData of result.meshes || []) {
+        const attrs = meshData.attributes || {};
+        const positions = attrs.position && attrs.position.array ? attrs.position.array : null;
+        if (!positions || positions.length === 0) {
+          continue;
         }
 
-        private static IEnumerable<(Vector3 Start, Vector3 End)> NormalizeToUnitCube(IReadOnlyCollection<(Vector3 Start, Vector3 End)> segments)
-        {
-            var allPoints = segments.SelectMany(s => new[] { s.Start, s.End }).ToList();
-            var min = new Vector3(allPoints.Min(p => p.X), allPoints.Min(p => p.Y), allPoints.Min(p => p.Z));
-            var max = new Vector3(allPoints.Max(p => p.X), allPoints.Max(p => p.Y), allPoints.Max(p => p.Z));
-            var center = (min + max) / 2f;
-            var maxDimension = Math.Max(0.001f, Math.Max(max.X - min.X, Math.Max(max.Y - min.Y, max.Z - min.Z)));
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
 
-            return segments.Select(segment =>
-            {
-                var normalizedStart = (segment.Start - center) / maxDimension;
-                var normalizedEnd = (segment.End - center) / maxDimension;
-                return (normalizedStart, normalizedEnd);
-            }).ToList();
+        if (attrs.normal && attrs.normal.array && attrs.normal.array.length > 0) {
+          geometry.setAttribute('normal', new THREE.Float32BufferAttribute(attrs.normal.array, 3));
+        } else {
+          geometry.computeVertexNormals();
+        }
+
+        if (meshData.index && meshData.index.array && meshData.index.array.length > 0) {
+          geometry.setIndex(meshData.index.array);
+        }
+
+        const color = (meshData.color && meshData.color.length >= 3)
+          ? new THREE.Color(meshData.color[0], meshData.color[1], meshData.color[2])
+          : new THREE.Color('#4a78bb');
+
+        const material = new THREE.MeshStandardMaterial({
+          color,
+          roughness: 0.55,
+          metalness: 0.08,
+          side: THREE.DoubleSide
+        });
+
+        const mesh = new THREE.Mesh(geometry, material);
+        group.add(mesh);
+      }
+
+      return group;
+    }
+
+    async function renderStepFromBase64(base64) {
+      if (!base64 || base64.length === 0) {
+        clearScene();
+        return false;
+      }
+
+      try {
+        const occt = await getOcctModule();
+        const bytes = base64ToUint8Array(base64);
+        const parsed = occt.ReadStepFile(bytes, null);
+        const group = buildMeshGroup(parsed || {});
+        if (group.children.length === 0) {
+          clearScene();
+          return false;
+        }
+
+        clearScene();
+        activeMeshRoot = group;
+        scene.add(activeMeshRoot);
+        fitCameraToObject(activeMeshRoot);
+        return true;
+      } catch {
+        clearScene();
+        return false;
+      }
+    }
+
+    function resizeRenderer() {
+      const width = Math.max(viewport.clientWidth, 1);
+      const height = Math.max(viewport.clientHeight, 1);
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+    }
+
+    window.renderStepFromBase64 = renderStepFromBase64;
+    window.resizeRenderer = resizeRenderer;
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    resizeRenderer();
+    animate();
+    window.addEventListener('resize', resizeRenderer);
+  </script>
+</body>
+</html>
+""";
+
+            return html;
         }
     }
 
