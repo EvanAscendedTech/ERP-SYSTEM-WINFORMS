@@ -13,6 +13,8 @@ public partial class ERPMainForm
     private ModernButton btnBack = null!;
     private ModernButton btnForward = null!;
     private FlowLayoutPanel onlineUsersPanel = null!;
+    private Label lblRolePreview = null!;
+    private ComboBox cboRolePreview = null!;
 
     private FlowLayoutPanel navButtonsPanel = null!;
     private ModernButton btnDashboard = null!;
@@ -36,6 +38,8 @@ public partial class ERPMainForm
         btnBack = new ModernButton();
         btnForward = new ModernButton();
         onlineUsersPanel = new FlowLayoutPanel();
+        lblRolePreview = new Label();
+        cboRolePreview = new ComboBox();
 
         navButtonsPanel = new FlowLayoutPanel();
         btnDashboard = new ModernButton();
@@ -100,12 +104,31 @@ public partial class ERPMainForm
         onlineUsersPanel.Location = new Point(430, 42);
         onlineUsersPanel.Size = new Size(420, 30);
 
+        lblRolePreview.AutoSize = true;
+        lblRolePreview.Text = "Preview role:";
+        lblRolePreview.Font = new Font("Segoe UI", 9F, FontStyle.Regular);
+        lblRolePreview.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        lblRolePreview.Location = new Point(320, 18);
+
+        cboRolePreview.DropDownStyle = ComboBoxStyle.DropDownList;
+        cboRolePreview.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        cboRolePreview.Size = new Size(150, 24);
+        cboRolePreview.Location = new Point(405, 14);
+
         headerPanel.Resize += (_, _) =>
         {
             btnSettingsMenu.Left = headerPanel.Width - btnSettingsMenu.Width - 20;
             btnForward.Left = btnSettingsMenu.Left - btnForward.Width - 8;
             btnBack.Left = btnForward.Left - btnBack.Width - 8;
-            onlineUsersPanel.Left = btnBack.Left - onlineUsersPanel.Width - 20;
+
+            if (cboRolePreview.Visible)
+            {
+                cboRolePreview.Left = btnBack.Left - cboRolePreview.Width - 12;
+                lblRolePreview.Left = cboRolePreview.Left - lblRolePreview.Width - 8;
+            }
+
+            var rightMostEdge = cboRolePreview.Visible ? lblRolePreview.Left : btnBack.Left;
+            onlineUsersPanel.Left = rightMostEdge - onlineUsersPanel.Width - 20;
             onlineUsersPanel.Width = btnSettingsMenu.Left - onlineUsersPanel.Left - 20;
         };
 
@@ -115,6 +138,8 @@ public partial class ERPMainForm
         headerPanel.Controls.Add(btnForward);
         headerPanel.Controls.Add(btnSettingsMenu);
         headerPanel.Controls.Add(onlineUsersPanel);
+        headerPanel.Controls.Add(lblRolePreview);
+        headerPanel.Controls.Add(cboRolePreview);
 
         tabStripPanel.Dock = DockStyle.Fill;
         tabStripPanel.Padding = new Padding(12, 6, 12, 6);
