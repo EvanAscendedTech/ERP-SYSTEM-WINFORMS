@@ -8,16 +8,14 @@ namespace ERPSystem.WinForms.Forms;
 public class QuoteDraftForm : Form
 {
     private const int DefaultLineItemWidth = 860;
-    private const int DefaultLineItemHeight = 290;
+    private const int DefaultLineItemHeight = 420;
     private const int MinimumLineItemWidth = 620;
-    private const int MinimumLineItemHeight = 260;
+    private const int MinimumLineItemHeight = 390;
+    private const int MaximumLineItemHeight = 460;
     private const int MinimumBlobAreaWidth = 170;
-    private const int MinimumBlobAreaHeight = 78;
-    private const int FixedBlobAreaHeight = 90;
-    private const float MinScaledFontSize = 8f;
-    private const float MaxScaledFontSize = 13f;
-    private const int ResizeGripSize = 16;
-    private const int MinimumTextBoxHeight = 28;
+    private const int MinimumBlobAreaHeight = 70;
+    private const int FixedBlobAreaHeight = 110;
+    private const int MinimumTextBoxHeight = 24;
     private const int StandardGap = 8;
     private readonly QuoteRepository _quoteRepository;
     private readonly bool _canViewPricing;
@@ -25,7 +23,7 @@ public class QuoteDraftForm : Form
     private readonly ComboBox _customerPicker = new() { Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox _customerPartPo = new() { Width = 220, PlaceholderText = "Customer Part PO" };
     private readonly TextBox _quoteLifecycleId = new() { Width = 220, ReadOnly = true };
-    private readonly FlowLayoutPanel _lineItemsPanel = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(StandardGap) };
+    private readonly FlowLayoutPanel _lineItemsPanel = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(4), Margin = Padding.Empty };
     private readonly Label _totalHoursValue = new() { AutoSize = true, Text = "0.00" };
     private readonly Label _masterTotalValue = new() { AutoSize = true, Text = "$0.00" };
     private readonly Quote? _editingQuote;
@@ -50,7 +48,7 @@ public class QuoteDraftForm : Form
         WindowState = FormWindowState.Maximized;
         StartPosition = FormStartPosition.CenterParent;
 
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(12) };
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(8) };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -62,7 +60,7 @@ public class QuoteDraftForm : Form
             AutoSize = true,
             ColumnCount = 4,
             RowCount = 2,
-            Margin = new Padding(0, 0, 0, StandardGap)
+            Margin = new Padding(0, 0, 0, 6)
         };
         for (var i = 0; i < header.ColumnCount; i++)
         {
@@ -217,92 +215,18 @@ public class QuoteDraftForm : Form
         {
             AutoSize = false,
             BorderStyle = BorderStyle.FixedSingle,
-            Margin = new Padding(0, 0, 0, StandardGap),
-            Padding = new Padding(StandardGap),
+            Margin = new Padding(0, 0, 0, 6),
+            Padding = new Padding(6),
             BackColor = index % 2 == 0 ? Color.FromArgb(245, 248, 252) : Color.FromArgb(234, 243, 250),
-            MinimumSize = new Size(MinimumLineItemWidth, MinimumLineItemHeight)
+            MinimumSize = new Size(MinimumLineItemWidth, MinimumLineItemHeight),
+            MaximumSize = new Size(int.MaxValue, MaximumLineItemHeight),
+            Height = DefaultLineItemHeight
         };
         cardPanel.SuspendLayout();
 
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty };
-        layout.SuspendLayout();
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty, Padding = Padding.Empty };
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-        var title = new Label { AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
-        layout.Controls.Add(title, 0, 0);
-
-        var detailsGrid = new TableLayoutPanel { AutoSize = true, ColumnCount = 3, Dock = DockStyle.Top, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, StandardGap / 2, 0, StandardGap / 2) };
-        detailsGrid.RowCount = 1;
-        detailsGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        for (var i = 0; i < 3; i++) detailsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333f));
-
-        var drawingNumber = NewDecimalDisabledField(model.DrawingNumber);
-        var drawingName = NewDecimalDisabledField(model.DrawingName);
-        var revision = NewDecimalDisabledField(model.Revision);
-        var removeButton = BuildCompactIconButton("🗑 Remove", Color.FromArgb(214, 77, 77));
-        removeButton.Click += async (_, _) => await RemoveLineItemAsync(model, cardPanel);
-
-        detailsGrid.Controls.Add(NewFieldPanel("Drawing Number", drawingNumber), 0, 0);
-        detailsGrid.Controls.Add(NewFieldPanel("Drawing Name", drawingName), 1, 0);
-        detailsGrid.Controls.Add(NewFieldPanel("Revision", revision), 2, 0);
-
-        var drawingDocs = BuildBlobArea(model, QuoteBlobType.Technical, "Drawings (PDF / STEP)");
-        var modelDocs = BuildBlobArea(model, QuoteBlobType.ThreeDModel, "3D Models");
-
-        var costsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 6, Dock = DockStyle.Top, Margin = new Padding(0, 2, 0, 2), RowCount = 1 };
-        costsRow.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        for (var i = 0; i < 6; i++) costsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16.666f));
-
-        var productionHours = NewNumericField(model.ProductionHours);
-        var setupHours = NewNumericField(model.SetupHours);
-        var materialCost = NewNumericField(model.MaterialCost);
-        var toolingCost = NewNumericField(model.ToolingCost);
-        var secondaryCost = NewNumericField(model.SecondaryOperationsCost);
-        var quantity = NewNumericField(model.Quantity <= 0 ? 1 : model.Quantity);
-
-        foreach (var box in new[] { productionHours, setupHours, materialCost, toolingCost, secondaryCost, quantity })
-        {
-            box.TextChanged += (_, _) => RecalculateQuoteTotals();
-        }
-
-        costsRow.Controls.Add(NewFieldPanel("Production Hours", productionHours), 0, 0);
-        costsRow.Controls.Add(NewFieldPanel("Setup Hours", setupHours), 1, 0);
-        costsRow.Controls.Add(NewFieldPanel("Material Cost", materialCost), 2, 0);
-        costsRow.Controls.Add(NewFieldPanel("Tooling Cost", toolingCost), 3, 0);
-        costsRow.Controls.Add(NewFieldPanel("Secondary Operations Cost", secondaryCost), 4, 0);
-        costsRow.Controls.Add(NewFieldPanel("Quantity", quantity), 5, 0);
-
-        var productionFlagsGrid = new TableLayoutPanel
-        {
-            AutoSize = true,
-            ColumnCount = 2,
-            RowCount = 2,
-            Dock = DockStyle.Top,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Margin = new Padding(0, StandardGap / 2, 0, StandardGap / 2)
-        };
-        productionFlagsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
-        productionFlagsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
-        productionFlagsGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        productionFlagsGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-        var requiresDfars = new CheckBox { Text = "Requires DFARS", AutoSize = true, Checked = model.RequiresDfars, Margin = new Padding(0, 0, StandardGap, 0) };
-        var requiresMaterialTestReport = new CheckBox { Text = "Requires Material Test Report", AutoSize = true, Checked = model.RequiresMaterialTestReport, Margin = new Padding(0, 0, StandardGap, 0) };
-        var requiresCertificateOfConformance = new CheckBox { Text = "Requires Certificate of Conformance", AutoSize = true, Checked = model.RequiresCertificateOfConformance, Margin = new Padding(0, 0, StandardGap, 0) };
-        var requiresSecondaryOperations = new CheckBox { Text = "Requires Secondary Operations", AutoSize = true, Checked = model.RequiresSecondaryOperations, Margin = Padding.Empty };
-
-        productionFlagsGrid.Controls.Add(requiresDfars, 0, 0);
-        productionFlagsGrid.Controls.Add(requiresMaterialTestReport, 1, 0);
-        productionFlagsGrid.Controls.Add(requiresCertificateOfConformance, 0, 1);
-        productionFlagsGrid.Controls.Add(requiresSecondaryOperations, 1, 1);
-
-        var productionFlagsSection = BuildCompactSection("Production Flags", productionFlagsGrid);
-
-        var materialDocs = BuildBlobArea(model, QuoteBlobType.MaterialPricing, "Material");
-        var toolingDocs = BuildBlobArea(model, QuoteBlobType.ToolingDocumentation, "Tooling");
-        var postOpDocs = BuildBlobArea(model, QuoteBlobType.PostOpPricing, "Post-Operation");
 
         var contentScroller = new Panel
         {
@@ -317,98 +241,132 @@ public class QuoteDraftForm : Form
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 1,
-            RowCount = 4,
+            RowCount = 5,
             Dock = DockStyle.Top,
             Margin = Padding.Empty,
             Padding = Padding.Empty
         };
-        contentGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        contentGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        contentGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        contentGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (var i = 0; i < contentGrid.RowCount; i++)
+        {
+            contentGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        }
 
-        var detailsSection = BuildCompactSection("Details", detailsGrid);
-        var costsSection = BuildCompactSection("Costs", costsRow);
-
-        var attachmentsGrid = new TableLayoutPanel
+        var headerRow = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
             AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 2,
-            RowCount = 3,
-            Margin = new Padding(0, StandardGap / 2, 0, StandardGap / 2),
+            RowCount = 1,
+            Margin = new Padding(0, 0, 0, 4)
+        };
+        headerRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        headerRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        var title = new Label { AutoSize = true, Font = new Font(Font, FontStyle.Bold), Anchor = AnchorStyles.Left, Margin = Padding.Empty };
+        var removeButton = BuildCompactIconButton("🗑 Remove", Color.FromArgb(214, 77, 77));
+        removeButton.Click += async (_, _) => await RemoveLineItemAsync(model, cardPanel);
+        headerRow.Controls.Add(title, 0, 0);
+        headerRow.Controls.Add(removeButton, 1, 0);
+
+        var detailsGrid = new TableLayoutPanel { AutoSize = true, ColumnCount = 3, Dock = DockStyle.Top, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 0, 0, 4) };
+        detailsGrid.RowCount = 1;
+        detailsGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (var i = 0; i < 3; i++) detailsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333f));
+
+        var drawingNumber = NewDecimalDisabledField(model.DrawingNumber);
+        var drawingName = NewDecimalDisabledField(model.DrawingName);
+        var revision = NewDecimalDisabledField(model.Revision);
+
+        detailsGrid.Controls.Add(NewFieldPanel("Drawing Number", drawingNumber), 0, 0);
+        detailsGrid.Controls.Add(NewFieldPanel("Drawing Name", drawingName), 1, 0);
+        detailsGrid.Controls.Add(NewFieldPanel("Revision", revision), 2, 0);
+
+        var costsRow = new TableLayoutPanel { AutoSize = true, ColumnCount = 8, Dock = DockStyle.Top, Margin = new Padding(0, 0, 0, 4), RowCount = 1 };
+        costsRow.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (var i = 0; i < 8; i++) costsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 12.5f));
+
+        var productionHours = NewNumericField(model.ProductionHours);
+        var setupHours = NewNumericField(model.SetupHours);
+        var materialCost = NewNumericField(model.MaterialCost);
+        var toolingCost = NewNumericField(model.ToolingCost);
+        var secondaryCost = NewNumericField(model.SecondaryOperationsCost);
+        var quantity = NewNumericField(model.Quantity <= 0 ? 1 : model.Quantity);
+        var totalBox = NewReadOnlySummaryField(model.LineItemTotal);
+        var perPieceBox = NewReadOnlySummaryField(model.UnitPrice);
+
+        foreach (var box in new[] { productionHours, setupHours, materialCost, toolingCost, secondaryCost, quantity })
+        {
+            box.TextChanged += (_, _) => RecalculateQuoteTotals();
+        }
+
+        costsRow.Controls.Add(NewFieldPanel("Production Hours", productionHours), 0, 0);
+        costsRow.Controls.Add(NewFieldPanel("Setup Hours", setupHours), 1, 0);
+        costsRow.Controls.Add(NewFieldPanel("Material Cost", materialCost), 2, 0);
+        costsRow.Controls.Add(NewFieldPanel("Tooling Cost", toolingCost), 3, 0);
+        costsRow.Controls.Add(NewFieldPanel("Secondary Ops", secondaryCost), 4, 0);
+        costsRow.Controls.Add(NewFieldPanel("Quantity", quantity), 5, 0);
+        costsRow.Controls.Add(NewFieldPanel("Line Item Total", totalBox), 6, 0);
+        costsRow.Controls.Add(NewFieldPanel("Per-Piece", perPieceBox), 7, 0);
+
+        var productionFlagsGrid = new TableLayoutPanel
+        {
+            AutoSize = true,
+            ColumnCount = 2,
+            RowCount = 2,
+            Dock = DockStyle.Top,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Margin = new Padding(0, 0, 0, 4)
+        };
+        productionFlagsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        productionFlagsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        productionFlagsGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        productionFlagsGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var requiresDfars = new CheckBox { Text = "Requires DFARS", AutoSize = true, Checked = model.RequiresDfars, Margin = new Padding(0, 0, 4, 0) };
+        var requiresMaterialTestReport = new CheckBox { Text = "Requires Material Test Report", AutoSize = true, Checked = model.RequiresMaterialTestReport, Margin = new Padding(0, 0, 4, 0) };
+        var requiresCertificateOfConformance = new CheckBox { Text = "Requires Certificate of Conformance", AutoSize = true, Checked = model.RequiresCertificateOfConformance, Margin = new Padding(0, 0, 4, 0) };
+        var requiresSecondaryOperations = new CheckBox { Text = "Requires Secondary Operations", AutoSize = true, Checked = model.RequiresSecondaryOperations, Margin = Padding.Empty };
+
+        productionFlagsGrid.Controls.Add(requiresDfars, 0, 0);
+        productionFlagsGrid.Controls.Add(requiresMaterialTestReport, 1, 0);
+        productionFlagsGrid.Controls.Add(requiresCertificateOfConformance, 0, 1);
+        productionFlagsGrid.Controls.Add(requiresSecondaryOperations, 1, 1);
+
+        var attachmentsTabs = BuildAttachmentsTabs(new[]
+        {
+            (QuoteBlobType.Technical, "Drawings (PDF / STEP)"),
+            (QuoteBlobType.ThreeDModel, "3D Models"),
+            (QuoteBlobType.MaterialPricing, "Material"),
+            (QuoteBlobType.ToolingDocumentation, "Tooling"),
+            (QuoteBlobType.PostOpPricing, "Post-Operation")
+        }, model);
+
+        contentGrid.Controls.Add(headerRow, 0, 0);
+        contentGrid.Controls.Add(BuildCompactSection("Details", detailsGrid), 0, 1);
+        contentGrid.Controls.Add(BuildCompactSection("Costs", costsRow), 0, 2);
+        contentGrid.Controls.Add(BuildCompactSection("Production Flags", productionFlagsGrid), 0, 3);
+        contentGrid.Controls.Add(BuildCompactSection("Attachments", attachmentsTabs.TabControl), 0, 4);
+        contentScroller.Controls.Add(contentGrid);
+        layout.Controls.Add(contentScroller, 0, 0);
+
+        var footer = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            AutoSize = true,
+            Margin = new Padding(0, 2, 0, 0),
             Padding = Padding.Empty
         };
-        attachmentsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
-        attachmentsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
-        attachmentsGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        attachmentsGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        attachmentsGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-        attachmentsGrid.Controls.Add(drawingDocs.SectionPanel, 0, 0);
-        attachmentsGrid.Controls.Add(modelDocs.SectionPanel, 1, 0);
-        attachmentsGrid.Controls.Add(materialDocs.SectionPanel, 0, 1);
-        attachmentsGrid.Controls.Add(toolingDocs.SectionPanel, 1, 1);
-        attachmentsGrid.Controls.Add(postOpDocs.SectionPanel, 0, 2);
-        attachmentsGrid.SetColumnSpan(postOpDocs.SectionPanel, 2);
-
-        var attachmentsSection = BuildCompactSection("Attachments", attachmentsGrid);
-
-        contentGrid.Controls.Add(detailsSection, 0, 0);
-        contentGrid.Controls.Add(costsSection, 0, 1);
-        contentGrid.Controls.Add(productionFlagsSection, 0, 2);
-        contentGrid.Controls.Add(attachmentsSection, 0, 3);
-        contentScroller.Controls.Add(contentGrid);
-        layout.Controls.Add(contentScroller, 0, 1);
-
-        var footer = new TableLayoutPanel { ColumnCount = 5, RowCount = 1, Dock = DockStyle.Fill, Margin = Padding.Empty };
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45f));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55f));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        var totalBox = new TextBox
-        {
-            ReadOnly = true,
-            Dock = DockStyle.Fill,
-            Margin = new Padding(6, 3, 12, 3),
-            MinimumSize = new Size(0, MinimumTextBoxHeight),
-            Text = model.LineItemTotal.ToString("0.00", CultureInfo.CurrentCulture)
-        };
-        var perPieceBox = new TextBox
-        {
-            ReadOnly = true,
-            Dock = DockStyle.Fill,
-            Margin = new Padding(6, 3, 12, 3),
-            MinimumSize = new Size(0, MinimumTextBoxHeight),
-            Text = model.UnitPrice.ToString("0.00", CultureInfo.CurrentCulture)
-        };
-        footer.Controls.Add(new Label { Text = "Line Item Total", AutoSize = true, Anchor = AnchorStyles.Left, Font = new Font(Font, FontStyle.Bold) }, 0, 0);
-        footer.Controls.Add(totalBox, 1, 0);
-        footer.Controls.Add(new Label { Text = "Per-Piece Price", AutoSize = true, Anchor = AnchorStyles.Left, Font = new Font(Font, FontStyle.Bold) }, 2, 0);
-        footer.Controls.Add(perPieceBox, 3, 0);
-        removeButton.Anchor = AnchorStyles.Right;
-        footer.Controls.Add(removeButton, 4, 0);
-        layout.Controls.Add(footer, 0, 2);
+        footer.Controls.Add(new Label { Text = "Live totals update on edit", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 8, 0, 0) });
+        layout.Controls.Add(footer, 0, 1);
 
         cardPanel.Controls.Add(layout);
-        var resizeGrip = CreateResizeGrip(cardPanel);
-        cardPanel.Controls.Add(resizeGrip);
-        resizeGrip.BringToFront();
         layout.ResumeLayout(true);
         cardPanel.ResumeLayout(true);
-
-        var baseFonts = new Dictionary<Control, float>();
-        CaptureBaseFonts(cardPanel, baseFonts);
 
         var card = new LineItemCard
         {
             Container = cardPanel,
-            BaseSize = new Size(DefaultLineItemWidth, DefaultLineItemHeight),
-            ResizeGrip = resizeGrip,
-            BaseFonts = baseFonts,
             Title = title,
             Model = model,
             DrawingNumber = drawingNumber,
@@ -426,115 +384,42 @@ public class QuoteDraftForm : Form
             RequiresMaterialTestReport = requiresMaterialTestReport,
             RequiresCertificateOfConformance = requiresCertificateOfConformance,
             RequiresSecondaryOperations = requiresSecondaryOperations,
-            BlobLists = new Dictionary<QuoteBlobType, ListView>
-            {
-                [QuoteBlobType.Technical] = drawingDocs.List,
-                [QuoteBlobType.ThreeDModel] = modelDocs.List,
-                [QuoteBlobType.MaterialPricing] = materialDocs.List,
-                [QuoteBlobType.ToolingDocumentation] = toolingDocs.List,
-                [QuoteBlobType.PostOpPricing] = postOpDocs.List
-            }
+            BlobLists = attachmentsTabs.BlobLists
         };
 
         RefreshBlobLists(card);
-        ApplyCardScaling(card);
         return card;
     }
 
-    private Panel CreateResizeGrip(Panel cardPanel)
+    private (TabControl TabControl, Dictionary<QuoteBlobType, ListView> BlobLists) BuildAttachmentsTabs((QuoteBlobType Type, string Title)[] definitions, QuoteLineItem model)
     {
-        var grip = new Panel
+        var tabs = new TabControl
         {
-            Size = new Size(ResizeGripSize, ResizeGripSize),
-            Anchor = AnchorStyles.Bottom | AnchorStyles.Right,
-            Cursor = Cursors.SizeNS,
-            BackColor = Color.Transparent,
-            Location = new Point(cardPanel.ClientSize.Width - ResizeGripSize - 2, cardPanel.ClientSize.Height - ResizeGripSize - 2)
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty,
+            Padding = new Point(12, 4),
+            MinimumSize = new Size(0, FixedBlobAreaHeight),
+            MaximumSize = new Size(int.MaxValue, FixedBlobAreaHeight)
         };
 
-        Point dragStart = Point.Empty;
-        Size sizeStart = Size.Empty;
+        var lists = new Dictionary<QuoteBlobType, ListView>();
 
-        grip.Paint += (_, e) =>
+        foreach (var (type, title) in definitions)
         {
-            using var pen = new Pen(Color.SlateGray, 1f);
-            e.Graphics.DrawLine(pen, 4, ResizeGripSize - 1, ResizeGripSize - 1, 4);
-            e.Graphics.DrawLine(pen, 8, ResizeGripSize - 1, ResizeGripSize - 1, 8);
-            e.Graphics.DrawLine(pen, 12, ResizeGripSize - 1, ResizeGripSize - 1, 12);
-        };
-
-        grip.MouseDown += (_, e) =>
-        {
-            if (e.Button != MouseButtons.Left) return;
-            dragStart = Cursor.Position;
-            sizeStart = cardPanel.Size;
-            grip.Capture = true;
-        };
-
-        grip.MouseMove += (_, _) =>
-        {
-            if (!grip.Capture) return;
-
-            var cursor = Cursor.Position;
-            var heightDelta = cursor.Y - dragStart.Y;
-            var newHeight = Math.Max(cardPanel.MinimumSize.Height, sizeStart.Height + heightDelta);
-            cardPanel.Height = newHeight;
-            cardPanel.Parent?.PerformLayout();
-        };
-
-        grip.MouseUp += (_, _) =>
-        {
-            if (!grip.Capture) return;
-            grip.Capture = false;
-            if (_lineItemCards.FirstOrDefault(x => x.Container == cardPanel) is { } resizedCard)
-            {
-                resizedCard.IsUserResized = true;
-                ApplyCardScaling(resizedCard);
-            }
-        };
-
-        return grip;
-    }
-
-    private static void CaptureBaseFonts(Control parent, IDictionary<Control, float> map)
-    {
-        map[parent] = parent.Font.Size;
-        foreach (Control child in parent.Controls)
-        {
-            CaptureBaseFonts(child, map);
-        }
-    }
-
-    private static void ApplyFontScale(Control parent, IReadOnlyDictionary<Control, float> baseFonts, float scale)
-    {
-        if (baseFonts.TryGetValue(parent, out var baseSize))
-        {
-            var scaled = Math.Clamp(baseSize * scale, MinScaledFontSize, MaxScaledFontSize);
-            parent.Font = new Font(parent.Font.FontFamily, scaled, parent.Font.Style);
+            var blobArea = BuildBlobArea(model, type, title);
+            var page = new TabPage(title) { Padding = new Padding(4), Margin = Padding.Empty };
+            blobArea.SectionPanel.Dock = DockStyle.Fill;
+            page.Controls.Add(blobArea.SectionPanel);
+            tabs.TabPages.Add(page);
+            lists[type] = blobArea.List;
         }
 
-        foreach (Control child in parent.Controls)
-        {
-            ApplyFontScale(child, baseFonts, scale);
-        }
-    }
-
-    private static void ApplyCardScaling(LineItemCard card)
-    {
-        var widthScale = card.Container.Width / (float)card.BaseSize.Width;
-        var heightScale = card.Container.Height / (float)card.BaseSize.Height;
-        var scale = Math.Clamp(Math.Min(widthScale, heightScale), 0.8f, 1.25f);
-
-        ApplyFontScale(card.Container, card.BaseFonts, scale);
-
-        foreach (var blobList in card.BlobLists.Values)
-        {
-            blobList.Font = new Font(blobList.Font.FontFamily, Math.Clamp(9f * scale, MinScaledFontSize, MaxScaledFontSize), blobList.Font.Style);
-        }
+        return (tabs, lists);
     }
 
     private BlobArea BuildBlobArea(QuoteLineItem model, QuoteBlobType blobType, string title)
     {
+        _ = title;
         var panel = new Panel
         {
             AutoSize = false,
@@ -547,7 +432,6 @@ public class QuoteDraftForm : Form
             Height = FixedBlobAreaHeight
         };
         panel.SuspendLayout();
-        var titleLabel = new Label { Text = title, AutoSize = true, Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 0, 0, 4) };
         var list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = false, HeaderStyle = ColumnHeaderStyle.Nonclickable, HideSelection = false, MinimumSize = new Size(0, 36) };
         list.Columns.Add("File", 180);
         list.Columns.Add("Size", 90, HorizontalAlignment.Right);
@@ -560,7 +444,7 @@ public class QuoteDraftForm : Form
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
             AutoSize = true,
-            Margin = new Padding(0, 4, 0, 0)
+            Margin = new Padding(0, 2, 0, 0)
         };
         var upload = BuildCompactIconButton("📤 Upload", Color.FromArgb(52, 152, 219));
         var delete = BuildCompactIconButton("🗑 Delete", Color.FromArgb(107, 114, 128));
@@ -583,13 +467,11 @@ public class QuoteDraftForm : Form
         buttons.Controls.Add(delete);
         buttons.Controls.Add(download);
 
-        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty, Padding = Padding.Empty };
-        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty, Padding = Padding.Empty };
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        content.Controls.Add(titleLabel, 0, 0);
-        content.Controls.Add(list, 0, 1);
-        content.Controls.Add(buttons, 0, 2);
+        content.Controls.Add(list, 0, 0);
+        content.Controls.Add(buttons, 0, 1);
         panel.Controls.Add(content);
         panel.ResumeLayout(true);
 
@@ -753,12 +635,12 @@ public class QuoteDraftForm : Form
             Text = text,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(8, 4, 8, 4),
+            Padding = new Padding(6, 3, 6, 3),
             Margin = new Padding(4, 0, 4, 0),
             FlatStyle = FlatStyle.Flat,
             BackColor = backColor,
             ForeColor = Color.White,
-            MinimumSize = new Size(88, 30)
+            MinimumSize = new Size(74, 26)
         };
 
     private Control BuildSectionGroup(string title, Control body)
@@ -769,7 +651,7 @@ public class QuoteDraftForm : Form
             AutoSize = true,
             Text = title,
             Padding = new Padding(StandardGap),
-            Margin = new Padding(0, 0, 0, StandardGap)
+            Margin = new Padding(0, 0, 0, 6)
         };
         body.Dock = DockStyle.Fill;
         group.Controls.Add(body);
@@ -778,11 +660,11 @@ public class QuoteDraftForm : Form
 
     private Panel BuildCompactSection(string title, Control content)
     {
-        var sectionPanel = new Panel { Dock = DockStyle.Top, AutoSize = true, Margin = new Padding(0, 0, 0, StandardGap), Padding = Padding.Empty };
+        var sectionPanel = new Panel { Dock = DockStyle.Top, AutoSize = true, Margin = new Padding(0, 0, 0, 6), Padding = Padding.Empty };
         var sectionGrid = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty, Padding = Padding.Empty };
         sectionGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         sectionGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        sectionGrid.Controls.Add(new Label { Text = title, AutoSize = true, Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 0, 0, 2) }, 0, 0);
+        sectionGrid.Controls.Add(new Label { Text = title, AutoSize = true, Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 0, 0, 1) }, 0, 0);
         sectionGrid.Controls.Add(content, 0, 1);
         sectionPanel.Controls.Add(sectionGrid);
         return sectionPanel;
@@ -836,6 +718,18 @@ public class QuoteDraftForm : Form
         return box;
     }
 
+
+    private static TextBox NewReadOnlySummaryField(decimal value)
+        => new()
+        {
+            ReadOnly = true,
+            Dock = DockStyle.Fill,
+            MinimumSize = new Size(0, MinimumTextBoxHeight),
+            Margin = new Padding(0, 2, 0, 0),
+            Text = value.ToString("0.00", CultureInfo.CurrentCulture),
+            BackColor = Color.WhiteSmoke
+        };
+
     private static TableLayoutPanel NewFieldPanel(string label, Control input)
     {
         var field = new TableLayoutPanel
@@ -868,22 +762,8 @@ public class QuoteDraftForm : Form
     {
         foreach (var card in _lineItemCards)
         {
-            var maximumWidth = Math.Max(MinimumLineItemWidth, _lineItemsPanel.ClientSize.Width - (_lineItemsPanel.Padding.Horizontal + 12));
-            var proportionalHeight = Math.Max(
-                card.Container.MinimumSize.Height,
-                (int)Math.Round(_lineItemsPanel.ClientSize.Height / 4f));
-            card.Container.Width = maximumWidth;
-            if (!card.IsUserResized)
-            {
-                card.Container.Height = proportionalHeight;
-            }
-            else
-            {
-                card.Container.Height = Math.Max(proportionalHeight, card.Container.Height);
-            }
-
-            card.ResizeGrip.Location = new Point(card.Container.ClientSize.Width - ResizeGripSize - 2, card.Container.ClientSize.Height - ResizeGripSize - 2);
-            ApplyCardScaling(card);
+            card.Container.Width = Math.Max(MinimumLineItemWidth, _lineItemsPanel.ClientSize.Width - (_lineItemsPanel.Padding.Horizontal + 10));
+            card.Container.Height = Math.Clamp(DefaultLineItemHeight, card.Container.MinimumSize.Height, card.Container.MaximumSize.Height);
         }
     }
 
@@ -1018,10 +898,6 @@ public class QuoteDraftForm : Form
     private sealed class LineItemCard
     {
         public required Panel Container { get; init; }
-        public required Size BaseSize { get; init; }
-        public required Panel ResizeGrip { get; init; }
-        public required IReadOnlyDictionary<Control, float> BaseFonts { get; init; }
-        public bool IsUserResized { get; set; }
         public required Label Title { get; init; }
         public required QuoteLineItem Model { get; init; }
         public required TextBox DrawingNumber { get; init; }
