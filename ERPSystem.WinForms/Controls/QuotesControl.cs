@@ -24,12 +24,16 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _completedQuotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _expiredQuotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
+    private readonly Panel _completedQuoteDetailsHost = new() { Dock = DockStyle.Bottom, Height = 0, Visible = false, Padding = new Padding(0, 8, 0, 0) };
+    private readonly Label _completedQuoteDetailsTitle = new() { Dock = DockStyle.Top, Height = 28, TextAlign = ContentAlignment.MiddleLeft, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold), Padding = new Padding(8, 0, 0, 0) };
+    private readonly Panel _completedQuoteDetailsViewport = new() { Dock = DockStyle.Fill, BackColor = Color.FromArgb(248, 251, 255), Padding = new Padding(8) };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
     private readonly Button _markWonButton;
     private readonly Button _passToPurchasingButton;
     private List<Quote> _activeQuotesCache = new();
     private string? _selectedCustomer;
     private int? _expandedCompletedQuoteId;
+    private const int CompletedQuoteDetailsPanelHeight = 450;
 
     public QuotesControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, UserManagementRepository userRepository, UserAccount currentUser, Action<string> openSection)
     {
@@ -97,7 +101,11 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             Font = new Font(Font, FontStyle.Bold)
         });
 
+        _completedQuoteDetailsHost.Controls.Add(_completedQuoteDetailsViewport);
+        _completedQuoteDetailsHost.Controls.Add(_completedQuoteDetailsTitle);
+
         var completedWorkPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 0, 0) };
+        completedWorkPanel.Controls.Add(_completedQuoteDetailsHost);
         completedWorkPanel.Controls.Add(_completedQuotesGrid);
         completedWorkPanel.Controls.Add(new Label
         {
@@ -278,17 +286,10 @@ public class QuotesControl : UserControl, IRealtimeDataControl
                 return;
             }
 
-            var statusColor = row.RowType == QuoteGridRowType.CompletedDetail
-                ? Color.FromArgb(247, 240, 255)
-                : row.Status == QuoteStatus.Completed
+            var statusColor = row.Status == QuoteStatus.Completed
                     ? Color.FromArgb(225, 205, 255)
                     : Color.White;
             grid.Rows[e.RowIndex].DefaultCellStyle.BackColor = statusColor;
-
-            if (row.RowType == QuoteGridRowType.CompletedDetail)
-            {
-                grid.Rows[e.RowIndex].Height = 100;
-            }
         };
 
         grid.CellFormatting += (_, e) =>
@@ -306,24 +307,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
                 return;
             }
 
-            if (row.RowType != QuoteGridRowType.CompletedDetail)
-            {
-                return;
-            }
-
-            if (columnName == "Customer")
-            {
-                e.Value = row.DetailsDisplay;
-                if (e.CellStyle is not null)
-                {
-                    e.CellStyle.WrapMode = DataGridViewTriState.True;
-                }
-                e.FormattingApplied = true;
-                return;
-            }
-
-            e.Value = string.Empty;
-            e.FormattingApplied = true;
         };
     }
 
@@ -681,6 +664,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
         var completedRows = BuildCompletedRows(selectedCustomerCompletedQuotes);
         _completedQuotesGrid.DataSource = completedRows;
+        RenderCompletedQuoteDetails();
         RefreshActionStateForSelection();
         _customerHubLabel.Text = string.IsNullOrWhiteSpace(_selectedCustomer)
             ? "Customer Hub — pick a customer card to drill into quote details"
@@ -689,27 +673,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
     private List<QuoteGridRow> BuildCompletedRows(IReadOnlyCollection<Quote> completedQuotes)
     {
-        var rows = BuildActiveViewRows(completedQuotes);
-        if (_expandedCompletedQuoteId is not int expandedId)
-        {
-            return rows;
-        }
-
-        var quote = completedQuotes.FirstOrDefault(q => q.Id == expandedId);
-        if (quote is null)
-        {
-            _expandedCompletedQuoteId = null;
-            return rows;
-        }
-
-        var insertAt = rows.FindIndex(r => r.QuoteId == expandedId);
-        if (insertAt < 0)
-        {
-            return rows;
-        }
-
-        rows.Insert(insertAt + 1, CreateCompletedDetailRow(quote));
-        return rows;
+        return BuildActiveViewRows(completedQuotes);
     }
 
 
@@ -819,11 +783,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        if (selectedRow.RowType == QuoteGridRowType.CompletedDetail)
-        {
-            return;
-        }
-
         var clickedColumnName = columnIndex >= 0 ? _completedQuotesGrid.Columns[columnIndex].Name : string.Empty;
         if (string.Equals(clickedColumnName, "Delete", StringComparison.OrdinalIgnoreCase))
         {
@@ -838,6 +797,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     {
         _expandedCompletedQuoteId = _expandedCompletedQuoteId == quoteId ? null : quoteId;
         RefreshActiveQuotesView();
+        RenderCompletedQuoteDetails();
     }
 
     private async Task DeleteCompletedQuoteAsync(int quoteId)
@@ -872,81 +832,122 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         await LoadActiveQuotesAsync();
     }
 
-    private static QuoteGridRow CreateCompletedDetailRow(Quote quote)
+    private void RenderCompletedQuoteDetails()
     {
-        var lines = quote.LineItems.Select(item =>
-            $"• {item.DrawingNumber} {item.Description} | Qty: {item.Quantity:0.##} | Total: {item.LineItemTotal:C2}");
+        _completedQuoteDetailsViewport.Controls.Clear();
 
-        var details = quote.LineItems.Count == 0
-            ? "No line items on this quote."
-            : string.Join(Environment.NewLine, lines);
-
-        return new QuoteGridRow
+        if (_expandedCompletedQuoteId is not int expandedQuoteId)
         {
-            RowType = QuoteGridRowType.CompletedDetail,
-            QuoteId = quote.Id,
-            CustomerDisplay = details,
-            DetailsDisplay = details,
-            Status = quote.Status,
-            StatusDisplay = quote.Status.ToString().ToUpperInvariant()
-        };
+            _completedQuoteDetailsHost.Visible = false;
+            _completedQuoteDetailsHost.Height = 0;
+            _completedQuoteDetailsTitle.Text = string.Empty;
+            return;
+        }
+
+        var quote = _activeQuotesCache.FirstOrDefault(q => q.Id == expandedQuoteId && q.Status == QuoteStatus.Completed);
+        if (quote is null)
+        {
+            _expandedCompletedQuoteId = null;
+            _completedQuoteDetailsHost.Visible = false;
+            _completedQuoteDetailsHost.Height = 0;
+            return;
+        }
+
+        _completedQuoteDetailsTitle.Text = $"Expanded Quote #{quote.Id} — click the row toggle again to minimize";
+        _completedQuoteDetailsViewport.Controls.Add(CreateLineItemsSocketView(quote));
+        _completedQuoteDetailsHost.Height = CompletedQuoteDetailsPanelHeight;
+        _completedQuoteDetailsHost.Visible = true;
     }
 
-    private static Control CreateLineItemsNestedTable(IReadOnlyList<QuoteLineItem> lineItems)
+    private static Control CreateLineItemsSocketView(Quote quote)
     {
-        var container = new Panel
-        {
-            Width = 772,
-            AutoSize = false,
-            Height = lineItems.Count == 0 ? 40 : (lineItems.Count * 184) + 36,
-            Padding = new Padding(8),
-            BackColor = Color.FromArgb(248, 251, 255)
-        };
-
-        var layout = new TableLayoutPanel
+        var scrollHost = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 4,
-            RowCount = lineItems.Count + 1,
-            AutoSize = false
+            AutoScroll = true,
+            WrapContents = false,
+            FlowDirection = FlowDirection.TopDown,
+            Padding = new Padding(4, 4, 18, 4)
         };
 
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 72));
-
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-        AddHeaderLabel(layout, "Line Item", 0);
-        AddHeaderLabel(layout, "Qty", 1);
-        AddHeaderLabel(layout, "Line Total", 2);
-        AddHeaderLabel(layout, "3D Model (STEP)", 3);
-
-        if (lineItems.Count == 0)
+        if (quote.LineItems.Count == 0)
         {
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-            var noItems = new Label { Text = "No line items.", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.DimGray };
-            layout.Controls.Add(noItems, 0, 1);
-            layout.SetColumnSpan(noItems, 4);
-        }
-        else
-        {
-            for (var index = 0; index < lineItems.Count; index++)
+            scrollHost.Controls.Add(new Label
             {
-                var lineItem = lineItems[index];
-                var rowIndex = index + 1;
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 180));
+                Text = "No line items attached to this completed quote.",
+                Height = 40,
+                Width = 760,
+                TextAlign = ContentAlignment.MiddleLeft,
+                ForeColor = Color.DimGray
+            });
 
-                layout.Controls.Add(CreateBodyLabel($"{lineItem.DrawingNumber} {lineItem.Description}"), 0, rowIndex);
-                layout.Controls.Add(CreateBodyLabel(lineItem.Quantity.ToString("0.##")), 1, rowIndex);
-                layout.Controls.Add(CreateBodyLabel(lineItem.LineItemTotal.ToString("C2")), 2, rowIndex);
-                layout.Controls.Add(CreateModelCell(lineItem), 3, rowIndex);
-            }
+            return scrollHost;
         }
 
-        container.Controls.Add(layout);
-        return container;
+        for (var index = 0; index < quote.LineItems.Count; index++)
+        {
+            var lineItem = quote.LineItems[index];
+            scrollHost.Controls.Add(CreateLineItemPreviewCard(quote, lineItem, index + 1));
+        }
+
+        return scrollHost;
     }
+
+    private static Control CreateLineItemPreviewCard(Quote quote, QuoteLineItem lineItem, int displayIndex)
+    {
+        var card = new TableLayoutPanel
+        {
+            Width = 900,
+            Height = 270,
+            Margin = new Padding(0, 0, 0, 12),
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = Color.White,
+            CellBorderStyle = TableLayoutPanelCellBorderStyle.Single
+        };
+
+        card.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340));
+        card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        var infoPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 8,
+            Padding = new Padding(12, 10, 12, 10),
+            BackColor = Color.FromArgb(245, 248, 252)
+        };
+        for (var i = 0; i < infoPanel.RowCount; i++)
+        {
+            infoPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 12.5f));
+        }
+
+        infoPanel.Controls.Add(CreateMetadataLabel($"Line Item #{displayIndex}", bold: true), 0, 0);
+        infoPanel.Controls.Add(CreateMetadataLabel($"Drawing Name: {lineItem.Description}"), 0, 1);
+        infoPanel.Controls.Add(CreateMetadataLabel($"Drawing Number: {lineItem.DrawingNumber}"), 0, 2);
+        infoPanel.Controls.Add(CreateMetadataLabel($"Customer: {quote.CustomerName}"), 0, 3);
+        infoPanel.Controls.Add(CreateMetadataLabel($"Drawing Revision: {lineItem.DrawingRevision}"), 0, 4);
+        infoPanel.Controls.Add(CreateMetadataLabel($"Qty: {lineItem.Quantity:0.##}"), 0, 5);
+        infoPanel.Controls.Add(CreateMetadataLabel($"Line Total: {lineItem.LineItemTotal:C2}"), 0, 6);
+        infoPanel.Controls.Add(CreateMetadataLabel("3D Controls: rotate / pan / zoom", bold: true), 0, 7);
+
+        var viewerContainer = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8), BackColor = Color.FromArgb(250, 251, 253) };
+        viewerContainer.Controls.Add(CreateModelCell(lineItem));
+
+        card.Controls.Add(infoPanel, 0, 0);
+        card.Controls.Add(viewerContainer, 1, 0);
+        return card;
+    }
+
+    private static Label CreateMetadataLabel(string text, bool bold = false)
+        => new()
+        {
+            Text = text,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true,
+            Font = bold ? new Font(SystemFonts.DefaultFont, FontStyle.Bold) : SystemFonts.DefaultFont
+        };
 
     private static Control CreateModelCell(QuoteLineItem lineItem)
     {
@@ -976,28 +977,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         };
         viewer.LoadStep(stepAttachment.BlobData);
         return viewer;
-    }
-
-    private static Label CreateBodyLabel(string value)
-        => new()
-        {
-            Text = value,
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft,
-            Padding = new Padding(6, 0, 6, 0),
-            AutoEllipsis = true
-        };
-
-    private static void AddHeaderLabel(TableLayoutPanel table, string text, int columnIndex)
-    {
-        table.Controls.Add(new Label
-        {
-            Text = text,
-            Dock = DockStyle.Fill,
-            Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold),
-            TextAlign = ContentAlignment.MiddleLeft,
-            Padding = new Padding(6, 0, 2, 0)
-        }, columnIndex, 0);
     }
 
     private Color ResolveCustomerCardColor(int customerIndex)
@@ -1131,13 +1110,11 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         public string TimeSinceQuotedDisplay { get; init; } = string.Empty;
         public bool IsCustomerHeader { get; init; }
         public int DaysUntilExpiry { get; init; }
-        public string DetailsDisplay { get; init; } = string.Empty;
     }
 
     private enum QuoteGridRowType
     {
-        QuoteSummary,
-        CompletedDetail
+        QuoteSummary
     }
 
     private sealed class StepModelViewerControl : UserControl
