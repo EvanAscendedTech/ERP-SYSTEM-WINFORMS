@@ -157,31 +157,54 @@ public class UserManagementRepository
         await connection.OpenAsync();
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
 
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = @"
-            INSERT INTO Users (Username, DisplayName, PasswordHash, IsActive, IconPath, IconBlob, MustResetPassword, TemporaryPasswordIssuedUtc)
-            VALUES ($username, $displayName, $passwordHash, $isActive, $iconPath, $iconBlob, $mustResetPassword, $temporaryPasswordIssuedUtc)
-            ON CONFLICT(Username) DO UPDATE SET
-                DisplayName = excluded.DisplayName,
-                PasswordHash = excluded.PasswordHash,
-                IsActive = excluded.IsActive,
-                IconPath = excluded.IconPath,
-                IconBlob = excluded.IconBlob,
-                MustResetPassword = excluded.MustResetPassword,
-                TemporaryPasswordIssuedUtc = excluded.TemporaryPasswordIssuedUtc;
+        int userId;
+        if (user.Id > 0)
+        {
+            await using var update = connection.CreateCommand();
+            update.Transaction = transaction;
+            update.CommandText = @"
+                UPDATE Users
+                SET Username = $username,
+                    DisplayName = $displayName,
+                    PasswordHash = $passwordHash,
+                    IsActive = $isActive,
+                    IconPath = $iconPath,
+                    IconBlob = $iconBlob,
+                    MustResetPassword = $mustResetPassword,
+                    TemporaryPasswordIssuedUtc = $temporaryPasswordIssuedUtc
+                WHERE Id = $id;";
+            update.Parameters.AddWithValue("$id", user.Id);
+            update.Parameters.AddWithValue("$username", user.Username);
+            update.Parameters.AddWithValue("$displayName", user.DisplayName);
+            update.Parameters.AddWithValue("$passwordHash", user.PasswordHash);
+            update.Parameters.AddWithValue("$isActive", user.IsActive ? 1 : 0);
+            update.Parameters.AddWithValue("$iconPath", user.IconPath ?? string.Empty);
+            update.Parameters.AddWithValue("$iconBlob", (object?)user.IconBlob ?? DBNull.Value);
+            update.Parameters.AddWithValue("$mustResetPassword", user.MustResetPassword ? 1 : 0);
+            update.Parameters.AddWithValue("$temporaryPasswordIssuedUtc", user.TemporaryPasswordIssuedUtc?.ToString("O") ?? (object)DBNull.Value);
+            await update.ExecuteNonQueryAsync();
+            userId = user.Id;
+        }
+        else
+        {
+            await using var insert = connection.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = @"
+                INSERT INTO Users (Username, DisplayName, PasswordHash, IsActive, IconPath, IconBlob, MustResetPassword, TemporaryPasswordIssuedUtc)
+                VALUES ($username, $displayName, $passwordHash, $isActive, $iconPath, $iconBlob, $mustResetPassword, $temporaryPasswordIssuedUtc);
 
-            SELECT Id FROM Users WHERE Username = $username;";
+                SELECT Id FROM Users WHERE Username = $username;";
 
-        command.Parameters.AddWithValue("$username", user.Username);
-        command.Parameters.AddWithValue("$displayName", user.DisplayName);
-        command.Parameters.AddWithValue("$passwordHash", user.PasswordHash);
-        command.Parameters.AddWithValue("$isActive", user.IsActive ? 1 : 0);
-        command.Parameters.AddWithValue("$iconPath", user.IconPath ?? string.Empty);
-        command.Parameters.AddWithValue("$iconBlob", (object?)user.IconBlob ?? DBNull.Value);
-        command.Parameters.AddWithValue("$mustResetPassword", user.MustResetPassword ? 1 : 0);
-        command.Parameters.AddWithValue("$temporaryPasswordIssuedUtc", user.TemporaryPasswordIssuedUtc?.ToString("O") ?? (object)DBNull.Value);
-        var userId = Convert.ToInt32(await command.ExecuteScalarAsync());
+            insert.Parameters.AddWithValue("$username", user.Username);
+            insert.Parameters.AddWithValue("$displayName", user.DisplayName);
+            insert.Parameters.AddWithValue("$passwordHash", user.PasswordHash);
+            insert.Parameters.AddWithValue("$isActive", user.IsActive ? 1 : 0);
+            insert.Parameters.AddWithValue("$iconPath", user.IconPath ?? string.Empty);
+            insert.Parameters.AddWithValue("$iconBlob", (object?)user.IconBlob ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$mustResetPassword", user.MustResetPassword ? 1 : 0);
+            insert.Parameters.AddWithValue("$temporaryPasswordIssuedUtc", user.TemporaryPasswordIssuedUtc?.ToString("O") ?? (object)DBNull.Value);
+            userId = Convert.ToInt32(await insert.ExecuteScalarAsync());
+        }
 
         await using var deleteUserRoles = connection.CreateCommand();
         deleteUserRoles.Transaction = transaction;
@@ -215,6 +238,22 @@ public class UserManagementRepository
         }
 
         return userId;
+    }
+
+    public async Task DeleteUserAsync(int userId)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM Users WHERE Id = $userId;";
+        command.Parameters.AddWithValue("$userId", userId);
+        await command.ExecuteNonQueryAsync();
+
+        if (_realtimeDataService is not null)
+        {
+            await _realtimeDataService.PublishChangeAsync("Users", "delete-user");
+        }
     }
 
     private static async Task<int> UpsertRoleAsync(SqliteConnection connection, SqliteTransaction transaction, RoleDefinition role)
@@ -614,7 +653,7 @@ public class UserManagementRepository
         await command.ExecuteNonQueryAsync();
     }
 
-    public async Task<IReadOnlyList<AuditLogEntry>> GetAuditLogEntriesAsync(string? username = null)
+    public async Task<IReadOnlyList<AuditLogEntry>> GetAuditLogEntriesAsync(string? username = null, DateTime? fromUtc = null, DateTime? toUtc = null)
     {
         var logs = new List<AuditLogEntry>();
 
@@ -626,9 +665,12 @@ public class UserManagementRepository
             SELECT Id, OccurredUtc, Username, RoleSnapshot, Module, Action, Details
             FROM AuditLogEntries
             WHERE ($username IS NULL OR Username = $username)
-            ORDER BY OccurredUtc DESC
-            LIMIT 500;";
+              AND ($fromUtc IS NULL OR OccurredUtc >= $fromUtc)
+              AND ($toUtc IS NULL OR OccurredUtc <= $toUtc)
+            ORDER BY OccurredUtc DESC;";
         command.Parameters.AddWithValue("$username", string.IsNullOrWhiteSpace(username) ? DBNull.Value : username.Trim());
+        command.Parameters.AddWithValue("$fromUtc", fromUtc?.ToString("O") ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$toUtc", toUtc?.ToString("O") ?? (object)DBNull.Value);
 
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())

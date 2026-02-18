@@ -7,6 +7,9 @@ public class AuditLogControl : UserControl, IRealtimeDataControl
 {
     private readonly UserManagementRepository _userRepository;
     private readonly ComboBox _userFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
+    private readonly DateTimePicker _fromDate = new() { Width = 130, Format = DateTimePickerFormat.Short };
+    private readonly DateTimePicker _toDate = new() { Width = 130, Format = DateTimePickerFormat.Short };
+    private readonly CheckBox _enableDateFilter = new() { Text = "Date filter", AutoSize = true };
     private readonly Button _refreshButton = new() { Text = "Refresh", AutoSize = true };
     private readonly DataGridView _auditGrid = new() { Dock = DockStyle.Fill, ReadOnly = true, AutoGenerateColumns = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
 
@@ -18,9 +21,17 @@ public class AuditLogControl : UserControl, IRealtimeDataControl
         var actions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true };
         actions.Controls.Add(new Label { Text = "Filter by user", AutoSize = true, Margin = new Padding(0, 8, 6, 0) });
         actions.Controls.Add(_userFilter);
+        actions.Controls.Add(_enableDateFilter);
+        actions.Controls.Add(new Label { Text = "From", AutoSize = true, Margin = new Padding(8, 8, 0, 0) });
+        actions.Controls.Add(_fromDate);
+        actions.Controls.Add(new Label { Text = "To", AutoSize = true, Margin = new Padding(8, 8, 0, 0) });
+        actions.Controls.Add(_toDate);
         actions.Controls.Add(_refreshButton);
 
         _userFilter.SelectedIndexChanged += async (_, _) => await LoadAuditAsync();
+        _enableDateFilter.CheckedChanged += async (_, _) => await LoadAuditAsync();
+        _fromDate.ValueChanged += async (_, _) => { if (_enableDateFilter.Checked) await LoadAuditAsync(); };
+        _toDate.ValueChanged += async (_, _) => { if (_enableDateFilter.Checked) await LoadAuditAsync(); };
         _refreshButton.Click += async (_, _) => await LoadAuditAsync();
 
         ConfigureGrid();
@@ -29,6 +40,17 @@ public class AuditLogControl : UserControl, IRealtimeDataControl
         Controls.Add(actions);
 
         _ = InitializeAsync();
+    }
+
+    public async Task FocusUserAsync(string username)
+    {
+        var target = _userFilter.Items.Cast<object>().Select(i => i.ToString()).FirstOrDefault(u => string.Equals(u, username, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(target))
+        {
+            _userFilter.SelectedItem = target;
+        }
+
+        await LoadAuditAsync();
     }
 
     private async Task InitializeAsync()
@@ -41,6 +63,8 @@ public class AuditLogControl : UserControl, IRealtimeDataControl
             _userFilter.Items.Add(username);
         }
 
+        _fromDate.Value = DateTime.Today.AddDays(-30);
+        _toDate.Value = DateTime.Today;
         _userFilter.SelectedIndex = 0;
         await LoadAuditAsync();
     }
@@ -58,7 +82,19 @@ public class AuditLogControl : UserControl, IRealtimeDataControl
     private async Task LoadAuditAsync()
     {
         var selectedUser = _userFilter.SelectedItem?.ToString();
-        var logs = await _userRepository.GetAuditLogEntriesAsync(selectedUser == "All Users" ? null : selectedUser);
+        DateTime? fromUtc = null;
+        DateTime? toUtc = null;
+        if (_enableDateFilter.Checked)
+        {
+            fromUtc = _fromDate.Value.Date.ToUniversalTime();
+            toUtc = _toDate.Value.Date.AddDays(1).AddTicks(-1).ToUniversalTime();
+        }
+
+        var logs = await _userRepository.GetAuditLogEntriesAsync(
+            selectedUser == "All Users" ? null : selectedUser,
+            fromUtc,
+            toUtc);
+
         _auditGrid.DataSource = logs.Select(log => new
         {
             Occurred = log.OccurredUtc.ToLocalTime().ToString("g"),
