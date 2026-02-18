@@ -1,10 +1,15 @@
 <Project>
-  <PropertyGroup Condition="'$(OS)' == 'Windows_NT' and '$(UseLocalAppDataBuildPaths)' != 'false'">
+  <PropertyGroup>
     <!--
-      Avoid build failures like CS2012 when repositories live in OneDrive-synced folders.
-      Redirecting obj/bin to LocalAppData keeps compiler outputs out of synchronized paths
-      that may transiently lock files.
+      Default to local AppData build paths only when the repository is inside OneDrive.
+      This avoids CS2012 issues from sync locks while preventing AV contention in AppData
+      for repositories that are not OneDrive-backed.
     -->
+    <UseLocalAppDataBuildPaths Condition="'$(UseLocalAppDataBuildPaths)' == '' and $([System.String]::Copy('$(MSBuildProjectDirectory)').IndexOf('OneDrive', System.StringComparison.OrdinalIgnoreCase)) &gt;= 0">true</UseLocalAppDataBuildPaths>
+    <UseLocalAppDataBuildPaths Condition="'$(UseLocalAppDataBuildPaths)' == ''">false</UseLocalAppDataBuildPaths>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(OS)' == 'Windows_NT' and '$(UseLocalAppDataBuildPaths)' == 'true'">
     <BaseIntermediateOutputPath>$(LocalAppData)\ERPSystemBuild\obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
     <BaseOutputPath>$(LocalAppData)\ERPSystemBuild\bin\$(MSBuildProjectName)\</BaseOutputPath>
   </PropertyGroup>
