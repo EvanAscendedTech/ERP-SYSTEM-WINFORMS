@@ -22,6 +22,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private readonly FlowLayoutPanel _customerCardsPanel = new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(8, 4, 8, 8) };
     private readonly Label _customerHubLabel = new() { Dock = DockStyle.Top, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold), Padding = new Padding(8, 0, 0, 0) };
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
+    private readonly FlowLayoutPanel _completedWorkPanel = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(8, 4, 8, 8) };
     private readonly DataGridView _expiredQuotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
     private readonly Button _markWonButton;
@@ -90,7 +91,17 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         });
         topContent.Controls.Add(actionsPanel);
 
-        var archivePanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 8, 0, 0) };
+        var completedWorkPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 0, 6) };
+        completedWorkPanel.Controls.Add(_completedWorkPanel);
+        completedWorkPanel.Controls.Add(new Label
+        {
+            Dock = DockStyle.Top,
+            Height = 24,
+            Text = "Completed Work",
+            Font = new Font(Font, FontStyle.Bold)
+        });
+
+        var archivePanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 0, 0) };
         archivePanel.Controls.Add(_expiredQuotesGrid);
         archivePanel.Controls.Add(new Label
         {
@@ -99,6 +110,18 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             Text = "Expired Quotes Archive (60+ days)",
             Font = new Font(Font, FontStyle.Bold)
         });
+
+        var lowerPanel = new SplitContainer
+        {
+            Dock = DockStyle.Fill,
+            Orientation = Orientation.Horizontal,
+            FixedPanel = FixedPanel.None,
+            SplitterDistance = 180,
+            Panel1MinSize = 120,
+            Panel2MinSize = 120
+        };
+        lowerPanel.Panel1.Controls.Add(completedWorkPanel);
+        lowerPanel.Panel2.Controls.Add(archivePanel);
 
         var split = new SplitContainer
         {
@@ -110,7 +133,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             Panel2MinSize = 140
         };
         split.Panel1.Controls.Add(topContent);
-        split.Panel2.Controls.Add(archivePanel);
+        split.Panel2.Controls.Add(lowerPanel);
 
         Controls.Add(split);
         Controls.Add(bottomRightPanel);
@@ -186,7 +209,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             RefreshActiveQuotesView();
             _expiredQuotesGrid.DataSource = expiredQuotes;
             RefreshActionStateForSelection();
-            _feedback.Text = $"Loaded {_activeQuotesCache.Count} active/finished quotes and {expiredQuotes.Count} archived quotes.";
+            _feedback.Text = $"Loaded {_activeQuotesCache.Count} quotes and {expiredQuotes.Count} archived quotes.";
         }
         catch (Exception ex)
         {
@@ -476,6 +499,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private void RefreshActiveQuotesView()
     {
         var customerGroups = _activeQuotesCache
+            .Where(q => q.Status == QuoteStatus.InProgress)
             .GroupBy(q => NormalizeCustomerName(q.CustomerName))
             .OrderBy(g => g.Key)
             .ToList();
@@ -484,12 +508,21 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         {
             _selectedCustomer = customerGroups[0].Key;
         }
+        else if (!string.IsNullOrWhiteSpace(_selectedCustomer)
+            && customerGroups.All(group => !string.Equals(group.Key, _selectedCustomer, StringComparison.OrdinalIgnoreCase)))
+        {
+            _selectedCustomer = customerGroups.FirstOrDefault()?.Key;
+        }
 
         BuildCustomerCards();
+        BuildCompletedWorkTable();
 
         var filteredQuotes = string.IsNullOrWhiteSpace(_selectedCustomer)
             ? Array.Empty<Quote>()
-            : _activeQuotesCache.Where(q => string.Equals(NormalizeCustomerName(q.CustomerName), _selectedCustomer, StringComparison.OrdinalIgnoreCase)).ToArray();
+            : _activeQuotesCache
+                .Where(q => q.Status == QuoteStatus.InProgress
+                    && string.Equals(NormalizeCustomerName(q.CustomerName), _selectedCustomer, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
 
         _quotesGrid.DataSource = BuildActiveViewRows(filteredQuotes);
         RefreshActionStateForSelection();
@@ -519,13 +552,14 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         _customerCardsPanel.Controls.Clear();
 
         var customerGroups = _activeQuotesCache
+            .Where(q => q.Status == QuoteStatus.InProgress)
             .GroupBy(q => NormalizeCustomerName(q.CustomerName))
             .OrderBy(g => g.Key)
             .ToList();
 
         foreach (var customerGroup in customerGroups)
         {
-            _customerCardsPanel.Controls.Add(CreateCustomerCard(customerGroup.Key, customerGroup.ToList()));
+            _customerCardsPanel.Controls.Add(CreateCustomerCard(customerGroup.Key));
         }
 
         _customerCardsPanel.Invalidate(true);
@@ -533,37 +567,26 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         _customerCardsPanel.ResumeLayout();
     }
 
-    private Control CreateCustomerCard(string customerName, IReadOnlyCollection<Quote> quotes)
+    private Control CreateCustomerCard(string customerName)
     {
-        var completedQuotes = quotes
-            .Where(q => q.Status == QuoteStatus.Completed)
-            .OrderByDescending(q => q.CompletedUtc ?? q.LastUpdatedUtc)
-            .ToList();
-
         var card = new CustomerCardPanel
         {
-            Width = 840,
-            Height = completedQuotes.Count > 0 ? 350 : 170,
+            Width = 280,
+            Height = 72,
             Margin = new Padding(0, 0, 12, 0),
             FillColor = ResolveCustomerCardColor(customerName),
             Cursor = Cursors.Hand
         };
 
-        var openCount = quotes.Count(q => q.Status == QuoteStatus.InProgress);
-        var completedCount = quotes.Count(q => q.Status == QuoteStatus.Completed);
-        var wonCount = quotes.Count(q => q.Status == QuoteStatus.Won);
-
-        var nameLabel = new Label { Text = customerName, Dock = DockStyle.Top, Height = 40, Padding = new Padding(10, 10, 10, 4), Font = new Font(Font, FontStyle.Bold) };
-        var summaryLabel = new Label
+        var titleLabel = new Label
         {
-            Text = $"Open: {openCount}    Completed: {completedCount}    Total: {quotes.Count}    Won: {wonCount}",
-            Dock = DockStyle.Top,
-            Height = 30,
-            Padding = new Padding(10, 2, 10, 6),
-            Font = new Font(Font.FontFamily, 9f, FontStyle.Regular)
+            Text = customerName,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(12, 0, 12, 0),
+            Font = new Font(Font, FontStyle.Bold),
+            AutoEllipsis = true
         };
-
-        var completedQuotesPanel = CreateCompletedQuotesTable(completedQuotes, customerName);
 
         void selectCustomer(object? _, EventArgs __)
         {
@@ -572,47 +595,28 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         }
 
         card.Click += selectCustomer;
-        nameLabel.Click += selectCustomer;
-        summaryLabel.Click += selectCustomer;
-        card.Controls.Add(completedQuotesPanel);
-        card.Controls.Add(nameLabel);
-        card.Controls.Add(summaryLabel);
+        titleLabel.Click += selectCustomer;
+        card.Controls.Add(titleLabel);
         return card;
     }
 
-    private Control CreateCompletedQuotesTable(IReadOnlyList<Quote> completedQuotes, string customerName)
+    private void BuildCompletedWorkTable()
     {
-        var container = new Panel
-        {
-            Dock = DockStyle.Fill,
-            Padding = new Padding(10, 4, 10, 10)
-        };
+        _completedWorkPanel.SuspendLayout();
+        _completedWorkPanel.Controls.Clear();
 
-        var sectionLabel = new Label
-        {
-            Text = "Completed Quotes",
-            Dock = DockStyle.Top,
-            Height = 24,
-            Font = new Font(Font, FontStyle.Bold)
-        };
+        var completedQuotes = _activeQuotesCache
+            .Where(q => q.Status == QuoteStatus.Completed)
+            .OrderByDescending(q => q.CompletedUtc ?? q.LastUpdatedUtc)
+            .ToList();
 
-        var rowsPanel = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-            AutoScroll = true,
-            Margin = Padding.Empty,
-            Padding = Padding.Empty
-        };
-
-        rowsPanel.Controls.Add(CreateCompletedQuotesHeaderRow());
+        _completedWorkPanel.Controls.Add(CreateCompletedQuotesHeaderRow());
 
         if (completedQuotes.Count == 0)
         {
-            rowsPanel.Controls.Add(new Label
+            _completedWorkPanel.Controls.Add(new Label
             {
-                Text = $"No completed quotes for {customerName}.",
+                Text = "No completed work quotes.",
                 AutoSize = false,
                 Width = 780,
                 Height = 30,
@@ -624,13 +628,11 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         {
             foreach (var quote in completedQuotes)
             {
-                rowsPanel.Controls.Add(CreateCompletedQuoteExpandableRow(quote));
+                _completedWorkPanel.Controls.Add(CreateCompletedQuoteExpandableRow(quote));
             }
         }
 
-        container.Controls.Add(rowsPanel);
-        container.Controls.Add(sectionLabel);
-        return container;
+        _completedWorkPanel.ResumeLayout();
     }
 
     private static Control CreateCompletedQuotesHeaderRow()
