@@ -631,7 +631,7 @@ public class QuoteDraftForm : Form
         card.SummaryLineTotal.Text = card.Model.LineItemTotal.ToString("C2", CultureInfo.CurrentCulture);
         card.SummaryPerPiece.Text = card.Model.UnitPrice.ToString("C2", CultureInfo.CurrentCulture);
 
-        var stepAttachment = FindStepAttachment(card.Model);
+        var stepAttachment = FindLatestStepAttachment(card.Model);
         if (stepAttachment is not null)
         {
             var stepBytes = stepAttachment.BlobData;
@@ -649,11 +649,13 @@ public class QuoteDraftForm : Form
         }
     }
 
-    private static QuoteBlobAttachment? FindStepAttachment(QuoteLineItem model)
+    private static QuoteBlobAttachment? FindLatestStepAttachment(QuoteLineItem model)
     {
-        return model.BlobAttachments.FirstOrDefault(blob =>
-                   blob.BlobType == QuoteBlobType.ThreeDModel
-                   && IsStepFile(blob));
+        return model.BlobAttachments
+            .Where(blob => blob.BlobType == QuoteBlobType.ThreeDModel && IsStepFile(blob))
+            .OrderByDescending(blob => blob.UploadedUtc)
+            .ThenByDescending(blob => blob.Id)
+            .FirstOrDefault();
     }
 
     private static bool IsStepFile(QuoteBlobAttachment blob)
@@ -667,7 +669,7 @@ public class QuoteDraftForm : Form
 
     private async void ExpandModelViewer(LineItemCard card)
     {
-        var stepAttachment = FindStepAttachment(card.Model);
+        var stepAttachment = FindLatestStepAttachment(card.Model);
         if (stepAttachment is null)
         {
             MessageBox.Show("No STEP model found for this line item.", "3D Model", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -753,6 +755,7 @@ public class QuoteDraftForm : Form
             Sha256 = sha.ComputeHash(bytes),
             UploadedBy = _uploadedBy,
             UploadedUtc = DateTime.UtcNow,
+            StorageRelativePath = filePath,
             BlobData = bytes
         };
 
