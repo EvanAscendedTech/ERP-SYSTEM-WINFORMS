@@ -528,6 +528,12 @@ END-ISO-10303-21;
                 return null;
             }
 
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                await RecordEmptyScriptResultAsync(script, safeStage, sourceFileName, sourcePath, fileSizeBytes, parser, "missing-envelope");
+                return null;
+            }
+
             using var envelopeDoc = JsonDocument.Parse(json);
             var envelope = envelopeDoc.RootElement;
             var ok = envelope.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
@@ -669,7 +675,6 @@ END-ISO-10303-21;
         await _webView.EnsureCoreWebView2Async();
         _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
         _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
-        _webView.CoreWebView2.ConsoleMessageReceived += (_, args) => AppendConsoleLog($"[{args.Source}:{args.LineNumber}] {args.Message}");
         _webView.CoreWebView2.ProcessFailed += (_, args) =>
         {
             var reason = args.Reason.ToString();
