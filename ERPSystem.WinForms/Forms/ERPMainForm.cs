@@ -28,6 +28,7 @@ public partial class ERPMainForm : Form
     private readonly Stack<string> _backHistory = new();
     private readonly Stack<string> _forwardHistory = new();
     private readonly System.Windows.Forms.Timer _syncClockTimer = new();
+    private readonly StepParsingDiagnosticsLog _stepParsingDiagnosticsLog = new();
     private DateTime _nextFailSafeAt;
     private DateTime _lastAutosaveAt;
     private DateTime _lastRefreshAt;
@@ -625,7 +626,7 @@ public partial class ERPMainForm : Form
         return key switch
         {
             "Dashboard" => new DashboardControl(_quoteRepo, _prodRepo, _jobFlow, OpenDashboardTarget),
-            "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, _userRepo, _activeUser, LoadSection),
+            "Quotes" => new Controls.QuotesControl(_quoteRepo, _prodRepo, _userRepo, _activeUser, LoadSection, _stepParsingDiagnosticsLog),
             "Purchasing" => new PurchasingControl(_quoteRepo, _prodRepo, _userRepo, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Purchasing")),
             "Production" => new ProductionControl(_prodRepo, _userRepo, _jobFlow, _activeUser, LoadSection, AuthorizationService.CanEditSection(_activeUser, "Production")),
             "CRM" => new CRMControl(_quoteRepo),
@@ -637,6 +638,7 @@ public partial class ERPMainForm : Form
                 _quoteRepo,
                 _activeUser,
                 canManageSettings: AuthorizationService.HasPermission(_activeUser, UserPermission.ManageSettings),
+                stepParsingDiagnosticsLog: _stepParsingDiagnosticsLog,
                 settingsChanged: ApplySettings,
                 currentTheme: _themeManager.CurrentTheme,
                 themeChanged: OnThemeChanged,
