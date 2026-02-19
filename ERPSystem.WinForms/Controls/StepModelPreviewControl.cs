@@ -531,18 +531,6 @@ public sealed class StepModelPreviewControl : UserControl
         await _webView.EnsureCoreWebView2Async();
         _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
         _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
-        _webView.CoreWebView2.ConsoleMessageReceived += (_, args) =>
-        {
-            lock (_consoleLogSync)
-            {
-                _consoleLogBuffer.Add($"{args.Source}:{args.LineNumber}:{args.ColumnNumber}:{args.Message}");
-                if (_consoleLogBuffer.Count > ConsoleLogLimit)
-                {
-                    _consoleLogBuffer.RemoveAt(0);
-                }
-            }
-        };
-
         _navigationReady = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _webView.CoreWebView2.NavigationCompleted += (_, args) =>
         {
