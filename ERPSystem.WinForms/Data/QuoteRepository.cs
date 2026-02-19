@@ -1076,7 +1076,7 @@ public class QuoteRepository
 
         foreach (var lineItem in lineItems)
         {
-            lineItem.BlobAttachments = await ReadLineItemBlobFilesAsync(connection, lineItem.Id);
+            lineItem.BlobAttachments = await ReadLineItemBlobFilesAsync(connection, quoteId, lineItem.Id);
         }
 
         return lineItems;
@@ -1137,7 +1137,7 @@ public class QuoteRepository
         await command.ExecuteNonQueryAsync();
     }
 
-    private static async Task<List<QuoteBlobAttachment>> ReadLineItemBlobFilesAsync(SqliteConnection connection, int lineItemId)
+    private static async Task<List<QuoteBlobAttachment>> ReadLineItemBlobFilesAsync(SqliteConnection connection, int quoteId, int lineItemId)
     {
         var blobs = new List<QuoteBlobAttachment>();
 
@@ -1146,7 +1146,9 @@ public class QuoteRepository
             SELECT Id, QuoteId, LineItemId, LifecycleId, BlobType, FileName, Extension, ContentType, FileSizeBytes, Sha256, UploadedBy, StorageRelativePath, BlobData, UploadedUtc
             FROM QuoteBlobFiles
             WHERE LineItemId = $lineItemId
-            ORDER BY Id;";
+              AND QuoteId = $quoteId
+            ORDER BY UploadedUtc DESC, Id DESC;";
+        command.Parameters.AddWithValue("$quoteId", quoteId);
         command.Parameters.AddWithValue("$lineItemId", lineItemId);
 
         await using var reader = await command.ExecuteReaderAsync();

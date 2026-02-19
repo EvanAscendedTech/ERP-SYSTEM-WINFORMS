@@ -652,23 +652,40 @@ public class QuotesControl : UserControl, IRealtimeDataControl
                     && string.Equals(NormalizeCustomerName(q.CustomerName), _selectedCustomer, StringComparison.OrdinalIgnoreCase))
                 .ToArray();
 
-        var selectedCustomerCompletedQuotes = string.IsNullOrWhiteSpace(_selectedCustomer)
+        var selectedCustomerCompletedQuotes = GetSelectedCustomerCompletedQuotes();
+
+        var inProgressRows = BuildActiveViewRows(selectedCustomerInProgressQuotes);
+        _quotesGrid.DataSource = inProgressRows;
+
+        RefreshCompletedQuotesSection(selectedCustomerCompletedQuotes);
+        RefreshActionStateForSelection();
+        _customerHubLabel.Text = string.IsNullOrWhiteSpace(_selectedCustomer)
+            ? "Customer Hub — pick a customer card to drill into quote details"
+            : $"Customer Hub / {_selectedCustomer}";
+    }
+
+
+    private Quote[] GetSelectedCustomerCompletedQuotes()
+    {
+        return string.IsNullOrWhiteSpace(_selectedCustomer)
             ? Array.Empty<Quote>()
             : _activeQuotesCache
                 .Where(q => q.Status == QuoteStatus.Completed
                     && string.Equals(NormalizeCustomerName(q.CustomerName), _selectedCustomer, StringComparison.OrdinalIgnoreCase))
                 .ToArray();
+    }
 
-        var inProgressRows = BuildActiveViewRows(selectedCustomerInProgressQuotes);
-        _quotesGrid.DataSource = inProgressRows;
+    private void RefreshCompletedQuotesSection(IReadOnlyCollection<Quote> completedQuotes)
+    {
+        if (_expandedCompletedQuoteId.HasValue && completedQuotes.All(q => q.Id != _expandedCompletedQuoteId.Value))
+        {
+            _expandedCompletedQuoteId = null;
+        }
 
-        var completedRows = BuildCompletedRows(selectedCustomerCompletedQuotes);
+        var completedRows = BuildCompletedRows(completedQuotes);
         _completedQuotesGrid.DataSource = completedRows;
+        _completedQuotesGrid.Refresh();
         RenderCompletedQuoteDetails();
-        RefreshActionStateForSelection();
-        _customerHubLabel.Text = string.IsNullOrWhiteSpace(_selectedCustomer)
-            ? "Customer Hub — pick a customer card to drill into quote details"
-            : $"Customer Hub / {_selectedCustomer}";
     }
 
     private List<QuoteGridRow> BuildCompletedRows(IReadOnlyCollection<Quote> completedQuotes)
@@ -796,8 +813,8 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private void ToggleCompletedQuoteExpansion(int quoteId)
     {
         _expandedCompletedQuoteId = _expandedCompletedQuoteId == quoteId ? null : quoteId;
-        RefreshActiveQuotesView();
-        RenderCompletedQuoteDetails();
+        var selectedCustomerCompletedQuotes = GetSelectedCustomerCompletedQuotes();
+        RefreshCompletedQuotesSection(selectedCustomerCompletedQuotes);
     }
 
     private async Task DeleteCompletedQuoteAsync(int quoteId)
@@ -951,19 +968,24 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
     private static Control CreateModelCell(QuoteLineItem lineItem)
     {
-        var stepAttachment = lineItem.BlobAttachments.FirstOrDefault(blob =>
-            blob.BlobType == QuoteBlobType.ThreeDModel
-            && (blob.Extension.Equals(".step", StringComparison.OrdinalIgnoreCase)
-                || blob.Extension.Equals(".stp", StringComparison.OrdinalIgnoreCase)
-                || blob.FileName.EndsWith(".step", StringComparison.OrdinalIgnoreCase)
-                || blob.FileName.EndsWith(".stp", StringComparison.OrdinalIgnoreCase))
-            && blob.BlobData.Length > 0);
+        var stepAttachment = FindLatestStepAttachment(lineItem);
 
         if (stepAttachment is null)
         {
             return new Label
             {
                 Text = "No STEP file",
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleCenter,
+                ForeColor = Color.DimGray
+            };
+        }
+
+        if (stepAttachment.BlobData.Length == 0)
+        {
+            return new Label
+            {
+                Text = "STEP file is linked but has no preview data",
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleCenter,
                 ForeColor = Color.DimGray
@@ -977,6 +999,21 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         };
         viewer.LoadStep(stepAttachment.BlobData);
         return viewer;
+    }
+
+    private static QuoteBlobAttachment? FindLatestStepAttachment(QuoteLineItem lineItem)
+    {
+        return lineItem.BlobAttachments
+            .Where(blob => blob.BlobType == QuoteBlobType.ThreeDModel
+                && blob.LineItemId == lineItem.Id
+                && (lineItem.QuoteId <= 0 || blob.QuoteId == lineItem.QuoteId)
+                && (blob.Extension.Equals(".step", StringComparison.OrdinalIgnoreCase)
+                    || blob.Extension.Equals(".stp", StringComparison.OrdinalIgnoreCase)
+                    || blob.FileName.EndsWith(".step", StringComparison.OrdinalIgnoreCase)
+                    || blob.FileName.EndsWith(".stp", StringComparison.OrdinalIgnoreCase)))
+            .OrderByDescending(blob => blob.UploadedUtc)
+            .ThenByDescending(blob => blob.Id)
+            .FirstOrDefault();
     }
 
     private Color ResolveCustomerCardColor(int customerIndex)

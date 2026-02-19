@@ -129,6 +129,100 @@ public class QuoteRepositoryTests
         File.Delete(dbPath);
     }
 
+
+    [Fact]
+    public async Task GetQuoteAsync_LoadsOnlyLineItemBlobsBelongingToQuote_AndUsesNewestStepAttachment()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-step-link-{Guid.NewGuid():N}.db");
+        var repository = new QuoteRepository(dbPath);
+        await repository.InitializeDatabaseAsync();
+
+        var customer = Assert.Single(await repository.GetCustomersAsync());
+
+        var quoteOne = new Quote
+        {
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            LifecycleQuoteId = "Q-STEP-1",
+            Status = QuoteStatus.Completed,
+            LineItems =
+            [
+                new QuoteLineItem
+                {
+                    Description = "Part One",
+                    Quantity = 1,
+                    BlobAttachments =
+                    [
+                        new QuoteBlobAttachment
+                        {
+                            BlobType = QuoteBlobType.ThreeDModel,
+                            FileName = "part.step",
+                            Extension = ".step",
+                            ContentType = ".step",
+                            BlobData = [1,2,3],
+                            UploadedUtc = DateTime.UtcNow.AddMinutes(-5)
+                        },
+                        new QuoteBlobAttachment
+                        {
+                            BlobType = QuoteBlobType.ThreeDModel,
+                            FileName = "part.step",
+                            Extension = ".step",
+                            ContentType = ".step",
+                            BlobData = [8,9,10],
+                            UploadedUtc = DateTime.UtcNow
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var quoteTwo = new Quote
+        {
+            CustomerId = customer.Id,
+            CustomerName = customer.Name,
+            LifecycleQuoteId = "Q-STEP-2",
+            Status = QuoteStatus.Completed,
+            LineItems =
+            [
+                new QuoteLineItem
+                {
+                    Description = "Part Two",
+                    Quantity = 1,
+                    BlobAttachments =
+                    [
+                        new QuoteBlobAttachment
+                        {
+                            BlobType = QuoteBlobType.ThreeDModel,
+                            FileName = "other.stp",
+                            Extension = ".stp",
+                            ContentType = ".stp",
+                            BlobData = [99],
+                            UploadedUtc = DateTime.UtcNow
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var quoteOneId = await repository.SaveQuoteAsync(quoteOne);
+        var quoteTwoId = await repository.SaveQuoteAsync(quoteTwo);
+
+        var loadedOne = await repository.GetQuoteAsync(quoteOneId);
+        var loadedTwo = await repository.GetQuoteAsync(quoteTwoId);
+
+        var lineOne = Assert.Single(loadedOne!.LineItems);
+        var lineTwo = Assert.Single(loadedTwo!.LineItems);
+
+        Assert.All(lineOne.BlobAttachments, blob => Assert.Equal(quoteOneId, blob.QuoteId));
+        Assert.All(lineTwo.BlobAttachments, blob => Assert.Equal(quoteTwoId, blob.QuoteId));
+
+        var newestStep = lineOne.BlobAttachments
+            .First(blob => blob.BlobType == QuoteBlobType.ThreeDModel && blob.FileName.EndsWith(".step", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(new byte[] { 8, 9, 10 }, newestStep.BlobData);
+
+        File.Delete(dbPath);
+    }
+
     [Fact]
     public async Task SaveQuoteAsync_PersistsExtendedLineItemFields()
     {
