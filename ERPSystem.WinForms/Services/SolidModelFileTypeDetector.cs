@@ -82,7 +82,7 @@ public sealed class SolidModelFileTypeDetector
             return string.Empty;
         }
 
-        return extension.StartsWith('.', StringComparison.Ordinal)
+        return extension.StartsWith(".", StringComparison.Ordinal)
             ? extension.ToLowerInvariant()
             : $".{extension.ToLowerInvariant()}";
     }

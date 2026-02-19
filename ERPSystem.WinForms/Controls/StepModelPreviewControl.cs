@@ -356,7 +356,7 @@ public sealed class StepModelPreviewControl : UserControl
             {
                 if (_initialized && _webView.CoreWebView2 is not null)
                 {
-                    _webView.CoreWebView2.ExecuteScriptAsync("window.disposeViewer?.();").AsTask().Wait(1500);
+                    _webView.CoreWebView2.ExecuteScriptAsync("window.disposeViewer?.();").Wait(1500);
                 }
             }
             catch
