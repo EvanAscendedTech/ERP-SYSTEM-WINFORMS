@@ -56,11 +56,11 @@ public sealed class StepPreviewService : IStepPreviewService
     {
         if (IsConverterUnavailable)
         {
-            var hash = StepToGlbConverter.ComputeStepHash(stepBytes);
+            var stepHash = StepToGlbConverter.ComputeStepHash(stepBytes);
             return Task.FromResult(new StepPreviewResult(
                 false,
                 Array.Empty<byte>(),
-                hash,
+                stepHash,
                 false,
                 "STEP_CONVERTER_UNAVAILABLE",
                 "STEP converter is unavailable for this session. Click Retry after fix once converter binaries are restored.",
