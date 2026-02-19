@@ -11,6 +11,9 @@ public sealed class StepModelPreviewControl : UserControl
 {
     private readonly WebView2 _webView;
     private readonly Label _statusLabel;
+    private readonly Button _retryButton;
+    private static int _converterMissingUiShown;
+    private static int _converterMissingDiagnosticLogged;
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private readonly IStepPreviewService? _stepPreviewService;
     private readonly StepParsingDiagnosticsLog? _diagnosticsLog;
@@ -43,8 +46,27 @@ public sealed class StepModelPreviewControl : UserControl
             Text = "Loading 3D viewer..."
         };
 
+        _retryButton = new Button
+        {
+            Text = "Retry after fix",
+            AutoSize = true,
+            Visible = false,
+            Anchor = AnchorStyles.Bottom | AnchorStyles.Right
+        };
+        _retryButton.Click += (_, _) =>
+        {
+            _stepPreviewService?.ResetConverterAvailability();
+            Interlocked.Exchange(ref _converterMissingUiShown, 0);
+            Interlocked.Exchange(ref _converterMissingDiagnosticLogged, 0);
+            _retryButton.Visible = false;
+            _statusLabel.Text = "Converter check reset. Reopen preview or click Preview 3D.";
+        };
+
         Controls.Add(_webView);
         Controls.Add(_statusLabel);
+        Controls.Add(_retryButton);
+        Resize += (_, _) => PositionRetryButton();
+        PositionRetryButton();
     }
 
     public void LoadStep(byte[]? stepBytes, string? fileName = null, string? sourcePath = null)
@@ -88,6 +110,7 @@ public sealed class StepModelPreviewControl : UserControl
         _webView.Visible = false;
         _statusLabel.Visible = true;
         _statusLabel.Text = "3D preview cleared";
+        _retryButton.Visible = false;
     }
 
     public Task<bool> RunDeveloperDiagnosticsProbeAsync() => Task.FromResult(true);
@@ -133,13 +156,39 @@ public sealed class StepModelPreviewControl : UserControl
                 return;
             }
 
+            if (_stepPreviewService.IsConverterUnavailable)
+            {
+                HandleMissingConverter(fileName, sourcePath, stepBytes.LongLength, "STEP converter unavailable for this session.");
+                return;
+            }
+
             _statusLabel.Text = "Converting STEP to GLB...";
             var conversion = await _stepPreviewService.GetOrCreateGlbDetailedAsync(stepBytes, fileName, cancellationToken);
-            RecordDiagnostics(conversion.Success, conversion.ErrorCode, "step-convert", "STEP_PREVIEW", conversion.Message, stepBytes.LongLength, fileName, sourcePath,
-                $"hash={conversion.StepHash};cacheHit={conversion.CacheHit};validation={conversion.ValidationDetails};exitCode={conversion.ExitCode};stdout={conversion.StdOut};stderr={conversion.StdErr}");
+            if (conversion.Success || IsConverterMissingError(conversion.ErrorCode))
+            {
+                if (conversion.Success || Interlocked.CompareExchange(ref _converterMissingDiagnosticLogged, 1, 0) == 0)
+                {
+                    RecordDiagnostics(conversion.Success, conversion.ErrorCode, "step-convert", "STEP_PREVIEW", conversion.Message, stepBytes.LongLength, fileName, sourcePath,
+                        $"hash={conversion.StepHash};cacheHit={conversion.CacheHit};validation={conversion.ValidationDetails};exitCode={conversion.ExitCode};stdout={conversion.StdOut};stderr={conversion.StdErr}");
+                }
+            }
+            else
+            {
+                RecordDiagnostics(false, conversion.ErrorCode, "step-convert", "STEP_PREVIEW", conversion.Message, stepBytes.LongLength, fileName, sourcePath,
+                    $"hash={conversion.StepHash};cacheHit={conversion.CacheHit};validation={conversion.ValidationDetails};exitCode={conversion.ExitCode};stdout={conversion.StdOut};stderr={conversion.StdErr}");
+            }
+
             if (!conversion.Success)
             {
-                ShowError("STEP conversion failed. See diagnostics for details.");
+                if (IsConverterMissingError(conversion.ErrorCode))
+                {
+                    HandleMissingConverter(fileName, sourcePath, stepBytes.LongLength, "STEP converter executable is missing. Restore Tools/step2glb files and click Retry after fix.");
+                }
+                else
+                {
+                    ShowError("STEP conversion failed. See diagnostics for details.");
+                }
+
                 return;
             }
 
@@ -185,6 +234,33 @@ public sealed class StepModelPreviewControl : UserControl
         }
     }
 
+
+    private void HandleMissingConverter(string fileName, string sourcePath, long fileSizeBytes, string message)
+    {
+        ShowError(message);
+        _retryButton.Visible = true;
+        if (Interlocked.CompareExchange(ref _converterMissingUiShown, 1, 0) == 0)
+        {
+            MessageBox.Show(this, message, "STEP Converter Missing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        if (Interlocked.CompareExchange(ref _converterMissingDiagnosticLogged, 1, 0) == 0)
+        {
+            RecordDiagnostics(false, "STEP_CONVERTER_MISSING", "step-convert", "STEP_PREVIEW", message, fileSizeBytes, fileName, sourcePath, "converter-circuit-breaker");
+        }
+    }
+
+    private static bool IsConverterMissingError(string? errorCode)
+    {
+        return string.Equals(errorCode, "STEP_CONVERTER_MISSING", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(errorCode, "STEP_CONVERTER_UNAVAILABLE", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void PositionRetryButton()
+    {
+        _retryButton.Location = new Point(Math.Max(8, ClientSize.Width - _retryButton.Width - 8), Math.Max(8, ClientSize.Height - _retryButton.Height - 8));
+        _retryButton.BringToFront();
+    }
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
     {
         if (_initialized && _webView.CoreWebView2 is not null)
