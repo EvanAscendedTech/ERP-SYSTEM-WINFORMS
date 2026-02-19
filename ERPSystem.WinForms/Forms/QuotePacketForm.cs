@@ -126,7 +126,7 @@ public class QuotePacketForm : Form
     {
         using var dialog = new OpenFileDialog
         {
-            Filter = "Supported Files|*.pdf;*.txt;*.step|PDF Files|*.pdf|Text Files|*.txt|STEP Files|*.step",
+            Filter = "Supported Files|*.pdf;*.txt;*.step;*.stp|PDF Files|*.pdf|Text Files|*.txt|STEP Files|*.step;*.stp",
             Multiselect = true,
             Title = "Select files for quote packet"
         };
@@ -165,6 +165,6 @@ public class QuotePacketForm : Form
     private static bool IsSupportedFile(string filePath)
     {
         var ext = Path.GetExtension(filePath).ToLowerInvariant();
-        return ext is ".pdf" or ".txt" or ".step";
+        return ext is ".pdf" or ".txt" or ".step" or ".stp";
     }
 }

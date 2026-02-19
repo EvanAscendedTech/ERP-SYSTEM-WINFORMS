@@ -114,7 +114,7 @@ public sealed class StepModelPreviewControl : UserControl
             var result = ParseScriptResult(resultRaw);
             if (!result.Ok)
             {
-                ShowError($"Unable to render STEP geometry ({result.Error})");
+                ShowError(BuildStatusMessage(result));
                 return;
             }
 
@@ -151,6 +151,28 @@ public sealed class StepModelPreviewControl : UserControl
 
             return (false, string.IsNullOrWhiteSpace(normalized) ? "parse-failed" : normalized);
         }
+    }
+
+    private static string BuildStatusMessage((bool Ok, string Error) result)
+    {
+        if (result.Ok)
+        {
+            return string.Empty;
+        }
+
+        return result.Error switch
+        {
+            "missing-file-data" => "STEP model unavailable (missing file data)",
+            "unsupported-format" => "Unsupported 3D format. Expected .step or .stp",
+            "invalid-step-header" => "The file does not contain a valid STEP header (ISO-10303-21)",
+            "invalid-step-body" => "The STEP file is missing required DATA section content",
+            "module-load-failed" => "STEP parser could not be loaded. Verify internet access to OpenCASCADE runtime assets",
+            "empty-geometry" => "STEP file parsed, but no renderable geometry was produced",
+            "parse-binary-failed" => "Failed to parse STEP binary payload",
+            "parse-text-failed" => "Failed to parse STEP text payload",
+            "corrupted-or-invalid-step" => "STEP parser rejected the file as corrupted or invalid",
+            _ => $"Unable to render STEP geometry ({result.Error})"
+        };
     }
 
     private static StepRenderResult? DeserializeStepRenderResult(string resultRaw)
@@ -276,7 +298,7 @@ public sealed class StepModelPreviewControl : UserControl
         enlargedWindow.ShowDialog(owner);
     }
 
-    private sealed record StepRenderResult(bool ok, string? error, string? stage);
+    private sealed record StepRenderResult(bool ok, string? error, string? stage, int meshCount = 0, int triangleCount = 0, string? parser = null);
 
     private static string BuildHtmlShell()
     {
@@ -357,10 +379,36 @@ public sealed class StepModelPreviewControl : UserControl
 
     async function getOcctModule() {
       if (!occtModulePromise) {
-        occtModulePromise = occtimportjs();
+        occtModulePromise = occtimportjs({
+          locateFile(path) {
+            return `https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/${path}`;
+          }
+        });
       }
 
       return occtModulePromise;
+    }
+
+    function decodeStepText(bytes) {
+      try {
+        const decoded = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+        return decoded || '';
+      } catch {
+        return '';
+      }
+    }
+
+    function validateStepContent(bytes) {
+      const sample = decodeStepText(bytes.subarray(0, Math.min(bytes.length, 8192))).toUpperCase();
+      if (!sample.includes('ISO-10303-21') && !sample.includes('ISO10303-21')) {
+        return result(false, 'validate-content', 'invalid-step-header');
+      }
+
+      if (!sample.includes('HEADER;') || !sample.includes('DATA;')) {
+        return result(false, 'validate-content', 'invalid-step-body');
+      }
+
+      return result(true, 'validate-content', '');
     }
 
     function fitCameraToObject(object3D) {
@@ -380,6 +428,7 @@ public sealed class StepModelPreviewControl : UserControl
 
     function buildMeshGroup(resultData) {
       const group = new THREE.Group();
+      let triangleCount = 0;
 
       for (const meshData of resultData.meshes || []) {
         const attrs = meshData.attributes || {};
@@ -399,6 +448,9 @@ public sealed class StepModelPreviewControl : UserControl
 
         if (meshData.index && meshData.index.array && meshData.index.array.length > 0) {
           geometry.setIndex(meshData.index.array);
+          triangleCount += Math.floor(meshData.index.array.length / 3);
+        } else {
+          triangleCount += Math.floor(positions.length / 9);
         }
 
         const color = (meshData.color && meshData.color.length >= 3)
@@ -416,7 +468,27 @@ public sealed class StepModelPreviewControl : UserControl
         group.add(mesh);
       }
 
-      return group;
+      return { group, triangleCount };
+    }
+
+    function parseWithOcct(occt, bytes) {
+      const binaryParsed = occt.ReadStepFile(bytes, null);
+      if (binaryParsed && binaryParsed.meshes && binaryParsed.meshes.length > 0) {
+        return { parsed: binaryParsed, parser: 'occt-binary' };
+      }
+
+      const asText = decodeStepText(bytes);
+      if (!asText) {
+        throw new Error('parse-binary-failed');
+      }
+
+      const textBytes = new TextEncoder().encode(asText);
+      const textParsed = occt.ReadStepFile(textBytes, null);
+      if (textParsed && textParsed.meshes && textParsed.meshes.length > 0) {
+        return { parsed: textParsed, parser: 'occt-text' };
+      }
+
+      throw new Error('parse-text-failed');
     }
 
     async function renderStepFromBase64(base64, metadata) {
@@ -432,23 +504,44 @@ public sealed class StepModelPreviewControl : UserControl
           return result(false, 'validate-format', 'unsupported-format');
         }
 
-        const occt = await getOcctModule();
         const bytes = base64ToUint8Array(base64);
-        const parsed = occt.ReadStepFile(bytes, null);
-        const group = buildMeshGroup(parsed || {});
-        if (group.children.length === 0) {
+        const validation = validateStepContent(bytes);
+        if (!validation.ok) {
+          clearScene();
+          return validation;
+        }
+
+        let occt;
+        try {
+          occt = await getOcctModule();
+        } catch {
+          clearScene();
+          return result(false, 'load-parser', 'module-load-failed');
+        }
+
+        const parsedResult = parseWithOcct(occt, bytes);
+        const meshData = buildMeshGroup(parsedResult.parsed || {});
+        if (meshData.group.children.length === 0) {
           clearScene();
           return result(false, 'load-geometry', 'empty-geometry');
         }
 
         clearScene();
-        activeMeshRoot = group;
+        activeMeshRoot = meshData.group;
         scene.add(activeMeshRoot);
         fitCameraToObject(activeMeshRoot);
-        return result(true, 'display-model', '');
-      } catch {
+        return {
+          ok: true,
+          stage: 'display-model',
+          error: '',
+          meshCount: meshData.group.children.length,
+          triangleCount: meshData.triangleCount,
+          parser: parsedResult.parser
+        };
+      } catch (err) {
         clearScene();
-        return result(false, 'parse-step', 'corrupted-or-invalid-step');
+        const parseError = (err && err.message) ? err.message : 'corrupted-or-invalid-step';
+        return result(false, 'parse-step', parseError);
       }
     }
 
