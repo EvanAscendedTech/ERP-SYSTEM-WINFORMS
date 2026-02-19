@@ -20,10 +20,9 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private readonly Label _customerHubLabel = new() { Dock = DockStyle.Top, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold), Padding = new Padding(8, 0, 0, 0) };
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly DataGridView _completedQuotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
-    private readonly DataGridView _expiredQuotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
     private readonly Panel _completedQuoteDetailsHost = new() { Dock = DockStyle.Bottom, Height = 0, Visible = false, Padding = new Padding(0, 8, 0, 0) };
     private readonly Label _completedQuoteDetailsTitle = new() { Dock = DockStyle.Top, Height = 28, TextAlign = ContentAlignment.MiddleLeft, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold), Padding = new Padding(8, 0, 0, 0) };
-    private readonly Panel _completedQuoteDetailsViewport = new() { Dock = DockStyle.Fill, BackColor = Color.FromArgb(248, 251, 255), Padding = new Padding(8) };
+    private readonly Panel _completedQuoteDetailsViewport = new() { Dock = DockStyle.Fill, BackColor = Color.FromArgb(248, 251, 255), Padding = new Padding(8), AutoScroll = true };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
     private readonly Button _markWonButton;
     private readonly Button _passToPurchasingButton;
@@ -43,7 +42,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
         ConfigureQuotesGrid(_quotesGrid, includeLifecycleColumn: true);
         ConfigureCompletedQuotesGrid(_completedQuotesGrid);
-        ConfigureQuotesGrid(_expiredQuotesGrid, includeLifecycleColumn: false);
 
         var actionsPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
         var refreshButton = new Button { Text = "Refresh Active Quotes", AutoSize = true };
@@ -85,7 +83,9 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         {
             Dock = DockStyle.Fill,
             Orientation = Orientation.Horizontal,
-            FixedPanel = FixedPanel.None
+            FixedPanel = FixedPanel.None,
+            IsSplitterFixed = true,
+            SplitterWidth = 2
         };
 
         var inProgressPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 0, 6) };
@@ -134,31 +134,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         });
         topContent.Controls.Add(actionsPanel);
 
-        var archivePanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 0, 0) };
-        archivePanel.Controls.Add(_expiredQuotesGrid);
-        archivePanel.Controls.Add(new Label
-        {
-            Dock = DockStyle.Top,
-            Height = 24,
-            Text = "Expired Quotes Archive (60+ days)",
-            Font = new Font(Font, FontStyle.Bold)
-        });
-
-        var split = new SplitContainer
-        {
-            Dock = DockStyle.Fill,
-            Orientation = Orientation.Horizontal,
-            FixedPanel = FixedPanel.Panel2
-        };
-        split.Resize += (_, _) =>
-        {
-            ApplySafePanelMinSizes(split, desiredPanel1MinSize: 300, desiredPanel2MinSize: 140);
-            SetSafeSplitterDistance(split, 560);
-        };
-        split.Panel1.Controls.Add(topContent);
-        split.Panel2.Controls.Add(archivePanel);
-
-        Controls.Add(split);
+        Controls.Add(topContent);
         Controls.Add(bottomRightPanel);
         Controls.Add(_feedback);
 
@@ -327,15 +303,9 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
             var allQuotes = await _quoteRepository.GetQuotesAsync();
             _activeQuotesCache = allQuotes.Where(q => q.Status != QuoteStatus.Expired && !q.PassedToPurchasingUtc.HasValue).ToList();
-            var expiredQuotes = allQuotes.Where(q => q.Status == QuoteStatus.Expired)
-                .OrderByDescending(q => q.ExpiredUtc ?? q.LastUpdatedUtc)
-                .Select(CreateQuoteRow)
-                .ToList();
-
             RefreshActiveQuotesView();
-            _expiredQuotesGrid.DataSource = expiredQuotes;
             RefreshActionStateForSelection();
-            _feedback.Text = $"Loaded {_activeQuotesCache.Count} quotes and {expiredQuotes.Count} archived quotes.";
+            _feedback.Text = $"Loaded {_activeQuotesCache.Count} active quotes.";
         }
         catch (Exception ex)
         {
@@ -1110,11 +1080,6 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         if (_quotesGrid.CurrentRow?.DataBoundItem is QuoteGridRow { IsCustomerHeader: false, QuoteId: int id })
         {
             return id;
-        }
-
-        if (_expiredQuotesGrid.CurrentRow?.DataBoundItem is QuoteGridRow { IsCustomerHeader: false, QuoteId: int expiredId })
-        {
-            return expiredId;
         }
 
         return null;
