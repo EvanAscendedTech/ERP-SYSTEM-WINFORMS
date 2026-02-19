@@ -875,7 +875,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             };
         }
 
-        var viewer = new StepModelPreviewControl
+        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog)
         {
             Dock = DockStyle.Fill,
             Margin = new Padding(4)

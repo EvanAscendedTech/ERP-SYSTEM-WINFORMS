@@ -10,7 +10,9 @@ public sealed record StepParsingDiagnosticEntry(
     long FileSizeBytes,
     bool IsSuccess,
     string ErrorCode,
+    string FailureCategory,
     string Message,
+    string DiagnosticDetails,
     string StackTrace,
     string Source);
 
@@ -36,7 +38,9 @@ public sealed class StepParsingDiagnosticsLog
         long fileSizeBytes,
         bool isSuccess,
         string? errorCode,
+        string? failureCategory,
         string? message,
+        string? diagnosticDetails,
         string? stackTrace,
         string? source)
     {
@@ -47,7 +51,9 @@ public sealed class StepParsingDiagnosticsLog
             FileSizeBytes: Math.Max(0, fileSizeBytes),
             IsSuccess: isSuccess,
             ErrorCode: errorCode ?? string.Empty,
+            FailureCategory: failureCategory ?? string.Empty,
             Message: message ?? string.Empty,
+            DiagnosticDetails: diagnosticDetails ?? string.Empty,
             StackTrace: stackTrace ?? string.Empty,
             Source: string.IsNullOrWhiteSpace(source) ? "step-parse" : source);
 

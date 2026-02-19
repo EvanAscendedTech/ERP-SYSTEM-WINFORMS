@@ -6,6 +6,17 @@ namespace ERPSystem.WinForms.Services;
 public sealed class StepFileParser
 {
     private static readonly Regex EntityRegex = new(@"^\s*#\d+\s*=\s*([A-Z0-9_]+)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex SchemaRegex = new(@"FILE_SCHEMA\s*\(\s*\(\s*'([^']+)'", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly HashSet<string> SupportedSchemaFragments =
+    [
+        "AUTOMOTIVE_DESIGN",
+        "CONFIG_CONTROL_DESIGN",
+        "AP203",
+        "AP214",
+        "AP242",
+        "MANAGED_MODEL_BASED_3D_ENGINEERING"
+    ];
 
     private static readonly HashSet<string> SurfaceEntities =
     [
@@ -45,19 +56,19 @@ public sealed class StepFileParser
     {
         if (fileBytes is null || fileBytes.Length == 0)
         {
-            return StepParseReport.Fail("missing-file-data", "No STEP payload bytes were supplied.");
+            return StepParseReport.Fail("missing-file-data", "file", "No STEP payload bytes were supplied.");
         }
 
         var text = DecodePayload(fileBytes);
         if (string.IsNullOrWhiteSpace(text))
         {
-            return StepParseReport.Fail("parse-text-failed", "Unable to decode STEP payload as text.");
+            return StepParseReport.Fail("parse-text-failed", "encoding", "Unable to decode STEP payload as text.");
         }
 
         var normalized = text.ToUpperInvariant();
         if (!normalized.Contains("ISO-10303-21") && !normalized.Contains("ISO10303-21"))
         {
-            return StepParseReport.Fail("invalid-step-header", "ISO-10303-21 header marker was not found.");
+            return StepParseReport.Fail("invalid-step-header", "header", "ISO-10303-21 header marker was not found.");
         }
 
         var headerIndex = normalized.IndexOf("HEADER;", StringComparison.Ordinal);
@@ -65,14 +76,25 @@ public sealed class StepFileParser
         var endSecIndex = normalized.LastIndexOf("ENDSEC;", StringComparison.Ordinal);
         if (headerIndex < 0 || dataIndex < 0 || endSecIndex < 0 || dataIndex <= headerIndex)
         {
-            return StepParseReport.Fail("invalid-step-body", "Required HEADER/DATA sections were not found in expected order.");
+            return StepParseReport.Fail("invalid-step-body", "section-order", "Required HEADER/DATA sections were not found in expected order.");
+        }
+
+        var schemaName = ExtractSchemaName(normalized);
+        if (!string.IsNullOrWhiteSpace(schemaName) && !IsSupportedSchema(schemaName))
+        {
+            return StepParseReport.Fail(
+                "unsupported-step-version",
+                "version",
+                $"STEP schema '{schemaName}' is not supported by the preview pipeline.",
+                schemaName: schemaName,
+                diagnosticDetails: $"Detected FILE_SCHEMA value '{schemaName}'. Supported schemas include AP203/AP214/AP242 and related automotive_design variants.");
         }
 
         var dataSection = normalized[dataIndex..];
         var entities = ParseEntities(dataSection);
         if (entities.Count == 0)
         {
-            return StepParseReport.Fail("invalid-step-body", "DATA section does not contain parseable STEP entities.");
+            return StepParseReport.Fail("invalid-step-body", "missing-entities", "DATA section does not contain parseable STEP entities.");
         }
 
         var distinctTypes = entities
@@ -89,14 +111,21 @@ public sealed class StepFileParser
 
         if (surfaceCount == 0 && solidCount == 0)
         {
-            return StepParseReport.Fail("unsupported-step-entities", "STEP file contains entities, but no supported surface or solid geometry entities.");
+            var topEntities = string.Join(", ", distinctTypes.OrderByDescending(x => x.Value).Take(5).Select(x => $"{x.Key}:{x.Value}"));
+            return StepParseReport.Fail(
+                "unsupported-step-entities",
+                "geometry",
+                "STEP file contains entities, but no supported surface or solid geometry entities.",
+                schemaName,
+                $"Top entity types: {topEntities}");
         }
 
         return StepParseReport.Success(
             entityCount: entities.Count,
             distinctEntityTypes: distinctTypes,
             surfaceEntityCount: surfaceCount,
-            solidEntityCount: solidCount);
+            solidEntityCount: solidCount,
+            schemaName: schemaName);
     }
 
     private static List<string> ParseEntities(string dataSection)
@@ -105,9 +134,45 @@ public sealed class StepFileParser
         var lines = dataSection.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         var statement = new StringBuilder();
-        foreach (var line in lines)
+        var inBlockComment = false;
+        foreach (var rawLine in lines)
         {
-            if (line.StartsWith("/*", StringComparison.Ordinal) || line.StartsWith("//", StringComparison.Ordinal))
+            var line = rawLine;
+
+            if (inBlockComment)
+            {
+                var endComment = line.IndexOf("*/", StringComparison.Ordinal);
+                if (endComment < 0)
+                {
+                    continue;
+                }
+
+                line = line[(endComment + 2)..];
+                inBlockComment = false;
+            }
+
+            var startComment = line.IndexOf("/*", StringComparison.Ordinal);
+            if (startComment >= 0)
+            {
+                var endComment = line.IndexOf("*/", startComment + 2, StringComparison.Ordinal);
+                if (endComment >= 0)
+                {
+                    line = line.Remove(startComment, endComment - startComment + 2);
+                }
+                else
+                {
+                    line = line[..startComment];
+                    inBlockComment = true;
+                }
+            }
+
+            var inlineComment = line.IndexOf("//", StringComparison.Ordinal);
+            if (inlineComment >= 0)
+            {
+                line = line[..inlineComment];
+            }
+
+            if (string.IsNullOrWhiteSpace(line))
             {
                 continue;
             }
@@ -135,6 +200,17 @@ public sealed class StepFileParser
         return entities;
     }
 
+    private static string ExtractSchemaName(string normalizedText)
+    {
+        var match = SchemaRegex.Match(normalizedText);
+        return match.Success ? match.Groups[1].Value.Trim() : string.Empty;
+    }
+
+    private static bool IsSupportedSchema(string schemaName)
+    {
+        return SupportedSchemaFragments.Any(fragment => schemaName.Contains(fragment, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static string DecodePayload(byte[] fileBytes)
     {
         try
@@ -143,7 +219,7 @@ public sealed class StepFileParser
         }
         catch
         {
-            return string.Empty;
+            return Encoding.Latin1.GetString(fileBytes);
         }
     }
 }
@@ -151,7 +227,10 @@ public sealed class StepFileParser
 public sealed record StepParseReport(
     bool IsSuccess,
     string ErrorCode,
+    string FailureCategory,
     string Message,
+    string DiagnosticDetails,
+    string SchemaName,
     int EntityCount,
     IReadOnlyDictionary<string, int> DistinctEntityTypes,
     int SurfaceEntityCount,
@@ -160,21 +239,25 @@ public sealed record StepParseReport(
     public bool HasSurfaces => SurfaceEntityCount > 0;
     public bool HasSolids => SolidEntityCount > 0;
 
-    public static StepParseReport Fail(string errorCode, string message)
+    public static StepParseReport Fail(string errorCode, string failureCategory, string message, string? schemaName = null, string? diagnosticDetails = null)
     {
-        return new StepParseReport(false, errorCode, message, 0, new Dictionary<string, int>(), 0, 0);
+        return new StepParseReport(false, errorCode, failureCategory, message, diagnosticDetails ?? string.Empty, schemaName ?? string.Empty, 0, new Dictionary<string, int>(), 0, 0);
     }
 
     public static StepParseReport Success(
         int entityCount,
         IReadOnlyDictionary<string, int> distinctEntityTypes,
         int surfaceEntityCount,
-        int solidEntityCount)
+        int solidEntityCount,
+        string schemaName)
     {
         return new StepParseReport(
             true,
             string.Empty,
+            string.Empty,
             "STEP structure validated.",
+            string.Empty,
+            schemaName,
             entityCount,
             distinctEntityTypes,
             surfaceEntityCount,

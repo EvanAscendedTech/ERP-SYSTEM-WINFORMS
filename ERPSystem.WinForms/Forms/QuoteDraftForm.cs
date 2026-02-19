@@ -551,7 +551,7 @@ public class QuoteDraftForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52f));
 
         var viewerPanel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 8, 0) };
-        var viewer = new StepModelPreviewControl { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
+        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog) { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
         var expandButton = BuildCompactIconButton("⛶ Expand", Color.FromArgb(71, 85, 105));
         expandButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         expandButton.Location = new Point(Math.Max(4, viewerPanel.Width - 96), 4);
@@ -711,7 +711,7 @@ public class QuoteDraftForm : Form
             StartPosition = FormStartPosition.CenterParent,
             WindowState = FormWindowState.Maximized
         };
-        var viewer = new StepModelPreviewControl { Dock = DockStyle.Fill };
+        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog) { Dock = DockStyle.Fill };
         viewerForm.FormClosed += (_, _) => viewer.ClearPreview();
 
         viewer.LoadStep(stepData, stepAttachment.FileName, stepAttachment.StorageRelativePath);
@@ -866,7 +866,9 @@ public class QuoteDraftForm : Form
                     fileSizeBytes,
                     isSuccess: false,
                     errorCode: "missing-file-data",
+                    failureCategory: "file",
                     message: "No readable payload bytes found for the selected STEP upload.",
+                    diagnosticDetails: $"fileSize={fileSizeBytes}",
                     stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
                     source: "quote-upload");
                 return false;
@@ -891,7 +893,9 @@ public class QuoteDraftForm : Form
                     fileSizeBytes,
                     isSuccess: false,
                     errorCode: "unsupported-format",
+                    failureCategory: "format",
                     message: "The selected model extension/signature is not recognized as a supported solid format.",
+                    diagnosticDetails: $"detection={detection.FileType}, ext={detection.NormalizedExtension}, source={detection.DetectionSource}",
                     stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
                     source: "quote-upload");
                 return false;
@@ -911,7 +915,9 @@ public class QuoteDraftForm : Form
                     fileSizeBytes,
                     isSuccess: false,
                     errorCode: report.ErrorCode,
+                    failureCategory: report.FailureCategory,
                     message: BuildParseFailureMessage(fileName, filePath, report.ErrorCode, report.Message, "quote-upload"),
+                    diagnosticDetails: BuildParseDiagnosticDetails(report),
                     stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
                     source: "quote-upload");
             }
@@ -926,7 +932,9 @@ public class QuoteDraftForm : Form
                 fileSizeBytes,
                 isSuccess: false,
                 errorCode: "step-parse-exception",
+                failureCategory: "exception",
                 message: ex.Message,
+                diagnosticDetails: ex.GetType().FullName,
                 stackTrace: StepParsingDiagnosticsLog.BuildStackTrace(ex),
                 source: "quote-upload");
             return false;
@@ -952,7 +960,9 @@ public class QuoteDraftForm : Form
                 attachment.FileSizeBytes,
                 isSuccess: false,
                 errorCode: "missing-blob-data",
+                failureCategory: "blob",
                 message: BuildParseFailureMessage(attachment.FileName, attachment.StorageRelativePath, "missing-blob-data", "Uploaded STEP blob content could not be loaded from the database.", "blob-parse-validation"),
+                diagnosticDetails: $"attachmentId={attachment.Id}",
                 stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
                 source: "blob-parse-validation");
             return;
@@ -967,11 +977,22 @@ public class QuoteDraftForm : Form
                 storedData.LongLength,
                 isSuccess: false,
                 errorCode: report.ErrorCode,
+                failureCategory: report.FailureCategory,
                 message: BuildParseFailureMessage(attachment.FileName, attachment.StorageRelativePath, report.ErrorCode, report.Message, "blob-parse-validation"),
+                diagnosticDetails: BuildParseDiagnosticDetails(report),
                 stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
                 source: "blob-parse-validation");
             return;
         }
+    }
+
+    private static string BuildParseDiagnosticDetails(StepParseReport report)
+    {
+        var schema = string.IsNullOrWhiteSpace(report.SchemaName) ? "unknown" : report.SchemaName;
+        var topEntities = report.DistinctEntityTypes.Count == 0
+            ? "none"
+            : string.Join(", ", report.DistinctEntityTypes.OrderByDescending(x => x.Value).Take(6).Select(x => $"{x.Key}:{x.Value}"));
+        return $"category={report.FailureCategory}; schema={schema}; entities={report.EntityCount}; surfaces={report.SurfaceEntityCount}; solids={report.SolidEntityCount}; details={report.DiagnosticDetails}; top={topEntities}";
     }
 
     private string BuildParseFailureMessage(string fileName, string filePath, string errorCode, string reason, string source)
