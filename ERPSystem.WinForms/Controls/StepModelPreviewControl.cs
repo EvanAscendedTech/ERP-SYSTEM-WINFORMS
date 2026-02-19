@@ -11,18 +11,20 @@ public sealed class StepModelPreviewControl : UserControl
     private readonly WebView2 _webView;
     private readonly Label _statusLabel;
     private readonly SemaphoreSlim _loadGate = new(1, 1);
-    private readonly IStepToGlbConverter? _stepToGlbConverter;
+    private readonly IStepPreviewService? _stepPreviewService;
     private readonly StepParsingDiagnosticsLog? _diagnosticsLog;
     private CancellationTokenSource? _loadCts;
     private int _renderVersion;
     private bool _initialized;
+    private TaskCompletionSource<string>? _viewerMessageTcs;
     private const string ViewerAssetRelativePath = "Assets/step-viewer.html";
     private const string ViewerAssetUri = "https://step-viewer.local/step-viewer.html";
+    private const int MaxRenderRetries = 2;
 
-    public StepModelPreviewControl(StepParsingDiagnosticsLog? diagnosticsLog = null, IStepToGlbConverter? stepToGlbConverter = null)
+    public StepModelPreviewControl(StepParsingDiagnosticsLog? diagnosticsLog = null, IStepPreviewService? stepPreviewService = null)
     {
         _diagnosticsLog = diagnosticsLog;
-        _stepToGlbConverter = stepToGlbConverter;
+        _stepPreviewService = stepPreviewService;
         BackColor = Color.FromArgb(248, 250, 252);
 
         _webView = new WebView2
@@ -52,7 +54,7 @@ public sealed class StepModelPreviewControl : UserControl
         var old = Interlocked.Exchange(ref _loadCts, cts);
         old?.Cancel();
         old?.Dispose();
-        _ = LoadInternalAsync(bytes, fileName ?? string.Empty, sourcePath ?? string.Empty, 0, version, cts.Token);
+        _ = LoadInternalAsync(bytes, fileName ?? string.Empty, sourcePath ?? string.Empty, version, cts.Token);
     }
 
     public async Task LoadStepAttachmentAsync(QuoteBlobAttachment? attachment, Func<int, Task<byte[]>>? blobResolver = null)
@@ -74,7 +76,7 @@ public sealed class StepModelPreviewControl : UserControl
         var old = Interlocked.Exchange(ref _loadCts, cts);
         old?.Cancel();
         old?.Dispose();
-        _ = LoadInternalAsync(data, attachment.FileName, attachment.StorageRelativePath, attachment.LineItemId, version, cts.Token);
+        _ = LoadInternalAsync(data, attachment.FileName, attachment.StorageRelativePath, version, cts.Token);
     }
 
     public void ClearPreview()
@@ -88,38 +90,50 @@ public sealed class StepModelPreviewControl : UserControl
     }
 
     public Task<bool> RunDeveloperDiagnosticsProbeAsync() => Task.FromResult(true);
-    public Task<bool> RunStepSelfTestAsync() => Task.FromResult(true);
 
-    private async Task LoadInternalAsync(byte[] stepBytes, string fileName, string sourcePath, int lineItemId, int version, CancellationToken cancellationToken)
+    public async Task<bool> RunStepSelfTestAsync()
+    {
+        try
+        {
+            var samplePath = Path.Combine(AppContext.BaseDirectory, "Assets", "Samples", "known-good.step");
+            if (!File.Exists(samplePath))
+            {
+                return false;
+            }
+
+            var bytes = await File.ReadAllBytesAsync(samplePath);
+            LoadStep(bytes, "known-good.step", samplePath);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task LoadInternalAsync(byte[] stepBytes, string fileName, string sourcePath, int version, CancellationToken cancellationToken)
     {
         await _loadGate.WaitAsync(cancellationToken);
         try
         {
             RecordDiagnostics(true, "", "step-validate", "STEP_PREVIEW", "Validation started.", stepBytes.LongLength, fileName, sourcePath, "begin");
 
-            if (stepBytes.Length < 32)
+            if (_stepPreviewService is null)
             {
-                const string message = "STEP model bytes are missing or too small.";
+                const string message = "STEP preview service unavailable.";
                 ShowError(message);
-                RecordDiagnostics(false, "STEP_INVALID_BYTES", "step-validate", "STEP_PREVIEW", message, stepBytes.LongLength, fileName, sourcePath, "bytes-too-small");
-                return;
-            }
-
-            if (_stepToGlbConverter is null)
-            {
-                const string message = "STEP converter service unavailable.";
-                ShowError(message);
-                RecordDiagnostics(false, "STEP_CONVERT_FAILED", "step-convert", "STEP_PREVIEW", message, stepBytes.LongLength, fileName, sourcePath, "converter-null");
+                RecordDiagnostics(false, "STEP_SERVICE_MISSING", "step-convert", "STEP_PREVIEW", message, stepBytes.LongLength, fileName, sourcePath, "service-null");
                 return;
             }
 
             _statusLabel.Text = "Converting STEP to GLB...";
-            var conversion = await _stepToGlbConverter.ConvertAsync(stepBytes, new StepToGlbRequest(lineItemId, fileName, sourcePath), cancellationToken);
+            var conversion = await _stepPreviewService.GetOrCreateGlbDetailedAsync(stepBytes, fileName, cancellationToken);
+            RecordDiagnostics(conversion.Success, conversion.ErrorCode, "step-convert", "STEP_PREVIEW", conversion.Message, stepBytes.LongLength, fileName, sourcePath,
+                $"hash={conversion.StepHash};cacheHit={conversion.CacheHit};validation={conversion.ValidationDetails};exitCode={conversion.ExitCode};stdout={conversion.StdOut};stderr={conversion.StdErr}");
+
             if (!conversion.Success)
             {
                 ShowError("STEP conversion failed. See diagnostics for details.");
-                RecordDiagnostics(false, "STEP_CONVERT_FAILED", "step-convert", "STEP_PREVIEW", conversion.Message, stepBytes.LongLength, fileName, sourcePath,
-                    $"exitCode={conversion.ExitCode}; stdout={conversion.StdOut}; stderr={conversion.StdErr}; hash={conversion.StepHash}");
                 return;
             }
 
@@ -129,25 +143,25 @@ public sealed class StepModelPreviewControl : UserControl
             }
 
             await EnsureInitializedAsync(cancellationToken);
-            var payload = JsonSerializer.Serialize(Convert.ToBase64String(conversion.GlbBytes));
-            var result = await _webView.CoreWebView2!.ExecuteScriptAsync($"window.renderGlbBase64({payload});");
-            var ok = IsScriptBooleanTrue(result);
-            if (!ok)
+            _statusLabel.Text = "Rendering GLB...";
+
+            var renderResult = await RenderGlbAsync(conversion.GlbBytes, cancellationToken);
+            if (!renderResult.ok)
             {
-                ShowError("GLB render failed.");
-                RecordDiagnostics(false, "STEP_RENDER_FAILED", "glb-render", "STEP_PREVIEW", "GLB render returned false.", conversion.GlbBytes.LongLength, fileName, sourcePath,
-                    $"cacheHit={conversion.CacheHit}; hash={conversion.StepHash}");
+                ShowError("GLB render failed. See diagnostics for details.");
+                RecordDiagnostics(false, "STEP_RENDER_FAILED", "glb-render", "STEP_PREVIEW", renderResult.error ?? "GLB render failed.", conversion.GlbBytes.LongLength, fileName, sourcePath,
+                    $"hash={conversion.StepHash};meshes={renderResult.meshes};triangles={renderResult.triangles};stack={renderResult.stack}");
                 return;
             }
 
             _statusLabel.Visible = false;
             _webView.Visible = true;
             RecordDiagnostics(true, "", "glb-render", "STEP_PREVIEW", "GLB rendered.", conversion.GlbBytes.LongLength, fileName, sourcePath,
-                $"cacheHit={conversion.CacheHit}; hash={conversion.StepHash}");
+                $"hash={conversion.StepHash};meshes={renderResult.meshes};triangles={renderResult.triangles}");
         }
         catch (OperationCanceledException)
         {
-            RecordDiagnostics(false, "STEP_LOAD_CANCELLED", "step-convert", "STEP_PREVIEW", "STEP preview cancelled.", stepBytes.LongLength, fileName, sourcePath, "cancelled");
+            RecordDiagnostics(false, "STEP_LOAD_CANCELLED", "glb-render", "STEP_PREVIEW", "STEP preview cancelled.", stepBytes.LongLength, fileName, sourcePath, "cancelled");
         }
         catch (Exception ex)
         {
@@ -169,7 +183,9 @@ public sealed class StepModelPreviewControl : UserControl
 
         await _webView.EnsureCoreWebView2Async();
         var viewerPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ViewerAssetRelativePath));
-        _webView.CoreWebView2!.SetVirtualHostNameToFolderMapping("step-viewer.local", Path.GetDirectoryName(viewerPath)!, CoreWebView2HostResourceAccessKind.Allow);
+        _webView.CoreWebView2!.WebMessageReceived -= CoreWebView2OnWebMessageReceived;
+        _webView.CoreWebView2.WebMessageReceived += CoreWebView2OnWebMessageReceived;
+        _webView.CoreWebView2.SetVirtualHostNameToFolderMapping("step-viewer.local", Path.GetDirectoryName(viewerPath)!, CoreWebView2HostResourceAccessKind.Allow);
         _webView.CoreWebView2.Navigate(ViewerAssetUri);
         _initialized = true;
 
@@ -187,6 +203,63 @@ public sealed class StepModelPreviewControl : UserControl
         }
 
         throw new TimeoutException("GLB viewer failed to initialize.");
+    }
+
+    private async Task<(bool ok, int meshes, int triangles, string? error, string? stack)> RenderGlbAsync(byte[] glbBytes, CancellationToken cancellationToken)
+    {
+        Exception? lastException = null;
+        for (var attempt = 0; attempt <= MaxRenderRetries; attempt++)
+        {
+            try
+            {
+                _viewerMessageTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var b64 = Convert.ToBase64String(glbBytes);
+                var payload = JsonSerializer.Serialize(b64);
+                _ = await _webView.CoreWebView2!.ExecuteScriptAsync($"window.gltfViewer.loadGlbBase64({payload});");
+
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(8));
+                using var registration = timeoutCts.Token.Register(() => _viewerMessageTcs.TrySetCanceled(timeoutCts.Token));
+                var raw = await _viewerMessageTcs.Task;
+                var result = JsonSerializer.Deserialize<GltfViewerResult>(raw) ?? new GltfViewerResult();
+                if (result.ok)
+                {
+                    return (true, result.meshes, result.triangles, null, null);
+                }
+
+                lastException = new InvalidOperationException(result.error ?? "Viewer returned failure.");
+            }
+            catch (Exception ex)
+            {
+                lastException = ex;
+            }
+        }
+
+        return (false, 0, 0, lastException?.Message, lastException?.ToString());
+    }
+
+    private void CoreWebView2OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            var text = e.TryGetWebMessageAsString();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+
+            if (text.StartsWith("{", StringComparison.Ordinal))
+            {
+                _viewerMessageTcs?.TrySetResult(text);
+                return;
+            }
+
+            RecordDiagnostics(true, "", "glb-render", "STEP_PREVIEW", "Viewer message", 0, string.Empty, string.Empty, text);
+        }
+        catch
+        {
+            // ignore
+        }
     }
 
     private static bool IsScriptBooleanTrue(string? raw)
@@ -220,5 +293,14 @@ public sealed class StepModelPreviewControl : UserControl
             diagnosticDetails: details,
             stackTrace: isSuccess ? string.Empty : StepParsingDiagnosticsLog.BuildCallSiteTrace(),
             source: "step-preview");
+    }
+
+    private sealed class GltfViewerResult
+    {
+        public bool ok { get; set; }
+        public int meshes { get; set; }
+        public int triangles { get; set; }
+        public string? error { get; set; }
+        public string? stack { get; set; }
     }
 }

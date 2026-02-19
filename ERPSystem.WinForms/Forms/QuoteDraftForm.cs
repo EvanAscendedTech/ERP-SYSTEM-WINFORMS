@@ -551,7 +551,7 @@ public class QuoteDraftForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52f));
 
         var viewerPanel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 8, 0) };
-        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, new StepToGlbConverter(_quoteRepository)) { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
+        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, new StepPreviewService(_quoteRepository)) { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
         var expandButton = BuildCompactIconButton("⛶ Expand", Color.FromArgb(71, 85, 105));
         expandButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         expandButton.Location = new Point(Math.Max(4, viewerPanel.Width - 96), 4);
@@ -698,7 +698,7 @@ public class QuoteDraftForm : Form
             StartPosition = FormStartPosition.CenterParent,
             WindowState = FormWindowState.Maximized
         };
-        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, new StepToGlbConverter(_quoteRepository)) { Dock = DockStyle.Fill };
+        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, new StepPreviewService(_quoteRepository)) { Dock = DockStyle.Fill };
         viewerForm.FormClosed += (_, _) => viewer.ClearPreview();
 
         stepAttachment.BlobData = stepData;

@@ -258,6 +258,15 @@ public class QuoteRepository
                 LastAccessedUtc TEXT NOT NULL,
                 UNIQUE(LineItemId, StepSha256),
                 FOREIGN KEY(LineItemId) REFERENCES QuoteLineItems(Id) ON UPDATE CASCADE ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS StepGlbCacheByHash (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                StepSha256 TEXT NOT NULL UNIQUE,
+                SourceFileName TEXT NOT NULL DEFAULT '',
+                GlbData BLOB NOT NULL,
+                CreatedUtc TEXT NOT NULL,
+                LastAccessedUtc TEXT NOT NULL
             );";
 
         await using var command = connection.CreateCommand();
@@ -1743,6 +1752,71 @@ public class QuoteRepository
         return (byte[])result;
     }
 
+    public async Task<byte[]?> TryGetGlbCacheByHashAsync(string stepSha256)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT GlbData
+            FROM StepGlbCacheByHash
+            WHERE StepSha256 = $stepSha256
+            ORDER BY Id DESC
+            LIMIT 1;";
+        command.Parameters.AddWithValue("$stepSha256", stepSha256);
+
+        var result = await command.ExecuteScalarAsync();
+        if (result is DBNull or null)
+        {
+            return null;
+        }
+
+        await using var touch = connection.CreateCommand();
+        touch.CommandText = @"
+            UPDATE StepGlbCacheByHash
+            SET LastAccessedUtc = $lastAccessedUtc
+            WHERE StepSha256 = $stepSha256;";
+        touch.Parameters.AddWithValue("$lastAccessedUtc", DateTime.UtcNow.ToString("O"));
+        touch.Parameters.AddWithValue("$stepSha256", stepSha256);
+        await touch.ExecuteNonQueryAsync();
+
+        return (byte[])result;
+    }
+
+    public async Task UpsertGlbCacheByHashAsync(string stepSha256, byte[] glbData, string sourceFileName)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        var now = DateTime.UtcNow.ToString("O");
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO StepGlbCacheByHash (
+                StepSha256,
+                SourceFileName,
+                GlbData,
+                CreatedUtc,
+                LastAccessedUtc)
+            VALUES (
+                $stepSha256,
+                $sourceFileName,
+                $glbData,
+                $createdUtc,
+                $lastAccessedUtc)
+            ON CONFLICT(StepSha256)
+            DO UPDATE SET
+                GlbData = excluded.GlbData,
+                SourceFileName = excluded.SourceFileName,
+                LastAccessedUtc = excluded.LastAccessedUtc;";
+        command.Parameters.AddWithValue("$stepSha256", stepSha256);
+        command.Parameters.AddWithValue("$sourceFileName", sourceFileName ?? string.Empty);
+        command.Parameters.AddWithValue("$glbData", glbData);
+        command.Parameters.AddWithValue("$createdUtc", now);
+        command.Parameters.AddWithValue("$lastAccessedUtc", now);
+        await command.ExecuteNonQueryAsync();
+    }
+
     public async Task UpsertGlbCacheAsync(int lineItemId, string stepSha256, byte[] glbData, string sourceFileName, string sourcePath)
     {
         await using var connection = new SqliteConnection(_connectionString);
@@ -1929,7 +2003,8 @@ public class QuoteRepository
             CREATE INDEX IF NOT EXISTS IX_Quotes_CustomerId ON Quotes(CustomerId);
             CREATE INDEX IF NOT EXISTS IX_QuoteLineItems_QuoteId ON QuoteLineItems(QuoteId);
             CREATE INDEX IF NOT EXISTS IX_QuoteBlobFiles_QuoteId_LineItemId ON QuoteBlobFiles(QuoteId, LineItemId);
-            CREATE INDEX IF NOT EXISTS IX_StepGlbCache_LineItemId_StepSha256 ON StepGlbCache(LineItemId, StepSha256);";
+            CREATE INDEX IF NOT EXISTS IX_StepGlbCache_LineItemId_StepSha256 ON StepGlbCache(LineItemId, StepSha256);
+            CREATE INDEX IF NOT EXISTS IX_StepGlbCacheByHash_StepSha256 ON StepGlbCacheByHash(StepSha256);";
         await command.ExecuteNonQueryAsync();
     }
 
