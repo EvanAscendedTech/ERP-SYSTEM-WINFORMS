@@ -58,7 +58,7 @@ public sealed class SolidModelFileTypeDetector
 
         if (extension == ".sldprt")
         {
-            return new(SolidModelFileType.SldPrt, extension, false, "extension");
+            return new(SolidModelFileType.SldPrt, extension, true, "extension");
         }
 
         if (extension is ".x_t" or ".x_b")

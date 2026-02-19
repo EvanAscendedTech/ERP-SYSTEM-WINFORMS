@@ -20,12 +20,12 @@ public class SolidModelFileTypeDetectorTests
     }
 
     [Fact]
-    public void Detect_SldPrtExtension_ReturnsKnownButNotRenderable()
+    public void Detect_SldPrtExtension_ReturnsKnownAndRenderable()
     {
         var result = _detector.Detect(Array.Empty<byte>(), "part.sldprt");
 
         Assert.Equal(SolidModelFileType.SldPrt, result.FileType);
-        Assert.False(result.IsSupportedForRendering);
+        Assert.True(result.IsSupportedForRendering);
     }
 
     [Fact]
