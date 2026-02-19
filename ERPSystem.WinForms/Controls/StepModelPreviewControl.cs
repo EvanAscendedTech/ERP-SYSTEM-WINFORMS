@@ -131,7 +131,7 @@ public sealed class StepModelPreviewControl : UserControl
     {
         try
         {
-            var parsed = JsonSerializer.Deserialize<StepRenderResult>(resultRaw);
+            var parsed = DeserializeStepRenderResult(resultRaw);
             if (parsed is null)
             {
                 return (false, "empty-result");
@@ -151,6 +151,26 @@ public sealed class StepModelPreviewControl : UserControl
 
             return (false, string.IsNullOrWhiteSpace(normalized) ? "parse-failed" : normalized);
         }
+    }
+
+    private static StepRenderResult? DeserializeStepRenderResult(string resultRaw)
+    {
+        if (string.IsNullOrWhiteSpace(resultRaw))
+        {
+            return null;
+        }
+
+        using var document = JsonDocument.Parse(resultRaw);
+        var root = document.RootElement;
+        if (root.ValueKind == JsonValueKind.String)
+        {
+            var innerJson = root.GetString();
+            return string.IsNullOrWhiteSpace(innerJson)
+                ? null
+                : JsonSerializer.Deserialize<StepRenderResult>(innerJson);
+        }
+
+        return JsonSerializer.Deserialize<StepRenderResult>(root.GetRawText());
     }
 
     private void ShowError(string message)
