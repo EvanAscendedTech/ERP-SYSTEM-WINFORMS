@@ -3,9 +3,6 @@ using ERPSystem.WinForms.Forms;
 using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
 using System.Drawing.Drawing2D;
-using System.Text;
-using Microsoft.Web.WebView2.Core;
-using Microsoft.Web.WebView2.WinForms;
 
 namespace ERPSystem.WinForms.Controls;
 
@@ -910,7 +907,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         return scrollHost;
     }
 
-    private static Control CreateLineItemPreviewCard(Quote quote, QuoteLineItem lineItem, int displayIndex)
+    private Control CreateLineItemPreviewCard(Quote quote, QuoteLineItem lineItem, int displayIndex)
     {
         var card = new TableLayoutPanel
         {
@@ -966,7 +963,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             Font = bold ? new Font(SystemFonts.DefaultFont, FontStyle.Bold) : SystemFonts.DefaultFont
         };
 
-    private static Control CreateModelCell(QuoteLineItem lineItem)
+    private Control CreateModelCell(QuoteLineItem lineItem)
     {
         var stepAttachment = FindLatestStepAttachment(lineItem);
 
@@ -981,23 +978,12 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             };
         }
 
-        if (stepAttachment.BlobData.Length == 0)
-        {
-            return new Label
-            {
-                Text = "STEP file is linked but has no preview data",
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleCenter,
-                ForeColor = Color.DimGray
-            };
-        }
-
-        var viewer = new StepModelViewerControl
+        var viewer = new StepModelPreviewControl
         {
             Dock = DockStyle.Fill,
             Margin = new Padding(4)
         };
-        viewer.LoadStep(stepAttachment.BlobData);
+        _ = viewer.LoadStepAttachmentAsync(stepAttachment, _quoteRepository.GetQuoteBlobContentAsync);
         return viewer;
     }
 
@@ -1154,359 +1140,5 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         QuoteSummary
     }
 
-    private sealed class StepModelViewerControl : UserControl
-    {
-        private readonly WebView2 _webView;
-        private readonly Label _statusLabel;
-        private byte[] _stepBytes = Array.Empty<byte>();
-        private bool _initialized;
-        private static readonly string HtmlShell = BuildHtmlShell();
-
-        public StepModelViewerControl()
-        {
-            BackColor = Color.FromArgb(248, 250, 252);
-
-            _webView = new WebView2
-            {
-                Dock = DockStyle.Fill,
-                Visible = false,
-                DefaultBackgroundColor = Color.FromArgb(248, 250, 252)
-            };
-
-            _statusLabel = new Label
-            {
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleCenter,
-                ForeColor = Color.DimGray,
-                Text = "Loading 3D viewer..."
-            };
-
-            var contextMenu = new ContextMenuStrip();
-            contextMenu.Items.Add("Enlarge", null, (_, _) => OpenEnlargedViewer());
-            ContextMenuStrip = contextMenu;
-
-            Controls.Add(_webView);
-            Controls.Add(_statusLabel);
-
-            Resize += (_, _) => _ = ResizeRendererAsync();
-        }
-
-        public void LoadStep(byte[] stepBytes)
-        {
-            _stepBytes = stepBytes;
-            _ = LoadStepInternalAsync();
-        }
-
-        private async Task LoadStepInternalAsync()
-        {
-            if (_stepBytes.Length == 0)
-            {
-                _statusLabel.Text = "STEP model unavailable";
-                _statusLabel.Visible = true;
-                _webView.Visible = false;
-                return;
-            }
-
-            _statusLabel.Text = "Loading 3D viewer...";
-            _statusLabel.Visible = true;
-
-            try
-            {
-                await EnsureInitializedAsync();
-                var base64 = Convert.ToBase64String(_stepBytes);
-                var payload = System.Text.Json.JsonSerializer.Serialize(base64);
-                var script = $"window.renderStepFromBase64({payload});";
-                var result = await _webView.CoreWebView2.ExecuteScriptAsync(script);
-                var rendered = string.Equals(result, "true", StringComparison.OrdinalIgnoreCase);
-                if (!rendered)
-                {
-                    _statusLabel.Text = "Unable to render STEP geometry";
-                    _statusLabel.Visible = true;
-                    _webView.Visible = false;
-                    return;
-                }
-
-                _webView.Visible = true;
-                _statusLabel.Visible = false;
-            }
-            catch
-            {
-                _statusLabel.Text = "WebView2 runtime unavailable for STEP preview";
-                _statusLabel.Visible = true;
-                _webView.Visible = false;
-            }
-        }
-
-        private async Task EnsureInitializedAsync()
-        {
-            if (_initialized)
-            {
-                return;
-            }
-
-            await _webView.EnsureCoreWebView2Async();
-            _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
-            _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
-            _webView.NavigateToString(HtmlShell);
-            _initialized = true;
-            await Task.Delay(200);
-        }
-
-        private async Task ResizeRendererAsync()
-        {
-            if (!_initialized || !_webView.Visible)
-            {
-                return;
-            }
-
-            await _webView.CoreWebView2.ExecuteScriptAsync("window.resizeRenderer?.();");
-        }
-
-        private void OpenEnlargedViewer()
-        {
-            if (_stepBytes.Length == 0)
-            {
-                return;
-            }
-
-            using var enlargedWindow = new Form
-            {
-                Text = "STEP Model Viewer",
-                Width = 1200,
-                Height = 840,
-                StartPosition = FormStartPosition.CenterParent,
-                MinimizeBox = false,
-                MaximizeBox = true
-            };
-
-            var closeButton = new Button
-            {
-                Text = "Close",
-                AutoSize = true,
-                Anchor = AnchorStyles.Right | AnchorStyles.Top
-            };
-            closeButton.Click += (_, _) => enlargedWindow.Close();
-
-            var topBar = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Top,
-                Height = 42,
-                FlowDirection = FlowDirection.RightToLeft,
-                Padding = new Padding(8, 8, 8, 0)
-            };
-            topBar.Controls.Add(closeButton);
-
-            var enlargedViewer = new StepModelViewerControl
-            {
-                Dock = DockStyle.Fill,
-                Margin = new Padding(8)
-            };
-            enlargedViewer.LoadStep(_stepBytes);
-
-            enlargedWindow.Controls.Add(enlargedViewer);
-            enlargedWindow.Controls.Add(topBar);
-
-            var owner = FindForm();
-            if (owner is null)
-            {
-                enlargedWindow.ShowDialog();
-                return;
-            }
-
-            enlargedWindow.ShowDialog(owner);
-        }
-
-        private static string BuildHtmlShell()
-        {
-            var html = """
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <style>
-    html, body, #viewport { margin:0; padding:0; width:100%; height:100%; background:#f8fafc; overflow:hidden; }
-  </style>
-</head>
-<body>
-  <div id="viewport"></div>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/occt-import-js.js"></script>
-  <script>
-    const viewport = document.getElementById('viewport');
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#f8fafc');
-
-    const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 5000);
-    camera.position.set(1.2, 0.9, 1.5);
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(window.devicePixelRatio || 1);
-    viewport.appendChild(renderer.domElement);
-
-    const controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.enablePan = true;
-    controls.enableZoom = true;
-    controls.target.set(0, 0, 0);
-
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x6f7a88, 0.95));
-    const keyLight = new THREE.DirectionalLight(0xffffff, 0.75);
-    keyLight.position.set(3, 6, 5);
-    scene.add(keyLight);
-
-    let activeMeshRoot = null;
-    let occtModulePromise = null;
-
-    function base64ToUint8Array(base64) {
-      const raw = atob(base64);
-      const bytes = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; i++) {
-        bytes[i] = raw.charCodeAt(i);
-      }
-      return bytes;
-    }
-
-    function clearScene() {
-      if (!activeMeshRoot) {
-        return;
-      }
-
-      scene.remove(activeMeshRoot);
-      activeMeshRoot.traverse(node => {
-        if (node.geometry) {
-          node.geometry.dispose();
-        }
-
-        if (node.material) {
-          if (Array.isArray(node.material)) {
-            node.material.forEach(material => material.dispose());
-          } else {
-            node.material.dispose();
-          }
-        }
-      });
-
-      activeMeshRoot = null;
-    }
-
-    async function getOcctModule() {
-      if (!occtModulePromise) {
-        occtModulePromise = occtimportjs();
-      }
-
-      return occtModulePromise;
-    }
-
-    function fitCameraToObject(object3D) {
-      const box = new THREE.Box3().setFromObject(object3D);
-      const size = box.getSize(new THREE.Vector3());
-      const center = box.getCenter(new THREE.Vector3());
-      const maxDim = Math.max(size.x, size.y, size.z, 0.001);
-      const distance = maxDim * 2.4;
-
-      controls.target.copy(center);
-      camera.position.set(center.x + distance, center.y + distance * 0.7, center.z + distance);
-      camera.near = Math.max(maxDim / 1000, 0.001);
-      camera.far = Math.max(maxDim * 200, 500);
-      camera.updateProjectionMatrix();
-      controls.update();
-    }
-
-    function buildMeshGroup(result) {
-      const group = new THREE.Group();
-
-      for (const meshData of result.meshes || []) {
-        const attrs = meshData.attributes || {};
-        const positions = attrs.position && attrs.position.array ? attrs.position.array : null;
-        if (!positions || positions.length === 0) {
-          continue;
-        }
-
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-
-        if (attrs.normal && attrs.normal.array && attrs.normal.array.length > 0) {
-          geometry.setAttribute('normal', new THREE.Float32BufferAttribute(attrs.normal.array, 3));
-        } else {
-          geometry.computeVertexNormals();
-        }
-
-        if (meshData.index && meshData.index.array && meshData.index.array.length > 0) {
-          geometry.setIndex(meshData.index.array);
-        }
-
-        const color = (meshData.color && meshData.color.length >= 3)
-          ? new THREE.Color(meshData.color[0], meshData.color[1], meshData.color[2])
-          : new THREE.Color('#4a78bb');
-
-        const material = new THREE.MeshStandardMaterial({
-          color,
-          roughness: 0.55,
-          metalness: 0.08,
-          side: THREE.DoubleSide
-        });
-
-        const mesh = new THREE.Mesh(geometry, material);
-        group.add(mesh);
-      }
-
-      return group;
-    }
-
-    async function renderStepFromBase64(base64) {
-      if (!base64 || base64.length === 0) {
-        clearScene();
-        return false;
-      }
-
-      try {
-        const occt = await getOcctModule();
-        const bytes = base64ToUint8Array(base64);
-        const parsed = occt.ReadStepFile(bytes, null);
-        const group = buildMeshGroup(parsed || {});
-        if (group.children.length === 0) {
-          clearScene();
-          return false;
-        }
-
-        clearScene();
-        activeMeshRoot = group;
-        scene.add(activeMeshRoot);
-        fitCameraToObject(activeMeshRoot);
-        return true;
-      } catch {
-        clearScene();
-        return false;
-      }
-    }
-
-    function resizeRenderer() {
-      const width = Math.max(viewport.clientWidth, 1);
-      const height = Math.max(viewport.clientHeight, 1);
-      renderer.setSize(width, height, false);
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-    }
-
-    window.renderStepFromBase64 = renderStepFromBase64;
-    window.resizeRenderer = resizeRenderer;
-
-    function animate() {
-      requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
-    }
-
-    resizeRenderer();
-    animate();
-    window.addEventListener('resize', resizeRenderer);
-  </script>
-</body>
-</html>
-""";
-
-            return html;
-        }
-    }
 
 }
