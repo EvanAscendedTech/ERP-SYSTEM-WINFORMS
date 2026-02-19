@@ -20,6 +20,9 @@ public sealed class StepModelPreviewControl : UserControl
     private string _lastLoadedSourcePath = string.Empty;
     private static readonly string HtmlShell = BuildHtmlShell();
     private readonly StepParsingDiagnosticsLog? _diagnosticsLog;
+    private readonly object _consoleLogSync = new();
+    private readonly List<string> _consoleLogBuffer = [];
+    private const int ConsoleLogLimit = 80;
 
     public StepModelPreviewControl(StepParsingDiagnosticsLog? diagnosticsLog = null)
     {
@@ -118,8 +121,45 @@ public sealed class StepModelPreviewControl : UserControl
                && afterEntries.Any(x => x.FileName.Contains("developer-bad", StringComparison.OrdinalIgnoreCase));
     }
 
+    public async Task<bool> RunStepSelfTestAsync()
+    {
+        await EnsureInitializedAsync();
+        var resultRaw = await ExecuteScriptSafeAsync("window.runStepSelfTest?.();", "self-test", "embedded-self-test.step", "embedded://self-test", 0, "self-test");
+        if (string.IsNullOrWhiteSpace(resultRaw))
+        {
+            return false;
+        }
+
+        var result = ParseScriptResult(resultRaw);
+        return result.Ok && result.TriangleCount > 0;
+    }
+
+    private void ClearConsoleBuffer()
+    {
+        lock (_consoleLogSync)
+        {
+            _consoleLogBuffer.Clear();
+        }
+    }
+
+    private string DrainConsoleBuffer()
+    {
+        lock (_consoleLogSync)
+        {
+            if (_consoleLogBuffer.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var combined = string.Join(" | ", _consoleLogBuffer);
+            _consoleLogBuffer.Clear();
+            return combined;
+        }
+    }
+
     private async Task LoadStepInternalAsync(byte[] stepBytes, string sourceFileName, string sourcePath, int version)
     {
+        ClearConsoleBuffer();
         await ResetViewerForNextParseAsync();
 
         if (version != _renderVersion)
@@ -128,7 +168,7 @@ public sealed class StepModelPreviewControl : UserControl
         }
 
         var parser = "(none)";
-        var stage = "load-bytes";
+        var stage = "validate-bytes";
         var meshCount = 0;
         var triangleCount = 0;
         var jsError = string.Empty;
@@ -145,19 +185,24 @@ public sealed class StepModelPreviewControl : UserControl
             return;
         }
 
-        stage = "detect-format";
-        var asciiHeader = IsLikelyAsciiStep(stepBytes);
-        var candidateName = !string.IsNullOrWhiteSpace(sourceFileName)
-            ? sourceFileName
-            : sourcePath;
+        var candidateName = !string.IsNullOrWhiteSpace(sourceFileName) ? sourceFileName : sourcePath;
         var detection = _fileTypeDetector.Detect(stepBytes, candidateName);
-
         if (!detection.IsKnownType)
         {
             const string message = "Unsupported 3D format. Supported: STEP/STP, STL, OBJ, IGES, BREP, SLDPRT";
             ShowError(message);
-            RecordDiagnostics(false, "STEP_PARSE_FAILED", stage, "STEP_PREVIEW", message, stepBytes.LongLength, sourceFileName, sourcePath,
-                BuildDiagnosticDetails(parser, stage, meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, $"detection-source={detection.DetectionSource}; asciiStepHeader={asciiHeader}"));
+            RecordDiagnostics(false, "STEP_UNSUPPORTED_FORMAT", stage, "STEP_PREVIEW", message, stepBytes.LongLength, sourceFileName, sourcePath,
+                BuildDiagnosticDetails(parser, stage, meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, $"detection-source={detection.DetectionSource}"));
+            return;
+        }
+
+        parser = detection.FileType == SolidModelFileType.Step ? "StepFileParser" : $"{detection.FileType}-parser";
+        if (detection.FileType == SolidModelFileType.Step && !IsLikelyAsciiStep(stepBytes))
+        {
+            const string message = "The file does not contain a valid STEP header (ISO-10303-21)";
+            ShowError(message);
+            RecordDiagnostics(false, "STEP_UNSUPPORTED_FORMAT", stage, "STEP_PREVIEW", message, stepBytes.LongLength, sourceFileName, sourcePath,
+                BuildDiagnosticDetails(parser, stage, meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, "missing-iso-10303-21"));
             return;
         }
 
@@ -176,7 +221,6 @@ public sealed class StepModelPreviewControl : UserControl
         try
         {
             stage = "parse";
-            parser = detection.FileType == SolidModelFileType.Step ? "StepFileParser" : $"{detection.FileType}-parser";
             if (detection.FileType == SolidModelFileType.Step)
             {
                 var parseReport = _stepFileParser.Parse(stepBytes);
@@ -191,28 +235,28 @@ public sealed class StepModelPreviewControl : UserControl
             }
 
             await EnsureInitializedAsync();
-
             if (version != _renderVersion)
             {
                 return;
             }
 
+            stage = "send-to-js";
             var payload = JsonSerializer.Serialize(Convert.ToBase64String(stepBytes));
             var metadata = JsonSerializer.Serialize(new
             {
                 fileName = sourceFileName,
-                sourcePath = sourcePath,
                 extension = detection.NormalizedExtension,
                 fileType = detection.FileType.ToString().ToLowerInvariant()
             });
 
-            stage = "render";
+            stage = "js-parse";
             var resultRaw = await ExecuteScriptSafeAsync($"window.renderModelFromBase64({payload}, {metadata});", stage, sourceFileName, sourcePath, stepBytes.LongLength, parser);
             if (string.IsNullOrWhiteSpace(resultRaw))
             {
                 ShowError("Unable to render STEP geometry (script-empty-result)");
+                var logs = DrainConsoleBuffer();
                 RecordDiagnostics(false, "STEP_RENDER_FAILED", stage, "STEP_PREVIEW", "Unable to render STEP geometry (script-empty-result)", stepBytes.LongLength, sourceFileName, sourcePath,
-                    BuildDiagnosticDetails(parser, stage, meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, "render-script-returned-empty"));
+                    BuildDiagnosticDetails(parser, stage, meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, $"render-script-returned-empty; console={logs}"));
                 return;
             }
 
@@ -226,23 +270,36 @@ public sealed class StepModelPreviewControl : UserControl
                 jsError = result.Error;
                 var message = BuildStatusMessage(result);
                 ShowError(message);
-                var errorCode = result.Stage.Contains("mesh", StringComparison.OrdinalIgnoreCase) ? "STEP_MESH_FAILED" : "STEP_RENDER_FAILED";
-                RecordDiagnostics(false, errorCode, result.Stage, "STEP_PREVIEW", message, stepBytes.LongLength, sourceFileName, sourcePath,
-                    BuildDiagnosticDetails(parser, result.Stage, meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, "renderer-returned-failure"));
+                var logs = DrainConsoleBuffer();
+                RecordDiagnostics(false, "STEP_RENDER_FAILED", result.Stage, "STEP_PREVIEW", message, stepBytes.LongLength, sourceFileName, sourcePath,
+                    BuildDiagnosticDetails(parser, result.Stage, meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, $"renderer-returned-failure; console={logs}"));
+                return;
+            }
+
+            stage = "render";
+            if (meshCount <= 0 || triangleCount <= 0)
+            {
+                const string message = "STEP file parsed, but no renderable geometry was produced";
+                ShowError(message);
+                var logs = DrainConsoleBuffer();
+                RecordDiagnostics(false, "STEP_MESH_FAILED", stage, "STEP_PREVIEW", message, stepBytes.LongLength, sourceFileName, sourcePath,
+                    BuildDiagnosticDetails(parser, stage, meshCount, triangleCount, "empty-geometry", stepBytes.LongLength, sourceFileName, sourcePath, $"mesh-or-triangle-empty; console={logs}"));
                 return;
             }
 
             _webView.Visible = true;
             _statusLabel.Visible = false;
-            RecordDiagnostics(true, string.Empty, "mesh", "STEP_PREVIEW", "STEP preview render succeeded.", stepBytes.LongLength, sourceFileName, sourcePath,
-                BuildDiagnosticDetails(parser, "mesh", meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, $"type={detection.FileType}"));
+            var successLogs = DrainConsoleBuffer();
+            RecordDiagnostics(true, string.Empty, stage, "STEP_PREVIEW", "STEP preview render succeeded.", stepBytes.LongLength, sourceFileName, sourcePath,
+                BuildDiagnosticDetails(parser, stage, meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, $"type={detection.FileType}; console={successLogs}"));
         }
         catch (Exception ex)
         {
             const string message = "WebView2 runtime unavailable for STEP preview";
             ShowError(message);
+            var logs = DrainConsoleBuffer();
             RecordDiagnostics(false, "STEP_RENDER_FAILED", stage, "STEP_PREVIEW", message, stepBytes.LongLength, sourceFileName, sourcePath,
-                BuildDiagnosticDetails(parser, stage, meshCount, triangleCount, ex.ToString(), stepBytes.LongLength, sourceFileName, sourcePath, "pipeline-exception"));
+                BuildDiagnosticDetails(parser, stage, meshCount, triangleCount, ex.ToString(), stepBytes.LongLength, sourceFileName, sourcePath, $"pipeline-exception; console={logs}"));
         }
     }
 
@@ -302,7 +359,7 @@ public sealed class StepModelPreviewControl : UserControl
 
             return parsed.ok
                 ? (true, string.Empty, parsed.stage ?? string.Empty, parsed.meshCount, parsed.triangleCount, string.IsNullOrWhiteSpace(parsed.parser) ? "(none)" : parsed.parser)
-                : (false, string.IsNullOrWhiteSpace(parsed.error) ? "parse-failed" : parsed.error, parsed.stage ?? string.Empty, parsed.meshCount, parsed.triangleCount, string.IsNullOrWhiteSpace(parsed.parser) ? "(none)" : parsed.parser);
+                : (false, string.IsNullOrWhiteSpace(parsed.error) ? "parse-failed" : $"{parsed.error} | {parsed.stack}", parsed.stage ?? string.Empty, parsed.meshCount, parsed.triangleCount, string.IsNullOrWhiteSpace(parsed.parser) ? "(none)" : parsed.parser);
         }
         catch
         {
@@ -329,7 +386,7 @@ public sealed class StepModelPreviewControl : UserControl
             "unsupported-format" => "Unsupported 3D format. Expected .step or .stp",
             "invalid-step-header" => "The file does not contain a valid STEP header (ISO-10303-21)",
             "invalid-step-body" => "The STEP file is missing required DATA section content",
-            "module-load-failed" => "STEP parser could not be loaded. Verify internet access to OpenCASCADE runtime assets",
+            "module-load-failed" => "STEP parser could not be loaded from local viewer assets",
             "parser-not-available" => "The detected 3D format is recognized, but the runtime parser for this format is unavailable",
             "sldprt-not-supported" => "SLDPRT parsing failed. Export the model as STEP (.step/.stp) for reliable rendering",
             "empty-geometry" => "STEP file parsed, but no renderable geometry was produced",
@@ -404,7 +461,40 @@ public sealed class StepModelPreviewControl : UserControl
                 return null;
             }
 
-            return await _webView.CoreWebView2.ExecuteScriptAsync(script);
+            var scriptExpression = script.Trim().TrimEnd(';');
+            var wrappedScript = $"(async () => {{ try {{ const value = await (async () => {{ return await ({scriptExpression}); }})() ; return JSON.stringify({{ ok: true, result: value }}); }} catch (e) {{ return JSON.stringify({{ ok: false, error: e?.message || 'script-failed', stack: e?.stack || '' }}); }} }})()";
+            var raw = await _webView.CoreWebView2.ExecuteScriptAsync(wrappedScript);
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return null;
+            }
+
+            using var doc = JsonDocument.Parse(raw);
+            var root = doc.RootElement;
+            var json = root.ValueKind == JsonValueKind.String ? root.GetString() : root.GetRawText();
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return null;
+            }
+
+            using var envelopeDoc = JsonDocument.Parse(json);
+            var envelope = envelopeDoc.RootElement;
+            var ok = envelope.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
+            if (!ok)
+            {
+                var error = envelope.TryGetProperty("error", out var errEl) ? errEl.GetString() : "script-failed";
+                var stack = envelope.TryGetProperty("stack", out var stEl) ? stEl.GetString() : string.Empty;
+                RecordDiagnostics(false, "STEP_WEBVIEW_SCRIPT_ERROR", stageName, "STEP_PREVIEW", $"WebView2 script execution failed at stage '{stageName}'.", fileSizeBytes, sourceFileName, sourcePath,
+                    BuildDiagnosticDetails(parser, stageName, 0, 0, $"{error}; stack={stack}", fileSizeBytes, sourceFileName, sourcePath, $"script={script}"));
+                return null;
+            }
+
+            if (!envelope.TryGetProperty("result", out var resultEl))
+            {
+                return null;
+            }
+
+            return resultEl.GetRawText();
         }
         catch (Exception ex)
         {
@@ -441,6 +531,17 @@ public sealed class StepModelPreviewControl : UserControl
         await _webView.EnsureCoreWebView2Async();
         _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
         _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+        _webView.CoreWebView2.ConsoleMessageReceived += (_, args) =>
+        {
+            lock (_consoleLogSync)
+            {
+                _consoleLogBuffer.Add($"{args.Source}:{args.LineNumber}:{args.ColumnNumber}:{args.Message}");
+                if (_consoleLogBuffer.Count > ConsoleLogLimit)
+                {
+                    _consoleLogBuffer.RemoveAt(0);
+                }
+            }
+        };
 
         _navigationReady = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _webView.CoreWebView2.NavigationCompleted += (_, args) =>
@@ -550,7 +651,7 @@ public sealed class StepModelPreviewControl : UserControl
         base.Dispose(disposing);
     }
 
-    private sealed record StepRenderResult(bool ok, string? error, string? stage, int meshCount = 0, int triangleCount = 0, string? parser = null);
+    private sealed record StepRenderResult(bool ok, string? error, string? stage, int meshCount = 0, int triangleCount = 0, string? parser = null, string? stack = null);
 
     private static string BuildHtmlShell()
     {
@@ -604,8 +705,8 @@ public sealed class StepModelPreviewControl : UserControl
       return bytes;
     }
 
-    function result(ok, stage, error) {
-      return { ok, stage, error: error || '' };
+    function result(ok, stage, error, stack, parser, meshCount, triangleCount) {
+      return { ok, stage, error: error || '', stack: stack || '', parser: parser || '(none)', meshCount: meshCount || 0, triangleCount: triangleCount || 0 };
     }
 
     function clearScene() {
@@ -655,14 +756,14 @@ public sealed class StepModelPreviewControl : UserControl
     function validateStepContent(bytes) {
       const sample = decodeStepText(bytes.subarray(0, Math.min(bytes.length, 8192))).toUpperCase();
       if (!sample.includes('ISO-10303-21') && !sample.includes('ISO10303-21')) {
-        return result(false, 'validate-content', 'invalid-step-header');
+        return result(false, 'validate-bytes', 'invalid-step-header');
       }
 
       if (!sample.includes('HEADER;') || !sample.includes('DATA;')) {
-        return result(false, 'validate-content', 'invalid-step-body');
+        return result(false, 'validate-bytes', 'invalid-step-body');
       }
 
-      return result(true, 'validate-content', '');
+      return result(true, 'validate-bytes', '');
     }
 
     function fitCameraToObject(object3D) {
@@ -819,7 +920,7 @@ public sealed class StepModelPreviewControl : UserControl
     async function renderModelFromBase64(base64, metadata) {
       if (!base64 || base64.length === 0) {
         clearScene();
-        return result(false, 'load-bytes', 'missing-file-data');
+        return result(false, 'validate-bytes', 'missing-file-data');
       }
 
       try {
@@ -840,7 +941,7 @@ public sealed class StepModelPreviewControl : UserControl
             occt = await getOcctModule();
           } catch {
             clearScene();
-            return result(false, 'load-parser', 'module-load-failed');
+            return result(false, 'js-parse', 'module-load-failed');
           }
 
           const parsedResult = parseWithOcct(occt, bytes);
@@ -856,31 +957,31 @@ public sealed class StepModelPreviewControl : UserControl
             occt = await getOcctModule();
           } catch {
             clearScene();
-            return result(false, 'load-parser', 'module-load-failed');
+            return result(false, 'js-parse', 'module-load-failed');
           }
 
           const readers = getOcctReaders(occt, fileType);
           if (!readers || readers.length === 0) {
             clearScene();
-            return result(false, 'select-parser', 'parser-not-available');
+            return result(false, 'js-parse', 'parser-not-available');
           }
 
           const parsed = parseOcctWithReaders(bytes, readers);
           if (!parsed) {
             clearScene();
-            return result(false, 'parse-cad', fileType === 'sldprt' ? 'sldprt-not-supported' : 'corrupted-or-invalid-step');
+            return result(false, 'js-parse', fileType === 'sldprt' ? 'sldprt-not-supported' : 'corrupted-or-invalid-step');
           }
 
           const occtMeshData = buildMeshGroup(parsed || {});
           meshData = { group: occtMeshData.group, triangleCount: occtMeshData.triangleCount, parser: `occt-${fileType}` };
         } else {
           clearScene();
-          return result(false, 'validate-format', 'unsupported-format');
+          return result(false, 'validate-bytes', 'unsupported-format');
         }
 
         if (meshData.group.children.length === 0) {
           clearScene();
-          return result(false, 'load-geometry', 'empty-geometry');
+          return result(false, 'render', 'empty-geometry', '', meshData.parser, meshData.group.children.length, meshData.triangleCount);
         }
 
         clearScene();
@@ -889,7 +990,7 @@ public sealed class StepModelPreviewControl : UserControl
         fitCameraToObject(activeMeshRoot);
         return {
           ok: true,
-          stage: 'display-model',
+          stage: 'render',
           error: '',
           meshCount: meshData.group.children.length,
           triangleCount: meshData.triangleCount,
@@ -898,7 +999,8 @@ public sealed class StepModelPreviewControl : UserControl
       } catch (err) {
         clearScene();
         const parseError = (err && err.message) ? err.message : 'corrupted-or-invalid-step';
-        return result(false, 'parse-step', parseError);
+        const parseStack = (err && err.stack) ? err.stack : '';
+        return result(false, 'js-parse', parseError, parseStack);
       }
     }
 
@@ -923,7 +1025,22 @@ public sealed class StepModelPreviewControl : UserControl
       controls.dispose();
     }
 
+
+    function runStepSelfTest() {
+      const geometry = new THREE.BoxGeometry(1, 1, 1);
+      const material = new THREE.MeshStandardMaterial({ color: new THREE.Color('#4a78bb'), roughness: 0.55, metalness: 0.08 });
+      const mesh = new THREE.Mesh(geometry, material);
+      const group = new THREE.Group();
+      group.add(mesh);
+      clearScene();
+      activeMeshRoot = group;
+      scene.add(activeMeshRoot);
+      fitCameraToObject(activeMeshRoot);
+      return { ok: true, stage: 'render', error: '', meshCount: 1, triangleCount: 12, parser: 'self-test-box' };
+    }
+
     window.renderModelFromBase64 = renderModelFromBase64;
+    window.runStepSelfTest = runStepSelfTest;
     window.resizeRenderer = resizeRenderer;
     window.resetViewerState = resetViewerState;
     window.disposeViewer = disposeViewer;
