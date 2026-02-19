@@ -24,7 +24,46 @@ public sealed class StepToGlbConverter : IStepToGlbConverter
 
     public static string ResolveConverterPath()
     {
+        var configuredPath = Environment.GetEnvironmentVariable("ERP_STEP2GLB_PATH");
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+        {
+            return configuredPath;
+        }
+
+        foreach (var candidate in GetConverterPathCandidates(AppContext.BaseDirectory))
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        // Return the default output location so callers get a stable, actionable error message.
         return Path.Combine(AppContext.BaseDirectory, "Tools", "step2glb", "step2glb.exe");
+    }
+
+    internal static IReadOnlyList<string> GetConverterPathCandidates(string baseDirectory)
+    {
+        var paths = new List<string>();
+        void Add(string path)
+        {
+            if (!paths.Contains(path, StringComparer.OrdinalIgnoreCase))
+            {
+                paths.Add(path);
+            }
+        }
+
+        Add(Path.Combine(baseDirectory, "Tools", "step2glb", "step2glb.exe"));
+
+        var current = new DirectoryInfo(baseDirectory);
+        for (var i = 0; i < 6 && current is not null; i++)
+        {
+            Add(Path.Combine(current.FullName, "Tools", "step2glb", "step2glb.exe"));
+            Add(Path.Combine(current.FullName, "ERPSystem.WinForms", "Tools", "step2glb", "step2glb.exe"));
+            current = current.Parent;
+        }
+
+        return paths;
     }
 
     public static string ComputeStepHash(byte[] bytes)
