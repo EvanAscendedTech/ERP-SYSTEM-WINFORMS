@@ -7,6 +7,8 @@ public interface IStepPreviewService
 {
     Task<byte[]> GetOrCreateGlbAsync(byte[] stepBytes, string fileName, CancellationToken ct);
     Task<StepPreviewResult> GetOrCreateGlbDetailedAsync(byte[] stepBytes, string fileName, CancellationToken ct);
+    bool IsConverterUnavailable { get; }
+    void ResetConverterAvailability();
 }
 
 public sealed record StepPreviewResult(
@@ -23,6 +25,7 @@ public sealed record StepPreviewResult(
 
 public sealed class StepPreviewService : IStepPreviewService
 {
+    private static int _converterUnavailable;
     private readonly IStepPreviewCache _cache;
     private readonly IStepToGlbConverter _converter;
     private readonly ConcurrentDictionary<string, Lazy<Task<StepPreviewResult>>> _inflight = new();
@@ -51,9 +54,32 @@ public sealed class StepPreviewService : IStepPreviewService
 
     public Task<StepPreviewResult> GetOrCreateGlbDetailedAsync(byte[] stepBytes, string fileName, CancellationToken ct)
     {
+        if (IsConverterUnavailable)
+        {
+            var hash = StepToGlbConverter.ComputeStepHash(stepBytes);
+            return Task.FromResult(new StepPreviewResult(
+                false,
+                Array.Empty<byte>(),
+                hash,
+                false,
+                "STEP_CONVERTER_UNAVAILABLE",
+                "STEP converter is unavailable for this session. Click Retry after fix once converter binaries are restored.",
+                -1,
+                string.Empty,
+                string.Empty,
+                "converter-unavailable"));
+        }
+
         var hash = StepToGlbConverter.ComputeStepHash(stepBytes);
         var singleFlight = _inflight.GetOrAdd(hash, _ => new Lazy<Task<StepPreviewResult>>(() => ConvertInternalAsync(stepBytes, fileName, hash, ct)));
         return AwaitAndCleanupAsync(hash, singleFlight);
+    }
+
+    public bool IsConverterUnavailable => Volatile.Read(ref _converterUnavailable) == 1;
+
+    public void ResetConverterAvailability()
+    {
+        Interlocked.Exchange(ref _converterUnavailable, 0);
     }
 
     private async Task<StepPreviewResult> AwaitAndCleanupAsync(string hash, Lazy<Task<StepPreviewResult>> task)
@@ -88,6 +114,11 @@ public sealed class StepPreviewService : IStepPreviewService
             var errorCode = stderr.Contains("STEP_CONVERTER_MISSING", StringComparison.OrdinalIgnoreCase)
                 ? "STEP_CONVERTER_MISSING"
                 : "STEP_CONVERT_FAILED";
+            if (errorCode == "STEP_CONVERTER_MISSING")
+            {
+                Interlocked.Exchange(ref _converterUnavailable, 1);
+            }
+
             return new(false, Array.Empty<byte>(), hash, false, errorCode, "STEP conversion failed.", exitCode, stdout, Truncate(stderr, 2048), validation.details);
         }
 

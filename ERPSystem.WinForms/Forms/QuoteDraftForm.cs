@@ -40,6 +40,8 @@ public class QuoteDraftForm : Form
     private readonly UserAccount? _actorUser;
     private readonly List<LineItemCard> _lineItemCards = new();
     private readonly StepParsingDiagnosticsLog _stepParsingDiagnosticsLog;
+    private LineItemCard? _selectedLineItemCard;
+    private readonly StepPreviewService _stepPreviewService = new();
     private decimal _shopHourlyRate;
 
     public int CreatedQuoteId { get; private set; }
@@ -227,6 +229,10 @@ public class QuoteDraftForm : Form
         RenumberLineItems();
         ResizeCards();
         RecalculateQuoteTotals();
+        if (_selectedLineItemCard is null)
+        {
+            SelectLineItemCard(card);
+        }
     }
 
     private LineItemCard BuildCard(QuoteLineItem model, int index)
@@ -429,13 +435,16 @@ public class QuoteDraftForm : Form
             SummaryRevision = summaryView.Revision,
             SummaryQuantity = summaryView.Quantity,
             SummaryLineTotal = summaryView.LineTotal,
-            SummaryPerPiece = summaryView.PerPiece
+            SummaryPerPiece = summaryView.PerPiece,
+            PreviewButton = summaryView.PreviewButton
         };
 
         removeButton.Click += async (_, _) => await RemoveLineItemAsync(model, cardPanel);
         doneButton.Click += async (_, _) => await SetLineItemDoneStateAsync(card, true);
         editButton.Click += async (_, _) => await SetLineItemDoneStateAsync(card, false);
         summaryView.ExpandButton.Click += (_, _) => ExpandModelViewer(card);
+        summaryView.PreviewButton.Click += (_, _) => SchedulePreviewLoad(card, force: true);
+        card.Container.Click += (_, _) => SelectLineItemCard(card);
 
         RefreshBlobLists(card);
         return card;
@@ -549,7 +558,7 @@ public class QuoteDraftForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52f));
 
         var viewerPanel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 8, 0) };
-        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, new StepPreviewService()) { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
+        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, _stepPreviewService) { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
         var expandButton = BuildCompactIconButton("⛶ Expand", Color.FromArgb(71, 85, 105));
         expandButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         expandButton.Location = new Point(Math.Max(4, viewerPanel.Width - 96), 4);
@@ -575,6 +584,7 @@ public class QuoteDraftForm : Form
         var quantity = ValueLabel();
         var lineTotal = ValueLabel();
         var perPiece = ValueLabel();
+        var previewButton = BuildCompactIconButton("👁 Preview 3D", Color.FromArgb(37, 99, 235));
 
         AddSummaryRow(details, 0, "Drawing #", drawingNumber);
         AddSummaryRow(details, 1, "Drawing Name", drawingName);
@@ -582,6 +592,9 @@ public class QuoteDraftForm : Form
         AddSummaryRow(details, 3, "Quantity", quantity);
         AddSummaryRow(details, 4, "Line Item Total", lineTotal);
         AddSummaryRow(details, 5, "Per-Piece", perPiece);
+        details.RowCount = Math.Max(details.RowCount, 7);
+        details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        details.Controls.Add(previewButton, 1, 6);
 
         layout.Controls.Add(viewerPanel, 0, 0);
         layout.Controls.Add(details, 1, 0);
@@ -592,6 +605,7 @@ public class QuoteDraftForm : Form
             Container = container,
             Viewer = viewer,
             ExpandButton = expandButton,
+            PreviewButton = previewButton,
             DrawingNumber = drawingNumber,
             DrawingName = drawingName,
             Revision = revision,
@@ -641,17 +655,58 @@ public class QuoteDraftForm : Form
         card.SummaryLineTotal.Text = card.Model.LineItemTotal.ToString("C2", CultureInfo.CurrentCulture);
         card.SummaryPerPiece.Text = card.Model.UnitPrice.ToString("C2", CultureInfo.CurrentCulture);
 
-        var stepAttachment = FindLatestStepAttachment(card.Model);
-        if (stepAttachment is not null)
-        {
-            await card.StepViewer.LoadStepAttachmentAsync(stepAttachment, _quoteRepository.GetQuoteBlobContentAsync);
-        }
-        else
-        {
-            card.StepViewer.LoadStep([]);
-        }
+        await Task.CompletedTask;
     }
 
+    private void SchedulePreviewLoad(LineItemCard card, bool force = false)
+    {
+        card.PreviewDebounceCts?.Cancel();
+        card.PreviewDebounceCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        card.PreviewDebounceCts = cts;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(500, cts.Token);
+                if (cts.IsCancellationRequested || IsDisposed)
+                {
+                    return;
+                }
+
+                if (!force && (!card.IsDone || !card.StepViewer.Visible || !card.Container.Visible || !ReferenceEquals(_selectedLineItemCard, card)))
+                {
+                    return;
+                }
+
+                var stepAttachment = FindLatestStepAttachment(card.Model);
+                if (stepAttachment is null)
+                {
+                    BeginInvoke(new Action(() => card.StepViewer.LoadStep([])));
+                    return;
+                }
+
+                BeginInvoke(new Action(() => _ = card.StepViewer.LoadStepAttachmentAsync(stepAttachment, _quoteRepository.GetQuoteBlobContentAsync)));
+            }
+            catch (OperationCanceledException)
+            {
+                // ignored
+            }
+        });
+    }
+
+
+    private void SelectLineItemCard(LineItemCard card)
+    {
+        _selectedLineItemCard = card;
+        foreach (var lineItemCard in _lineItemCards)
+        {
+            lineItemCard.Container.BorderStyle = ReferenceEquals(lineItemCard, card) ? BorderStyle.Fixed3D : BorderStyle.FixedSingle;
+        }
+
+        SchedulePreviewLoad(card);
+    }
     private static QuoteBlobAttachment? FindLatestStepAttachment(QuoteLineItem model)
     {
         return model.BlobAttachments
@@ -696,7 +751,7 @@ public class QuoteDraftForm : Form
             StartPosition = FormStartPosition.CenterParent,
             WindowState = FormWindowState.Maximized
         };
-        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, new StepPreviewService()) { Dock = DockStyle.Fill };
+        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, _stepPreviewService) { Dock = DockStyle.Fill };
         viewerForm.FormClosed += (_, _) => viewer.ClearPreview();
 
         stepAttachment.BlobData = stepData;
@@ -800,6 +855,14 @@ public class QuoteDraftForm : Form
 
         model.BlobAttachments.Add(attachment);
         RefreshAllBlobLists();
+        if (blobType == QuoteBlobType.ThreeDModel)
+        {
+            var card = _lineItemCards.FirstOrDefault(x => ReferenceEquals(x.Model, model));
+            if (card is not null)
+            {
+                SchedulePreviewLoad(card);
+            }
+        }
     }
 
     private async Task DeleteBlobAsync(QuoteLineItem model, QuoteBlobType blobType, QuoteBlobAttachment? selected)
@@ -819,6 +882,14 @@ public class QuoteDraftForm : Form
         if (selected.Id > 0) await _quoteRepository.DeleteQuoteLineItemFileAsync(selected.Id);
         model.BlobAttachments.Remove(selected);
         RefreshAllBlobLists();
+        if (blobType == QuoteBlobType.ThreeDModel)
+        {
+            var card = _lineItemCards.FirstOrDefault(x => ReferenceEquals(x.Model, model));
+            if (card is not null)
+            {
+                SchedulePreviewLoad(card);
+            }
+        }
     }
 
     private async Task DownloadBlobAsync(QuoteBlobAttachment? attachment)
@@ -1049,10 +1120,20 @@ public class QuoteDraftForm : Form
         var card = _lineItemCards.FirstOrDefault(x => ReferenceEquals(x.Container, container));
         if (card is not null)
         {
+            card.PreviewDebounceCts?.Cancel();
+            card.PreviewDebounceCts?.Dispose();
             _lineItemCards.Remove(card);
+            if (ReferenceEquals(_selectedLineItemCard, card))
+            {
+                _selectedLineItemCard = _lineItemCards.FirstOrDefault();
+            }
         }
 
         _lineItemsPanel.Controls.Remove(container);
+        if (_selectedLineItemCard is not null)
+        {
+            SelectLineItemCard(_selectedLineItemCard);
+        }
         RenumberLineItems();
         ResizeCards();
         RecalculateQuoteTotals();
@@ -1288,6 +1369,7 @@ public class QuoteDraftForm : Form
         public required Panel Container { get; init; }
         public required StepModelPreviewControl Viewer { get; init; }
         public required Button ExpandButton { get; init; }
+        public required Button PreviewButton { get; init; }
         public required Label DrawingNumber { get; init; }
         public required Label DrawingName { get; init; }
         public required Label Revision { get; init; }
@@ -1329,6 +1411,8 @@ public class QuoteDraftForm : Form
         public required Label SummaryQuantity { get; init; }
         public required Label SummaryLineTotal { get; init; }
         public required Label SummaryPerPiece { get; init; }
+        public required Button PreviewButton { get; init; }
+        public CancellationTokenSource? PreviewDebounceCts { get; set; }
         public bool IsDone { get; set; }
     }
 
