@@ -19,8 +19,8 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private readonly FlowLayoutPanel _customerCardsPanel = new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(8, 4, 8, 8) };
     private readonly Label _customerHubLabel = new() { Dock = DockStyle.Top, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold), Padding = new Padding(8, 0, 0, 0) };
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
-    private readonly DataGridView _completedQuotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
-    private readonly Panel _completedQuoteDetailsHost = new() { Dock = DockStyle.Bottom, Height = 0, Visible = false, Padding = new Padding(0, 8, 0, 0) };
+    private readonly DataGridView _completedQuotesGrid = new() { Dock = DockStyle.Top, Height = 210, AutoGenerateColumns = false, ReadOnly = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
+    private readonly Panel _completedQuoteDetailsHost = new() { Dock = DockStyle.Fill, Height = 0, Visible = false, Padding = new Padding(0, 8, 0, 0) };
     private readonly Label _completedQuoteDetailsTitle = new() { Dock = DockStyle.Top, Height = 28, TextAlign = ContentAlignment.MiddleLeft, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold), Padding = new Padding(8, 0, 0, 0) };
     private readonly Panel _completedQuoteDetailsViewport = new() { Dock = DockStyle.Fill, BackColor = Color.FromArgb(248, 251, 255), Padding = new Padding(8), AutoScroll = true };
     private readonly Label _feedback = new() { Dock = DockStyle.Bottom, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
@@ -30,6 +30,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private string? _selectedCustomer;
     private int? _expandedCompletedQuoteId;
     private const int CompletedQuoteDetailsPanelHeight = 450;
+    private const int CompletedQuoteGridStickyHeight = 210;
 
     public QuotesControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, UserManagementRepository userRepository, UserAccount currentUser, Action<string> openSection)
     {
@@ -97,6 +98,10 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             Text = "In-Progress Quotes",
             Font = new Font(Font, FontStyle.Bold)
         });
+
+        _completedQuoteDetailsViewport.HorizontalScroll.Enabled = true;
+        _completedQuoteDetailsViewport.HorizontalScroll.Visible = true;
+        _completedQuoteDetailsViewport.VerticalScroll.Visible = true;
 
         _completedQuoteDetailsHost.Controls.Add(_completedQuoteDetailsViewport);
         _completedQuoteDetailsHost.Controls.Add(_completedQuoteDetailsTitle);
@@ -779,9 +784,38 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
     private void ToggleCompletedQuoteExpansion(int quoteId)
     {
-        _expandedCompletedQuoteId = _expandedCompletedQuoteId == quoteId ? null : quoteId;
+        var wasExpanded = _expandedCompletedQuoteId == quoteId;
+        _expandedCompletedQuoteId = wasExpanded ? null : quoteId;
         var selectedCustomerCompletedQuotes = GetSelectedCustomerCompletedQuotes();
         RefreshCompletedQuotesSection(selectedCustomerCompletedQuotes);
+
+        if (wasExpanded)
+        {
+            FocusCompletedQuoteRow(quoteId);
+        }
+    }
+
+    private void FocusCompletedQuoteRow(int quoteId)
+    {
+        for (var rowIndex = 0; rowIndex < _completedQuotesGrid.Rows.Count; rowIndex++)
+        {
+            if (_completedQuotesGrid.Rows[rowIndex].DataBoundItem is not QuoteGridRow row
+                || row.QuoteId != quoteId)
+            {
+                continue;
+            }
+
+            _completedQuotesGrid.ClearSelection();
+            _completedQuotesGrid.Rows[rowIndex].Selected = true;
+            if (_completedQuotesGrid.Columns.Count > 0)
+            {
+                _completedQuotesGrid.CurrentCell = _completedQuotesGrid.Rows[rowIndex].Cells[0];
+            }
+
+            _completedQuotesGrid.FirstDisplayedScrollingRowIndex = rowIndex;
+            _completedQuotesGrid.Focus();
+            return;
+        }
     }
 
     private async Task DeleteCompletedQuoteAsync(int quoteId)
@@ -825,6 +859,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             _completedQuoteDetailsHost.Visible = false;
             _completedQuoteDetailsHost.Height = 0;
             _completedQuoteDetailsTitle.Text = string.Empty;
+            _completedQuotesGrid.Height = CompletedQuoteGridStickyHeight;
             return;
         }
 
@@ -834,6 +869,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             _expandedCompletedQuoteId = null;
             _completedQuoteDetailsHost.Visible = false;
             _completedQuoteDetailsHost.Height = 0;
+            _completedQuotesGrid.Height = CompletedQuoteGridStickyHeight;
             return;
         }
 
@@ -841,6 +877,9 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         _completedQuoteDetailsViewport.Controls.Add(CreateLineItemsSocketView(quote));
         _completedQuoteDetailsHost.Height = CompletedQuoteDetailsPanelHeight;
         _completedQuoteDetailsHost.Visible = true;
+        _completedQuotesGrid.Height = CompletedQuoteGridStickyHeight;
+        _completedQuoteDetailsViewport.AutoScrollPosition = Point.Empty;
+        _completedQuoteDetailsHost.ScrollControlIntoView(_completedQuoteDetailsViewport);
     }
 
     private Control CreateLineItemsSocketView(Quote quote)
@@ -851,7 +890,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             AutoScroll = true,
             WrapContents = false,
             FlowDirection = FlowDirection.TopDown,
-            Padding = new Padding(4, 4, 18, 4)
+            Padding = new Padding(4, 4, 24, 8)
         };
 
         if (quote.LineItems.Count == 0)
