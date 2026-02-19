@@ -849,9 +849,11 @@ public class QuoteDraftForm : Form
             }
 
             var header = System.Text.Encoding.UTF8.GetString(buffer, 0, bytesRead);
-            return header.Contains("ISO-10303-21", StringComparison.OrdinalIgnoreCase)
-                || header.Contains("HEADER;", StringComparison.OrdinalIgnoreCase)
-                || header.Contains("DATA;", StringComparison.OrdinalIgnoreCase);
+            var looksLikeStep = header.Contains("ISO-10303-21", StringComparison.OrdinalIgnoreCase)
+                || header.Contains("ISO10303-21", StringComparison.OrdinalIgnoreCase)
+                || header.Contains("HEADER;", StringComparison.OrdinalIgnoreCase);
+
+            return looksLikeStep && header.Contains("DATA;", StringComparison.OrdinalIgnoreCase);
         }
         catch
         {
