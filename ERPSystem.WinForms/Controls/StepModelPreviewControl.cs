@@ -1,4 +1,5 @@
 using Microsoft.Web.WebView2.WinForms;
+using Microsoft.Web.WebView2.Core;
 using System.Text.Json;
 using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
@@ -22,7 +23,20 @@ public sealed class StepModelPreviewControl : UserControl
     private readonly StepParsingDiagnosticsLog? _diagnosticsLog;
     private readonly object _consoleLogSync = new();
     private readonly List<string> _consoleLogBuffer = [];
-    private const int ConsoleLogLimit = 80;
+    private const int ConsoleLogLimit = 200;
+    private const int ViewerReadyTimeoutMs = 15000;
+    private const string EmbeddedSelfTestStep = """
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('self-test'),'2;1');
+FILE_NAME('embedded-self-test.step','2026-01-01T00:00:00',('codex'),('codex'),'','','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN_CC2'));
+ENDSEC;
+DATA;
+#1 = CARTESIAN_POINT('',(0.,0.,0.));
+ENDSEC;
+END-ISO-10303-21;
+""";
 
     public StepModelPreviewControl(StepParsingDiagnosticsLog? diagnosticsLog = null)
     {
@@ -46,6 +60,12 @@ public sealed class StepModelPreviewControl : UserControl
 
         var contextMenu = new ContextMenuStrip();
         contextMenu.Items.Add("Enlarge", null, (_, _) => OpenEnlargedViewer());
+        contextMenu.Items.Add("Run STEP Self-test", null, async (_, _) =>
+        {
+            var ok = await RunStepSelfTestAsync();
+            MessageBox.Show(ok ? "STEP self-test passed." : "STEP self-test failed.", "STEP Self-test", MessageBoxButtons.OK,
+                ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        });
         ContextMenuStrip = contextMenu;
 
         Controls.Add(_webView);
@@ -124,7 +144,15 @@ public sealed class StepModelPreviewControl : UserControl
     public async Task<bool> RunStepSelfTestAsync()
     {
         await EnsureInitializedAsync();
-        var resultRaw = await ExecuteScriptSafeAsync("window.runStepSelfTest?.();", "self-test", "embedded-self-test.step", "embedded://self-test", 0, "self-test");
+        if (!await WaitForViewerReadyAsync("embedded-self-test.step", "embedded://self-test", 0, "self-test", ViewerReadyTimeoutMs))
+        {
+            return false;
+        }
+
+        var sampleBytes = System.Text.Encoding.ASCII.GetBytes(EmbeddedSelfTestStep);
+        var payload = JsonSerializer.Serialize(Convert.ToBase64String(sampleBytes));
+        var fileName = JsonSerializer.Serialize("embedded-self-test.step");
+        var resultRaw = await ExecuteScriptSafeAsync($"window.stepViewer.parseStepBase64({payload}, {fileName});", "js-parse", "embedded-self-test.step", "embedded://self-test", sampleBytes.LongLength, "self-test");
         if (string.IsNullOrWhiteSpace(resultRaw))
         {
             return false;
@@ -240,23 +268,40 @@ public sealed class StepModelPreviewControl : UserControl
                 return;
             }
 
+            stage = "viewer-ready";
+            if (!await WaitForViewerReadyAsync(sourceFileName, sourcePath, stepBytes.LongLength, parser, ViewerReadyTimeoutMs))
+            {
+                ShowError("STEP viewer is not ready yet");
+                return;
+            }
+
+            var apiExistsRaw = await ExecuteScriptSafeAsync("typeof window.stepViewer?.parseStepBase64 === 'function'", stage, sourceFileName, sourcePath, stepBytes.LongLength, parser);
+            var apiExists = IsScriptBooleanTrue(apiExistsRaw);
+            if (!apiExists)
+            {
+                var logs = DrainConsoleBuffer();
+                var readyState = await GetDocumentReadyStateAsync();
+                var url = _webView.CoreWebView2?.Source ?? "about:blank";
+                const string message = "STEP viewer API is unavailable (parseStepBase64 missing)";
+                ShowError(message);
+                RecordDiagnostics(false, "STEP_JS_API_MISSING", "viewer-ready", "STEP_PREVIEW", message, stepBytes.LongLength, sourceFileName, sourcePath,
+                    BuildDiagnosticDetails(parser, "viewer-ready", meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, $"api-missing; readyState={readyState}; url={url}; console={logs}"));
+                return;
+            }
+
             stage = "send-to-js";
             var payload = JsonSerializer.Serialize(Convert.ToBase64String(stepBytes));
-            var metadata = JsonSerializer.Serialize(new
-            {
-                fileName = sourceFileName,
-                extension = detection.NormalizedExtension,
-                fileType = detection.FileType.ToString().ToLowerInvariant()
-            });
+            var fileNameArg = JsonSerializer.Serialize(sourceFileName);
 
             stage = "js-parse";
-            var resultRaw = await ExecuteScriptSafeAsync($"window.renderModelFromBase64({payload}, {metadata});", stage, sourceFileName, sourcePath, stepBytes.LongLength, parser);
+            var resultRaw = await ExecuteScriptSafeAsync($"window.stepViewer.parseStepBase64({payload}, {fileNameArg});", stage, sourceFileName, sourcePath, stepBytes.LongLength, parser);
             if (string.IsNullOrWhiteSpace(resultRaw))
             {
                 ShowError("Unable to render STEP geometry (script-empty-result)");
                 var logs = DrainConsoleBuffer();
-                RecordDiagnostics(false, "STEP_RENDER_FAILED", stage, "STEP_PREVIEW", "Unable to render STEP geometry (script-empty-result)", stepBytes.LongLength, sourceFileName, sourcePath,
-                    BuildDiagnosticDetails(parser, stage, meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, $"render-script-returned-empty; console={logs}"));
+                var readyState = await GetDocumentReadyStateAsync();
+                RecordDiagnostics(false, "STEP_JS_EMPTY_RESULT", "js-parse", "STEP_PREVIEW", "Unable to render STEP geometry (script-empty-result)", stepBytes.LongLength, sourceFileName, sourcePath,
+                    BuildDiagnosticDetails(parser, "js-parse", meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, $"render-script-returned-empty; scriptLength={payload.Length}; readyState={readyState}; console={logs}"));
                 return;
             }
 
@@ -276,14 +321,14 @@ public sealed class StepModelPreviewControl : UserControl
                 return;
             }
 
-            stage = "render";
+            stage = "js-render";
             if (meshCount <= 0 || triangleCount <= 0)
             {
                 const string message = "STEP file parsed, but no renderable geometry was produced";
                 ShowError(message);
                 var logs = DrainConsoleBuffer();
-                RecordDiagnostics(false, "STEP_MESH_FAILED", stage, "STEP_PREVIEW", message, stepBytes.LongLength, sourceFileName, sourcePath,
-                    BuildDiagnosticDetails(parser, stage, meshCount, triangleCount, "empty-geometry", stepBytes.LongLength, sourceFileName, sourcePath, $"mesh-or-triangle-empty; console={logs}"));
+                RecordDiagnostics(false, "STEP_MESH_FAILED", "js-mesh", "STEP_PREVIEW", message, stepBytes.LongLength, sourceFileName, sourcePath,
+                    BuildDiagnosticDetails(parser, "js-mesh", meshCount, triangleCount, "empty-geometry", stepBytes.LongLength, sourceFileName, sourcePath, $"mesh-or-triangle-empty; console={logs}"));
                 return;
             }
 
@@ -357,9 +402,12 @@ public sealed class StepModelPreviewControl : UserControl
                 return (false, "empty-result", "deserialize-result", 0, 0, "(none)");
             }
 
+            var meshCount = parsed.meshCount > 0 ? parsed.meshCount : parsed.meshes;
+            var triangleCount = parsed.triangleCount > 0 ? parsed.triangleCount : parsed.triangles;
+            var normalizedStage = string.IsNullOrWhiteSpace(parsed.stage) ? "js-parse" : parsed.stage;
             return parsed.ok
-                ? (true, string.Empty, parsed.stage ?? string.Empty, parsed.meshCount, parsed.triangleCount, string.IsNullOrWhiteSpace(parsed.parser) ? "(none)" : parsed.parser)
-                : (false, string.IsNullOrWhiteSpace(parsed.error) ? "parse-failed" : $"{parsed.error} | {parsed.stack}", parsed.stage ?? string.Empty, parsed.meshCount, parsed.triangleCount, string.IsNullOrWhiteSpace(parsed.parser) ? "(none)" : parsed.parser);
+                ? (true, string.Empty, normalizedStage, meshCount, triangleCount, string.IsNullOrWhiteSpace(parsed.parser) ? "(none)" : parsed.parser)
+                : (false, string.IsNullOrWhiteSpace(parsed.error) ? "parse-failed" : $"{parsed.error} | {parsed.stack}", normalizedStage, meshCount, triangleCount, string.IsNullOrWhiteSpace(parsed.parser) ? "(none)" : parsed.parser);
         }
         catch
         {
@@ -436,6 +484,7 @@ public sealed class StepModelPreviewControl : UserControl
 
     private void RecordDiagnostics(bool isSuccess, string errorCode, string stage, string category, string message, long fileSizeBytes, string fileName, string sourcePath, string details)
     {
+        var safeStage = string.IsNullOrWhiteSpace(stage) ? "js-parse" : stage;
         _diagnosticsLog?.RecordAttempt(
             fileName: string.IsNullOrWhiteSpace(fileName) ? "(unknown)" : fileName,
             filePath: sourcePath ?? string.Empty,
@@ -443,7 +492,7 @@ public sealed class StepModelPreviewControl : UserControl
             isSuccess: isSuccess,
             errorCode: errorCode ?? string.Empty,
             failureCategory: string.IsNullOrWhiteSpace(category) ? "STEP_PREVIEW" : category,
-            message: $"[{stage}] {message}",
+            message: $"[{safeStage}] {message}",
             diagnosticDetails: details,
             stackTrace: isSuccess ? string.Empty : StepParsingDiagnosticsLog.BuildCallSiteTrace(),
             source: "step-preview");
@@ -452,28 +501,30 @@ public sealed class StepModelPreviewControl : UserControl
 
     private async Task<string?> ExecuteScriptSafeAsync(string script, string stageName, string sourceFileName, string sourcePath, long fileSizeBytes, string parser)
     {
+        var safeStage = string.IsNullOrWhiteSpace(stageName) ? "js-parse" : stageName;
         try
         {
             if (_webView.CoreWebView2 is null)
             {
-                RecordDiagnostics(false, "STEP_WEBVIEW_SCRIPT_ERROR", stageName, "STEP_PREVIEW", "WebView2 CoreWebView2 is null before script execution.", fileSizeBytes, sourceFileName, sourcePath,
-                    BuildDiagnosticDetails(parser, stageName, 0, 0, "CoreWebView2 unavailable", fileSizeBytes, sourceFileName, sourcePath, "script-not-run"));
+                RecordDiagnostics(false, "STEP_WEBVIEW_SCRIPT_ERROR", safeStage, "STEP_PREVIEW", "WebView2 CoreWebView2 is null before script execution.", fileSizeBytes, sourceFileName, sourcePath,
+                    BuildDiagnosticDetails(parser, safeStage, 0, 0, "CoreWebView2 unavailable", fileSizeBytes, sourceFileName, sourcePath, "script-not-run"));
                 return null;
             }
 
-            var scriptExpression = script.Trim().TrimEnd(';');
-            var wrappedScript = $"(async () => {{ try {{ const value = await (async () => {{ return await ({scriptExpression}); }})() ; return JSON.stringify({{ ok: true, result: value }}); }} catch (e) {{ return JSON.stringify({{ ok: false, error: e?.message || 'script-failed', stack: e?.stack || '' }}); }} }})()";
+            var wrappedScript = BuildScriptEnvelope(script);
             var raw = await _webView.CoreWebView2.ExecuteScriptAsync(wrappedScript);
-            if (string.IsNullOrWhiteSpace(raw))
+            if (IsNullishScriptResult(raw))
             {
+                await RecordEmptyScriptResultAsync(script, safeStage, sourceFileName, sourcePath, fileSizeBytes, parser, raw);
                 return null;
             }
 
             using var doc = JsonDocument.Parse(raw);
             var root = doc.RootElement;
             var json = root.ValueKind == JsonValueKind.String ? root.GetString() : root.GetRawText();
-            if (string.IsNullOrWhiteSpace(json))
+            if (IsNullishScriptResult(json))
             {
+                await RecordEmptyScriptResultAsync(script, safeStage, sourceFileName, sourcePath, fileSizeBytes, parser, json);
                 return null;
             }
 
@@ -484,13 +535,14 @@ public sealed class StepModelPreviewControl : UserControl
             {
                 var error = envelope.TryGetProperty("error", out var errEl) ? errEl.GetString() : "script-failed";
                 var stack = envelope.TryGetProperty("stack", out var stEl) ? stEl.GetString() : string.Empty;
-                RecordDiagnostics(false, "STEP_WEBVIEW_SCRIPT_ERROR", stageName, "STEP_PREVIEW", $"WebView2 script execution failed at stage '{stageName}'.", fileSizeBytes, sourceFileName, sourcePath,
-                    BuildDiagnosticDetails(parser, stageName, 0, 0, $"{error}; stack={stack}", fileSizeBytes, sourceFileName, sourcePath, $"script={script}"));
+                RecordDiagnostics(false, "STEP_WEBVIEW_SCRIPT_ERROR", safeStage, "STEP_PREVIEW", $"WebView2 script execution failed at stage '{safeStage}'.", fileSizeBytes, sourceFileName, sourcePath,
+                    BuildDiagnosticDetails(parser, safeStage, 0, 0, $"{error}; stack={stack}", fileSizeBytes, sourceFileName, sourcePath, $"script={script}"));
                 return null;
             }
 
-            if (!envelope.TryGetProperty("result", out var resultEl))
+            if (!envelope.TryGetProperty("value", out var resultEl))
             {
+                await RecordEmptyScriptResultAsync(script, safeStage, sourceFileName, sourcePath, fileSizeBytes, parser, "missing-value");
                 return null;
             }
 
@@ -498,10 +550,96 @@ public sealed class StepModelPreviewControl : UserControl
         }
         catch (Exception ex)
         {
-            RecordDiagnostics(false, "STEP_WEBVIEW_SCRIPT_ERROR", stageName, "STEP_PREVIEW", $"WebView2 script execution failed at stage '{stageName}'.", fileSizeBytes, sourceFileName, sourcePath,
-                BuildDiagnosticDetails(parser, stageName, 0, 0, ex.ToString(), fileSizeBytes, sourceFileName, sourcePath, $"hresult=0x{ex.HResult:X8}; script={script}"));
+            RecordDiagnostics(false, "STEP_WEBVIEW_SCRIPT_ERROR", safeStage, "STEP_PREVIEW", $"WebView2 script execution failed at stage '{safeStage}'.", fileSizeBytes, sourceFileName, sourcePath,
+                BuildDiagnosticDetails(parser, safeStage, 0, 0, ex.ToString(), fileSizeBytes, sourceFileName, sourcePath, $"hresult=0x{ex.HResult:X8}; script={script}"));
             return null;
         }
+    }
+
+    private static string BuildScriptEnvelope(string script)
+    {
+        var scriptJson = JsonSerializer.Serialize(script ?? string.Empty);
+        return $$"""
+(function(){
+  try {
+    const __script = {{scriptJson}};
+    const __fn = async () => {
+      return await eval(__script);
+    };
+
+    return __fn()
+      .then(r => JSON.stringify({ ok: true, value: r }))
+      .catch(e => JSON.stringify({ ok: false, error: String(e?.message || e || 'script-failed'), stack: String(e?.stack || '') }));
+  } catch (e) {
+    return JSON.stringify({ ok: false, error: String(e?.message || e || 'script-failed'), stack: String(e?.stack || '') });
+  }
+})();
+""";
+    }
+
+    private async Task RecordEmptyScriptResultAsync(string script, string stageName, string sourceFileName, string sourcePath, long fileSizeBytes, string parser, string? raw)
+    {
+        var logs = DrainConsoleBuffer();
+        var readyState = await GetDocumentReadyStateAsync();
+        RecordDiagnostics(false, "STEP_JS_EMPTY_RESULT", stageName, "STEP_PREVIEW", "WebView2 returned empty/null/undefined script result.", fileSizeBytes, sourceFileName, sourcePath,
+            BuildDiagnosticDetails(parser, stageName, 0, 0, "empty-script-result", fileSizeBytes, sourceFileName, sourcePath, $"raw={raw}; scriptLength={script.Length}; readyState={readyState}; console={logs}"));
+    }
+
+    private static bool IsNullishScriptResult(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return true;
+        }
+
+        var normalized = value.Trim().Trim('"').Trim();
+        return normalized.Length == 0
+               || string.Equals(normalized, "null", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(normalized, "undefined", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsScriptBooleanTrue(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        var normalized = raw.Trim().Trim('"').Trim();
+        return string.Equals(normalized, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<bool> WaitForViewerReadyAsync(string sourceFileName, string sourcePath, long fileSizeBytes, string parser, int timeoutMs = ViewerReadyTimeoutMs)
+    {
+        var sw = Stopwatch.StartNew();
+        string? lastReadyState = string.Empty;
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            var readyRaw = await ExecuteScriptSafeAsync("window.stepViewer && window.stepViewer.isReady && window.stepViewer.isReady()", "viewer-ready", sourceFileName, sourcePath, fileSizeBytes, parser);
+            if (IsScriptBooleanTrue(readyRaw))
+            {
+                return true;
+            }
+
+            lastReadyState = await GetDocumentReadyStateAsync();
+            await Task.Delay(100);
+        }
+
+        var logs = DrainConsoleBuffer();
+        RecordDiagnostics(false, "STEP_VIEWER_NOT_READY", "viewer-ready", "STEP_PREVIEW", "STEP viewer did not report ready state before timeout.", fileSizeBytes, sourceFileName, sourcePath,
+            BuildDiagnosticDetails(parser, "viewer-ready", 0, 0, string.Empty, fileSizeBytes, sourceFileName, sourcePath, $"timeoutMs={timeoutMs}; readyState={lastReadyState}; console={logs}"));
+        return false;
+    }
+
+    private async Task<string> GetDocumentReadyStateAsync()
+    {
+        var readyStateRaw = await ExecuteScriptSafeAsync("document.readyState", "viewer-ready", _lastLoadedFileName, _lastLoadedSourcePath, _lastLoadedBytes.LongLength, "(none)");
+        if (string.IsNullOrWhiteSpace(readyStateRaw))
+        {
+            return "(unknown)";
+        }
+
+        return readyStateRaw.Trim().Trim('"').Trim();
     }
 
     private static string BuildDiagnosticDetails(string parser, string stage, int meshes, int triangles, string jsError, long fileSizeBytes, string fileName, string sourcePath, string extra)
@@ -531,6 +669,14 @@ public sealed class StepModelPreviewControl : UserControl
         await _webView.EnsureCoreWebView2Async();
         _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
         _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+        _webView.CoreWebView2.ConsoleMessageReceived += (_, args) => AppendConsoleLog($"[{args.Source}:{args.LineNumber}] {args.Message}");
+        _webView.CoreWebView2.ProcessFailed += (_, args) =>
+        {
+            var reason = args.Reason.ToString();
+            AppendConsoleLog($"[ProcessFailed] kind={args.ProcessFailedKind}; reason={reason}");
+            RecordDiagnostics(false, "STEP_WEBVIEW_PROCESS_FAILED", "viewer-ready", "STEP_PREVIEW", "WebView2 process failure detected.", _lastLoadedBytes.LongLength, _lastLoadedFileName, _lastLoadedSourcePath,
+                BuildDiagnosticDetails("(none)", "viewer-ready", 0, 0, reason, _lastLoadedBytes.LongLength, _lastLoadedFileName, _lastLoadedSourcePath, $"processKind={args.ProcessFailedKind}"));
+        };
         _navigationReady = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _webView.CoreWebView2.NavigationCompleted += (_, args) =>
         {
@@ -560,6 +706,24 @@ public sealed class StepModelPreviewControl : UserControl
         }
 
         await ExecuteScriptSafeAsync("window.resizeRenderer?.();", "render-resize", _lastLoadedFileName, _lastLoadedSourcePath, _lastLoadedBytes.LongLength, "(none)");
+    }
+
+    private void AppendConsoleLog(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        lock (_consoleLogSync)
+        {
+            if (_consoleLogBuffer.Count >= ConsoleLogLimit)
+            {
+                _consoleLogBuffer.RemoveAt(0);
+            }
+
+            _consoleLogBuffer.Add(message);
+        }
     }
 
     private void OpenEnlargedViewer()
@@ -639,7 +803,7 @@ public sealed class StepModelPreviewControl : UserControl
         base.Dispose(disposing);
     }
 
-    private sealed record StepRenderResult(bool ok, string? error, string? stage, int meshCount = 0, int triangleCount = 0, string? parser = null, string? stack = null);
+    private sealed record StepRenderResult(bool ok, string? error, string? stage, int meshCount = 0, int triangleCount = 0, string? parser = null, string? stack = null, int meshes = 0, int triangles = 0);
 
     private static string BuildHtmlShell()
     {
@@ -660,6 +824,8 @@ public sealed class StepModelPreviewControl : UserControl
   <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/OBJLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/occt-import-js.js"></script>
   <script>
+    window.__stepViewerReady = false;
+    window.__stepViewerVersion = '0.0.0';
     const viewport = document.getElementById('viewport');
     const scene = new THREE.Scene();
     scene.background = new THREE.Color('#f8fafc');
@@ -905,6 +1071,16 @@ public sealed class StepModelPreviewControl : UserControl
       return null;
     }
 
+    function detectFileType(fileName) {
+      const value = (fileName || '').toLowerCase();
+      if (value.endsWith('.stl')) return 'stl';
+      if (value.endsWith('.obj')) return 'obj';
+      if (value.endsWith('.iges') || value.endsWith('.igs')) return 'iges';
+      if (value.endsWith('.brep') || value.endsWith('.brp')) return 'brep';
+      if (value.endsWith('.sldprt')) return 'sldprt';
+      return 'step';
+    }
+
     async function renderModelFromBase64(base64, metadata) {
       if (!base64 || base64.length === 0) {
         clearScene();
@@ -1042,6 +1218,38 @@ public sealed class StepModelPreviewControl : UserControl
     resizeRenderer();
     animate();
     window.addEventListener('resize', resizeRenderer);
+
+    window.stepViewer = {
+      isReady: () => window.__stepViewerReady === true,
+      parseStepBase64: async (b64, fileName) => {
+        try {
+          const fileType = detectFileType(fileName);
+          const value = await renderModelFromBase64(b64, { fileName: fileName || '', fileType });
+          return {
+            ok: !!value?.ok,
+            meshes: value?.meshCount || 0,
+            triangles: value?.triangleCount || 0,
+            parser: value?.parser || '(none)',
+            stage: value?.stage || 'js-parse',
+            error: value?.error || '',
+            stack: value?.stack || ''
+          };
+        } catch (err) {
+          return {
+            ok: false,
+            meshes: 0,
+            triangles: 0,
+            parser: '(none)',
+            stage: 'js-parse',
+            error: String(err?.message || err || 'parse-failed'),
+            stack: String(err?.stack || '')
+          };
+        }
+      }
+    };
+
+    window.__stepViewerVersion = '1.0.0';
+    window.__stepViewerReady = true;
   </script>
 </body>
 </html>
