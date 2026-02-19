@@ -12,14 +12,22 @@ public sealed class StepModelPreviewControl : UserControl
     private readonly WebView2 _webView;
     private readonly Label _statusLabel;
     private bool _initialized;
+    private bool _webViewLifecycleHooked;
+    private bool _coreInitCompleted;
+    private bool _viewerNavigationCompleted;
+    private string _lastNavigationUri = "about:blank";
     private int _renderVersion;
     private TaskCompletionSource<bool>? _navigationReady;
+    private TaskCompletionSource<bool>? _coreInitReady;
+    private readonly SemaphoreSlim _loadGate = new(1, 1);
+    private CancellationTokenSource? _loadCts;
     private readonly StepFileParser _stepFileParser = new();
     private readonly SolidModelFileTypeDetector _fileTypeDetector = new();
     private byte[] _lastLoadedBytes = Array.Empty<byte>();
     private string _lastLoadedFileName = string.Empty;
     private string _lastLoadedSourcePath = string.Empty;
-    private static readonly string HtmlShell = BuildHtmlShell();
+    private const string ViewerAssetRelativePath = "Assets/step-viewer.html";
+    private const string ViewerAssetUri = "https://step-viewer.local/step-viewer.html";
     private readonly StepParsingDiagnosticsLog? _diagnosticsLog;
     private readonly object _consoleLogSync = new();
     private readonly List<string> _consoleLogBuffer = [];
@@ -83,12 +91,19 @@ END-ISO-10303-21;
         _lastLoadedFileName = nameSnapshot;
         _lastLoadedSourcePath = pathSnapshot;
         var version = Interlocked.Increment(ref _renderVersion);
-        _ = LoadStepInternalAsync(bytesSnapshot, nameSnapshot, pathSnapshot, version);
+        var cts = new CancellationTokenSource();
+        var previous = Interlocked.Exchange(ref _loadCts, cts);
+        previous?.Cancel();
+        previous?.Dispose();
+        _ = LoadStepInternalAsync(bytesSnapshot, nameSnapshot, pathSnapshot, version, cts.Token);
     }
 
     public void ClearPreview()
     {
         Interlocked.Increment(ref _renderVersion);
+        var previous = Interlocked.Exchange(ref _loadCts, null);
+        previous?.Cancel();
+        previous?.Dispose();
         _ = ClearPreviewAsync();
     }
 
@@ -143,8 +158,9 @@ END-ISO-10303-21;
 
     public async Task<bool> RunStepSelfTestAsync()
     {
-        await EnsureInitializedAsync();
-        if (!await WaitForViewerReadyAsync("embedded-self-test.step", "embedded://self-test", 0, "self-test", ViewerReadyTimeoutMs))
+        using var selfTestCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await EnsureInitializedAsync("embedded-self-test.step", "embedded://self-test", 0, "self-test", selfTestCts.Token);
+        if (!await WaitForViewerReadyAsync("embedded-self-test.step", "embedded://self-test", 0, "self-test", selfTestCts.Token, ViewerReadyTimeoutMs))
         {
             return false;
         }
@@ -185,15 +201,19 @@ END-ISO-10303-21;
         }
     }
 
-    private async Task LoadStepInternalAsync(byte[] stepBytes, string sourceFileName, string sourcePath, int version)
+    private async Task LoadStepInternalAsync(byte[] stepBytes, string sourceFileName, string sourcePath, int version, CancellationToken cancellationToken)
     {
-        ClearConsoleBuffer();
-        await ResetViewerForNextParseAsync();
-
-        if (version != _renderVersion)
+        await _loadGate.WaitAsync(cancellationToken);
+        try
         {
-            return;
-        }
+            cancellationToken.ThrowIfCancellationRequested();
+            ClearConsoleBuffer();
+            await ResetViewerForNextParseAsync(cancellationToken);
+
+            if (version != _renderVersion)
+            {
+                return;
+            }
 
         var parser = "(none)";
         var stage = "validate-bytes";
@@ -201,7 +221,7 @@ END-ISO-10303-21;
         var triangleCount = 0;
         var jsError = string.Empty;
 
-        RecordDiagnostics(true, string.Empty, stage, "STEP_PREVIEW", $"STEP preview stage '{stage}' started.", stepBytes.LongLength, sourceFileName, sourcePath,
+            RecordDiagnostics(true, string.Empty, stage, "STEP_PREVIEW", $"STEP preview stage '{stage}' started.", stepBytes.LongLength, sourceFileName, sourcePath,
             BuildDiagnosticDetails(parser, stage, meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, "payload-received"));
 
         if (stepBytes is null || stepBytes.Length < 32)
@@ -262,14 +282,14 @@ END-ISO-10303-21;
                 }
             }
 
-            await EnsureInitializedAsync();
+            await EnsureInitializedAsync(sourceFileName, sourcePath, stepBytes.LongLength, parser, cancellationToken);
             if (version != _renderVersion)
             {
                 return;
             }
 
             stage = "viewer-ready";
-            if (!await WaitForViewerReadyAsync(sourceFileName, sourcePath, stepBytes.LongLength, parser, ViewerReadyTimeoutMs))
+            if (!await WaitForViewerReadyAsync(sourceFileName, sourcePath, stepBytes.LongLength, parser, cancellationToken, ViewerReadyTimeoutMs))
             {
                 ShowError("STEP viewer is not ready yet");
                 return;
@@ -294,18 +314,47 @@ END-ISO-10303-21;
             var fileNameArg = JsonSerializer.Serialize(sourceFileName);
 
             stage = "js-parse";
-            var resultRaw = await ExecuteScriptSafeAsync($"window.stepViewer.parseStepBase64({payload}, {fileNameArg});", stage, sourceFileName, sourcePath, stepBytes.LongLength, parser);
-            if (string.IsNullOrWhiteSpace(resultRaw))
+            const int maxAttempts = 3;
+            var backoffMs = new[] { 250, 750, 1750 };
+            string? resultRaw = null;
+            (bool Ok, string Error, string Stage, int MeshCount, int TriangleCount, string Parser) result = (false, "parse-failed", stage, 0, 0, parser);
+
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                ShowError("Unable to render STEP geometry (script-empty-result)");
-                var logs = DrainConsoleBuffer();
-                var readyState = await GetDocumentReadyStateAsync();
-                RecordDiagnostics(false, "STEP_JS_EMPTY_RESULT", "js-parse", "STEP_PREVIEW", "Unable to render STEP geometry (script-empty-result)", stepBytes.LongLength, sourceFileName, sourcePath,
-                    BuildDiagnosticDetails(parser, "js-parse", meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, $"render-script-returned-empty; scriptLength={payload.Length}; readyState={readyState}; console={logs}"));
-                return;
+                cancellationToken.ThrowIfCancellationRequested();
+                resultRaw = await ExecuteScriptSafeAsync($"window.stepViewer.parseStepBase64({payload}, {fileNameArg});", stage, sourceFileName, sourcePath, stepBytes.LongLength, parser);
+                if (string.IsNullOrWhiteSpace(resultRaw))
+                {
+                    if (attempt == maxAttempts)
+                    {
+                        ShowError("Unable to render STEP geometry (script-empty-result)");
+                        var logs = DrainConsoleBuffer();
+                        var readyState = await GetDocumentReadyStateAsync();
+                        RecordDiagnostics(false, "STEP_JS_EMPTY_RESULT", "js-parse", "STEP_PREVIEW", "Unable to render STEP geometry (script-empty-result)", stepBytes.LongLength, sourceFileName, sourcePath,
+                            BuildDiagnosticDetails(parser, "js-parse", meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, $"attempt={attempt}/{maxAttempts}; render-script-returned-empty; scriptLength={payload.Length}; readyState={readyState}; console={logs}"));
+                        return;
+                    }
+
+                    RecordDiagnostics(false, "STEP_JS_RETRY", "js-parse", "STEP_PREVIEW", "STEP parse returned empty result; retrying.", stepBytes.LongLength, sourceFileName, sourcePath,
+                        BuildDiagnosticDetails(parser, "js-parse", meshCount, triangleCount, jsError, stepBytes.LongLength, sourceFileName, sourcePath, $"attempt={attempt}/{maxAttempts}; backoffMs={backoffMs[attempt - 1]}"));
+                    await Task.Delay(backoffMs[attempt - 1], cancellationToken);
+                    continue;
+                }
+
+                result = ParseScriptResult(resultRaw);
+                if (result.Ok || !result.Error.Contains("empty-geometry", StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                if (attempt < maxAttempts)
+                {
+                    RecordDiagnostics(false, "STEP_JS_RETRY", "js-parse", "STEP_PREVIEW", "STEP parse returned retryable result; retrying.", stepBytes.LongLength, sourceFileName, sourcePath,
+                        BuildDiagnosticDetails(parser, "js-parse", meshCount, triangleCount, result.Error, stepBytes.LongLength, sourceFileName, sourcePath, $"attempt={attempt}/{maxAttempts}; backoffMs={backoffMs[attempt - 1]}"));
+                    await Task.Delay(backoffMs[attempt - 1], cancellationToken);
+                }
             }
 
-            var result = ParseScriptResult(resultRaw);
             parser = string.IsNullOrWhiteSpace(result.Parser) ? parser : result.Parser;
             meshCount = result.MeshCount;
             triangleCount = result.TriangleCount;
@@ -346,6 +395,19 @@ END-ISO-10303-21;
             RecordDiagnostics(false, "STEP_RENDER_FAILED", stage, "STEP_PREVIEW", message, stepBytes.LongLength, sourceFileName, sourcePath,
                 BuildDiagnosticDetails(parser, stage, meshCount, triangleCount, ex.ToString(), stepBytes.LongLength, sourceFileName, sourcePath, $"pipeline-exception; console={logs}"));
         }
+        }
+        catch (OperationCanceledException)
+        {
+            RecordDiagnostics(false, "STEP_LOAD_CANCELLED", "load-cancelled", "STEP_PREVIEW", "STEP load was cancelled due to a newer request.", stepBytes.LongLength, sourceFileName, sourcePath,
+                BuildDiagnosticDetails("(none)", "load-cancelled", 0, 0, "cancelled", stepBytes.LongLength, sourceFileName, sourcePath, $"version={version}"));
+        }
+        finally
+        {
+            if (_loadGate.CurrentCount == 0)
+            {
+                _loadGate.Release();
+            }
+        }
     }
 
     private async Task ClearPreviewAsync()
@@ -372,7 +434,7 @@ END-ISO-10303-21;
         }
     }
 
-    private async Task ResetViewerForNextParseAsync()
+    private async Task ResetViewerForNextParseAsync(CancellationToken cancellationToken)
     {
         _statusLabel.Visible = true;
         _webView.Visible = false;
@@ -384,6 +446,7 @@ END-ISO-10303-21;
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             await ExecuteScriptSafeAsync("window.resetViewerState?.();", "render-reset", _lastLoadedFileName, _lastLoadedSourcePath, _lastLoadedBytes.LongLength, "(none)");
         }
         catch (Exception ex)
@@ -615,12 +678,21 @@ END-ISO-10303-21;
         return string.Equals(normalized, "true", StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task<bool> WaitForViewerReadyAsync(string sourceFileName, string sourcePath, long fileSizeBytes, string parser, int timeoutMs = ViewerReadyTimeoutMs)
+    private async Task<bool> WaitForViewerReadyAsync(string sourceFileName, string sourcePath, long fileSizeBytes, string parser, CancellationToken cancellationToken, int timeoutMs = ViewerReadyTimeoutMs)
     {
+        if (!_coreInitCompleted || !_viewerNavigationCompleted)
+        {
+            RecordDiagnostics(false, "STEP_VIEWER_NAV_NOT_READY", "viewer-ready", "STEP_PREVIEW", "Viewer readiness polling blocked until initialization and navigation are complete.", fileSizeBytes, sourceFileName, sourcePath,
+                BuildDiagnosticDetails(parser, "viewer-ready", 0, 0, string.Empty, fileSizeBytes, sourceFileName, sourcePath, $"initCompleted={_coreInitCompleted}; navigationCompleted={_viewerNavigationCompleted}; lastUri={_lastNavigationUri}"));
+            return false;
+        }
+
         var sw = Stopwatch.StartNew();
-        string? lastReadyState = string.Empty;
+        string lastReadyState = "(unknown)";
+        string viewerStatus = "null";
         while (sw.ElapsedMilliseconds < timeoutMs)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var readyRaw = await ExecuteScriptSafeAsync("window.stepViewer && window.stepViewer.isReady && window.stepViewer.isReady()", "viewer-ready", sourceFileName, sourcePath, fileSizeBytes, parser);
             if (IsScriptBooleanTrue(readyRaw))
             {
@@ -628,12 +700,13 @@ END-ISO-10303-21;
             }
 
             lastReadyState = await GetDocumentReadyStateAsync();
-            await Task.Delay(100);
+            viewerStatus = await GetViewerStatusJsonAsync(sourceFileName, sourcePath, fileSizeBytes, parser);
+            await Task.Delay(100, cancellationToken);
         }
 
         var logs = DrainConsoleBuffer();
         RecordDiagnostics(false, "STEP_VIEWER_NOT_READY", "viewer-ready", "STEP_PREVIEW", "STEP viewer did not report ready state before timeout.", fileSizeBytes, sourceFileName, sourcePath,
-            BuildDiagnosticDetails(parser, "viewer-ready", 0, 0, string.Empty, fileSizeBytes, sourceFileName, sourcePath, $"timeoutMs={timeoutMs}; readyState={lastReadyState}; console={logs}"));
+            BuildDiagnosticDetails(parser, "viewer-ready", 0, 0, string.Empty, fileSizeBytes, sourceFileName, sourcePath, $"timeoutMs={timeoutMs}; initCompleted={_coreInitCompleted}; navigationCompleted={_viewerNavigationCompleted}; lastUri={_lastNavigationUri}; readyState={lastReadyState}; viewerStatus={viewerStatus}; console={logs}"));
         return false;
     }
 
@@ -646,6 +719,12 @@ END-ISO-10303-21;
         }
 
         return readyStateRaw.Trim().Trim('"').Trim();
+    }
+
+    private async Task<string> GetViewerStatusJsonAsync(string sourceFileName, string sourcePath, long fileSizeBytes, string parser)
+    {
+        var raw = await ExecuteScriptSafeAsync("JSON.stringify(window.__stepViewerStatus || null)", "viewer-ready", sourceFileName, sourcePath, fileSizeBytes, parser);
+        return string.IsNullOrWhiteSpace(raw) ? "null" : raw.Trim().Trim('"').Replace("\\\"", "\"");
     }
 
     private static string BuildDiagnosticDetails(string parser, string stage, int meshes, int triangles, string jsError, long fileSizeBytes, string fileName, string sourcePath, string extra)
@@ -665,41 +744,121 @@ END-ISO-10303-21;
         return sample.Contains("ISO-10303-21", StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task EnsureInitializedAsync()
+    private async Task EnsureInitializedAsync(string sourceFileName, string sourcePath, long fileSizeBytes, string parser, CancellationToken cancellationToken)
     {
         if (_initialized)
         {
             return;
         }
 
-        await _webView.EnsureCoreWebView2Async();
-        _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
-        _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
-        _webView.CoreWebView2.ProcessFailed += (_, args) =>
-        {
-            var reason = args.Reason.ToString();
-            AppendConsoleLog($"[ProcessFailed] kind={args.ProcessFailedKind}; reason={reason}");
-            RecordDiagnostics(false, "STEP_WEBVIEW_PROCESS_FAILED", "viewer-ready", "STEP_PREVIEW", "WebView2 process failure detected.", _lastLoadedBytes.LongLength, _lastLoadedFileName, _lastLoadedSourcePath,
-                BuildDiagnosticDetails("(none)", "viewer-ready", 0, 0, reason, _lastLoadedBytes.LongLength, _lastLoadedFileName, _lastLoadedSourcePath, $"processKind={args.ProcessFailedKind}"));
-        };
+        _coreInitReady = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _navigationReady = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _webView.CoreWebView2.NavigationCompleted += (_, args) =>
+        _viewerNavigationCompleted = false;
+        _coreInitCompleted = false;
+
+        _webView.CoreWebView2InitializationCompleted += (_, args) =>
         {
+            _coreInitCompleted = args.IsSuccess;
+            var details = $"isSuccess={args.IsSuccess}; exception={args.InitializationException?.Message ?? string.Empty}";
+            RecordDiagnostics(args.IsSuccess, args.IsSuccess ? string.Empty : "STEP_WEBVIEW_INIT_FAILED", "core-init", "STEP_PREVIEW", "WebView2 initialization completed.", fileSizeBytes, sourceFileName, sourcePath,
+                BuildDiagnosticDetails(parser, "core-init", 0, 0, args.InitializationException?.ToString() ?? string.Empty, fileSizeBytes, sourceFileName, sourcePath, details));
             if (args.IsSuccess)
             {
-                _navigationReady?.TrySetResult(true);
+                _coreInitReady?.TrySetResult(true);
             }
             else
             {
-                _navigationReady?.TrySetException(new InvalidOperationException("Failed to load STEP viewer shell."));
+                _coreInitReady?.TrySetException(args.InitializationException ?? new InvalidOperationException("WebView2 initialization failed."));
             }
         };
 
-        _webView.NavigateToString(HtmlShell);
+        await _webView.EnsureCoreWebView2Async();
+        _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+        _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+
+        if (!_webViewLifecycleHooked)
+        {
+            _webViewLifecycleHooked = true;
+            _webView.CoreWebView2.NavigationStarting += (_, args) =>
+            {
+                _lastNavigationUri = args.Uri ?? "(unknown)";
+                AppendConsoleLog($"[NavigationStarting] uri={_lastNavigationUri}");
+            };
+
+            _webView.CoreWebView2.NavigationCompleted += (_, args) =>
+            {
+                var uri = _webView.CoreWebView2.Source ?? _lastNavigationUri;
+                _lastNavigationUri = uri;
+                _viewerNavigationCompleted = args.IsSuccess && string.Equals(uri, ViewerAssetUri, StringComparison.OrdinalIgnoreCase);
+                AppendConsoleLog($"[NavigationCompleted] isSuccess={args.IsSuccess}; errorStatus={args.WebErrorStatus}; uri={uri}");
+                RecordDiagnostics(args.IsSuccess, args.IsSuccess ? string.Empty : "STEP_WEBVIEW_NAV_FAILED", "navigation-completed", "STEP_PREVIEW", "WebView2 navigation completed.", _lastLoadedBytes.LongLength, _lastLoadedFileName, _lastLoadedSourcePath,
+                    BuildDiagnosticDetails("(none)", "navigation-completed", 0, 0, args.WebErrorStatus.ToString(), _lastLoadedBytes.LongLength, _lastLoadedFileName, _lastLoadedSourcePath, $"isSuccess={args.IsSuccess}; uri={uri}"));
+                if (args.IsSuccess)
+                {
+                    _navigationReady?.TrySetResult(true);
+                }
+                else
+                {
+                    _navigationReady?.TrySetException(new InvalidOperationException($"Failed to load STEP viewer shell at {uri}."));
+                }
+            };
+
+            _webView.CoreWebView2.ProcessFailed += (_, args) =>
+            {
+                var reason = args.Reason.ToString();
+                var exitCode = GetProcessExitCodeSafe(args);
+                AppendConsoleLog($"[ProcessFailed] kind={args.ProcessFailedKind}; reason={reason}; exitCode={exitCode}");
+                RecordDiagnostics(false, "STEP_WEBVIEW_PROCESS_FAILED", "viewer-ready", "STEP_PREVIEW", "WebView2 process failure detected.", _lastLoadedBytes.LongLength, _lastLoadedFileName, _lastLoadedSourcePath,
+                    BuildDiagnosticDetails("(none)", "viewer-ready", 0, 0, reason, _lastLoadedBytes.LongLength, _lastLoadedFileName, _lastLoadedSourcePath, $"processKind={args.ProcessFailedKind}; exitCode={exitCode}"));
+            };
+
+            _webView.CoreWebView2.ConsoleMessageReceived += (_, args) =>
+            {
+                AppendConsoleLog($"[Console:{args.Level}] {args.Message}");
+            };
+        }
+
+        var viewerPath = ResolveViewerAssetPath();
+        if (!File.Exists(viewerPath))
+        {
+            RecordDiagnostics(false, "STEP_VIEWER_ASSET_MISSING", "asset-resolve", "STEP_PREVIEW", "STEP viewer asset missing on disk.", fileSizeBytes, sourceFileName, sourcePath,
+                BuildDiagnosticDetails(parser, "asset-resolve", 0, 0, string.Empty, fileSizeBytes, sourceFileName, sourcePath, $"resolvedPath={viewerPath}; uri={ViewerAssetUri}"));
+            throw new FileNotFoundException("STEP viewer asset missing.", viewerPath);
+        }
+
+        _webView.CoreWebView2.SetVirtualHostNameToFolderMapping("step-viewer.local", Path.GetDirectoryName(viewerPath)!, CoreWebView2HostResourceAccessKind.Allow);
+        AppendConsoleLog($"[ViewerAsset] path={viewerPath}; uri={ViewerAssetUri}");
+        RecordDiagnostics(true, string.Empty, "asset-resolve", "STEP_PREVIEW", "Resolved STEP viewer asset path.", fileSizeBytes, sourceFileName, sourcePath,
+            BuildDiagnosticDetails(parser, "asset-resolve", 0, 0, string.Empty, fileSizeBytes, sourceFileName, sourcePath, $"resolvedPath={viewerPath}; uri={ViewerAssetUri}"));
+
+        _webView.CoreWebView2.Navigate(ViewerAssetUri);
         _initialized = true;
+        if (_coreInitReady is not null)
+        {
+            await _coreInitReady.Task.WaitAsync(cancellationToken);
+        }
         if (_navigationReady is not null)
         {
-            await _navigationReady.Task;
+            await _navigationReady.Task.WaitAsync(cancellationToken);
+        }
+    }
+
+    private static string ResolveViewerAssetPath()
+    {
+        var baseDir = AppContext.BaseDirectory;
+        return Path.GetFullPath(Path.Combine(baseDir, ViewerAssetRelativePath));
+    }
+
+    private static string GetProcessExitCodeSafe(CoreWebView2ProcessFailedEventArgs args)
+    {
+        try
+        {
+            var value = args.GetType().GetProperty("ExitCode")?.GetValue(args);
+            return value?.ToString() ?? "n/a";
+        }
+        catch
+        {
+            return "n/a";
         }
     }
 
@@ -789,6 +948,10 @@ END-ISO-10303-21;
     {
         if (disposing)
         {
+            var previous = Interlocked.Exchange(ref _loadCts, null);
+            previous?.Cancel();
+            previous?.Dispose();
+            _loadGate.Dispose();
             _lastLoadedBytes = Array.Empty<byte>();
             _lastLoadedFileName = string.Empty;
             _lastLoadedSourcePath = string.Empty;
@@ -809,455 +972,4 @@ END-ISO-10303-21;
     }
 
     private sealed record StepRenderResult(bool ok, string? error, string? stage, int meshCount = 0, int triangleCount = 0, string? parser = null, string? stack = null, int meshes = 0, int triangles = 0);
-
-    private static string BuildHtmlShell()
-    {
-        return """
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <style>
-    html, body, #viewport { margin:0; padding:0; width:100%; height:100%; background:#f8fafc; overflow:hidden; }
-  </style>
-</head>
-<body>
-  <div id="viewport"></div>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/STLLoader.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/OBJLoader.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/occt-import-js.js"></script>
-  <script>
-    window.__stepViewerReady = false;
-    window.__stepViewerVersion = '0.0.0';
-    const viewport = document.getElementById('viewport');
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#f8fafc');
-
-    const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 5000);
-    camera.position.set(1.2, 0.9, 1.5);
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(window.devicePixelRatio || 1);
-    viewport.appendChild(renderer.domElement);
-
-    const controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.enablePan = true;
-    controls.enableZoom = true;
-    controls.target.set(0, 0, 0);
-
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x6f7a88, 0.95));
-    const keyLight = new THREE.DirectionalLight(0xffffff, 0.75);
-    keyLight.position.set(3, 6, 5);
-    scene.add(keyLight);
-
-    let activeMeshRoot = null;
-    let occtModulePromise = null;
-
-    function base64ToUint8Array(base64) {
-      const raw = atob(base64);
-      const bytes = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; i++) {
-        bytes[i] = raw.charCodeAt(i);
-      }
-      return bytes;
-    }
-
-    function result(ok, stage, error, stack, parser, meshCount, triangleCount) {
-      return { ok, stage, error: error || '', stack: stack || '', parser: parser || '(none)', meshCount: meshCount || 0, triangleCount: triangleCount || 0 };
-    }
-
-    function clearScene() {
-      if (!activeMeshRoot) {
-        return;
-      }
-
-      scene.remove(activeMeshRoot);
-      activeMeshRoot.traverse(node => {
-        if (node.geometry) {
-          node.geometry.dispose();
-        }
-
-        if (node.material) {
-          if (Array.isArray(node.material)) {
-            node.material.forEach(material => material.dispose());
-          } else {
-            node.material.dispose();
-          }
-        }
-      });
-
-      activeMeshRoot = null;
-    }
-
-    async function getOcctModule() {
-      if (!occtModulePromise) {
-        occtModulePromise = occtimportjs({
-          locateFile(path) {
-            return `https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/${path}`;
-          }
-        });
-      }
-
-      return occtModulePromise;
-    }
-
-    function decodeStepText(bytes) {
-      try {
-        const decoded = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-        return decoded || '';
-      } catch {
-        return '';
-      }
-    }
-
-    function validateStepContent(bytes) {
-      const sample = decodeStepText(bytes.subarray(0, Math.min(bytes.length, 8192))).toUpperCase();
-      if (!sample.includes('ISO-10303-21') && !sample.includes('ISO10303-21')) {
-        return result(false, 'validate-bytes', 'invalid-step-header');
-      }
-
-      if (!sample.includes('HEADER;') || !sample.includes('DATA;')) {
-        return result(false, 'validate-bytes', 'invalid-step-body');
-      }
-
-      return result(true, 'validate-bytes', '');
-    }
-
-    function fitCameraToObject(object3D) {
-      const box = new THREE.Box3().setFromObject(object3D);
-      const size = box.getSize(new THREE.Vector3());
-      const center = box.getCenter(new THREE.Vector3());
-      const maxDim = Math.max(size.x, size.y, size.z, 0.001);
-      const distance = maxDim * 2.4;
-
-      controls.target.copy(center);
-      camera.position.set(center.x + distance, center.y + distance * 0.7, center.z + distance);
-      camera.near = Math.max(maxDim / 1000, 0.001);
-      camera.far = Math.max(maxDim * 200, 500);
-      camera.updateProjectionMatrix();
-      controls.update();
-    }
-
-    function buildMeshGroup(resultData) {
-      const group = new THREE.Group();
-      let triangleCount = 0;
-
-      for (const meshData of resultData.meshes || []) {
-        const attrs = meshData.attributes || {};
-        const positions = attrs.position && attrs.position.array ? attrs.position.array : null;
-        if (!positions || positions.length === 0) {
-          continue;
-        }
-
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-
-        if (attrs.normal && attrs.normal.array && attrs.normal.array.length > 0) {
-          geometry.setAttribute('normal', new THREE.Float32BufferAttribute(attrs.normal.array, 3));
-        } else {
-          geometry.computeVertexNormals();
-        }
-
-        if (meshData.index && meshData.index.array && meshData.index.array.length > 0) {
-          geometry.setIndex(meshData.index.array);
-          triangleCount += Math.floor(meshData.index.array.length / 3);
-        } else {
-          triangleCount += Math.floor(positions.length / 9);
-        }
-
-        const color = (meshData.color && meshData.color.length >= 3)
-          ? new THREE.Color(meshData.color[0], meshData.color[1], meshData.color[2])
-          : new THREE.Color('#4a78bb');
-
-        const material = new THREE.MeshStandardMaterial({
-          color,
-          roughness: 0.55,
-          metalness: 0.08,
-          side: THREE.DoubleSide
-        });
-
-        const mesh = new THREE.Mesh(geometry, material);
-        group.add(mesh);
-      }
-
-      return { group, triangleCount };
-    }
-
-    function parseWithOcct(occt, bytes) {
-      const binaryParsed = occt.ReadStepFile(bytes, null);
-      if (binaryParsed && binaryParsed.meshes && binaryParsed.meshes.length > 0) {
-        return { parsed: binaryParsed, parser: 'occt-binary' };
-      }
-
-      const asText = decodeStepText(bytes);
-      if (!asText) {
-        throw new Error('parse-binary-failed');
-      }
-
-      const textBytes = new TextEncoder().encode(asText);
-      const textParsed = occt.ReadStepFile(textBytes, null);
-      if (textParsed && textParsed.meshes && textParsed.meshes.length > 0) {
-        return { parsed: textParsed, parser: 'occt-text' };
-      }
-
-      throw new Error('parse-text-failed');
-    }
-
-    function parseStl(bytes) {
-      const loader = new THREE.STLLoader();
-      const geometry = loader.parse(bytes.buffer);
-      if (!geometry) {
-        throw new Error('parse-stl-failed');
-      }
-
-      const material = new THREE.MeshStandardMaterial({ color: new THREE.Color('#4a78bb'), roughness: 0.55, metalness: 0.08 });
-      const mesh = new THREE.Mesh(geometry, material);
-      const group = new THREE.Group();
-      group.add(mesh);
-      return { group, triangleCount: Math.max(0, Math.floor((geometry.index ? geometry.index.count : geometry.attributes.position.count) / 3)), parser: 'three-stl' };
-    }
-
-    function parseObj(bytes) {
-      const loader = new THREE.OBJLoader();
-      const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-      const group = loader.parse(text);
-      let triangleCount = 0;
-
-      group.traverse(node => {
-        if (!node.isMesh || !node.geometry) {
-          return;
-        }
-
-        node.material = new THREE.MeshStandardMaterial({ color: new THREE.Color('#4a78bb'), roughness: 0.55, metalness: 0.08, side: THREE.DoubleSide });
-        if (node.geometry.index) {
-          triangleCount += Math.floor(node.geometry.index.count / 3);
-        } else if (node.geometry.attributes && node.geometry.attributes.position) {
-          triangleCount += Math.floor(node.geometry.attributes.position.count / 3);
-        }
-      });
-
-      return { group, triangleCount, parser: 'three-obj' };
-    }
-
-    function getOcctReaders(occt, fileType) {
-      if (fileType === 'step') {
-        return [occt.ReadStepFile].filter(Boolean);
-      }
-
-      if (fileType === 'iges') {
-        return [occt.ReadIgesFile].filter(fn => typeof fn === 'function');
-      }
-
-      if (fileType === 'brep') {
-        return [occt.ReadBrepFile].filter(fn => typeof fn === 'function');
-      }
-
-      if (fileType === 'sldprt') {
-        return [occt.ReadStepFile, occt.ReadBrepFile, occt.ReadIgesFile].filter(fn => typeof fn === 'function');
-      }
-
-      return [];
-    }
-
-    function parseOcctWithReaders(bytes, readers) {
-      for (const reader of readers) {
-        try {
-          const parsed = reader(bytes, null);
-          if (parsed && parsed.meshes && parsed.meshes.length > 0) {
-            return parsed;
-          }
-        } catch {
-          // Try next parser strategy.
-        }
-      }
-
-      return null;
-    }
-
-    function detectFileType(fileName) {
-      const value = (fileName || '').toLowerCase();
-      if (value.endsWith('.stl')) return 'stl';
-      if (value.endsWith('.obj')) return 'obj';
-      if (value.endsWith('.iges') || value.endsWith('.igs')) return 'iges';
-      if (value.endsWith('.brep') || value.endsWith('.brp')) return 'brep';
-      if (value.endsWith('.sldprt')) return 'sldprt';
-      return 'step';
-    }
-
-    async function renderModelFromBase64(base64, metadata) {
-      if (!base64 || base64.length === 0) {
-        clearScene();
-        return result(false, 'validate-bytes', 'missing-file-data');
-      }
-
-      try {
-        const fileType = (metadata && metadata.fileType ? metadata.fileType : '').toLowerCase();
-
-        const bytes = base64ToUint8Array(base64);
-        let meshData;
-
-        if (fileType === 'step') {
-          const validation = validateStepContent(bytes);
-          if (!validation.ok) {
-            clearScene();
-            return validation;
-          }
-
-          let occt;
-          try {
-            occt = await getOcctModule();
-          } catch {
-            clearScene();
-            return result(false, 'js-parse', 'module-load-failed');
-          }
-
-          const parsedResult = parseWithOcct(occt, bytes);
-          const occtMeshData = buildMeshGroup(parsedResult.parsed || {});
-          meshData = { group: occtMeshData.group, triangleCount: occtMeshData.triangleCount, parser: parsedResult.parser };
-        } else if (fileType === 'stl') {
-          meshData = parseStl(bytes);
-        } else if (fileType === 'obj') {
-          meshData = parseObj(bytes);
-        } else if (fileType === 'iges' || fileType === 'brep' || fileType === 'sldprt') {
-          let occt;
-          try {
-            occt = await getOcctModule();
-          } catch {
-            clearScene();
-            return result(false, 'js-parse', 'module-load-failed');
-          }
-
-          const readers = getOcctReaders(occt, fileType);
-          if (!readers || readers.length === 0) {
-            clearScene();
-            return result(false, 'js-parse', 'parser-not-available');
-          }
-
-          const parsed = parseOcctWithReaders(bytes, readers);
-          if (!parsed) {
-            clearScene();
-            return result(false, 'js-parse', fileType === 'sldprt' ? 'sldprt-not-supported' : 'corrupted-or-invalid-step');
-          }
-
-          const occtMeshData = buildMeshGroup(parsed || {});
-          meshData = { group: occtMeshData.group, triangleCount: occtMeshData.triangleCount, parser: `occt-${fileType}` };
-        } else {
-          clearScene();
-          return result(false, 'validate-bytes', 'unsupported-format');
-        }
-
-        if (meshData.group.children.length === 0) {
-          clearScene();
-          return result(false, 'render', 'empty-geometry', '', meshData.parser, meshData.group.children.length, meshData.triangleCount);
-        }
-
-        clearScene();
-        activeMeshRoot = meshData.group;
-        scene.add(activeMeshRoot);
-        fitCameraToObject(activeMeshRoot);
-        return {
-          ok: true,
-          stage: 'render',
-          error: '',
-          meshCount: meshData.group.children.length,
-          triangleCount: meshData.triangleCount,
-          parser: meshData.parser
-        };
-      } catch (err) {
-        clearScene();
-        const parseError = (err && err.message) ? err.message : 'corrupted-or-invalid-step';
-        const parseStack = (err && err.stack) ? err.stack : '';
-        return result(false, 'js-parse', parseError, parseStack);
-      }
-    }
-
-    function resizeRenderer() {
-      const width = Math.max(viewport.clientWidth, 1);
-      const height = Math.max(viewport.clientHeight, 1);
-      renderer.setSize(width, height, false);
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-    }
-
-    function resetViewerState() {
-      clearScene();
-      renderer.renderLists.dispose();
-      controls.reset();
-    }
-
-    function disposeViewer() {
-      clearScene();
-      renderer.renderLists.dispose();
-      renderer.dispose();
-      controls.dispose();
-    }
-
-
-    function runStepSelfTest() {
-      const geometry = new THREE.BoxGeometry(1, 1, 1);
-      const material = new THREE.MeshStandardMaterial({ color: new THREE.Color('#4a78bb'), roughness: 0.55, metalness: 0.08 });
-      const mesh = new THREE.Mesh(geometry, material);
-      const group = new THREE.Group();
-      group.add(mesh);
-      clearScene();
-      activeMeshRoot = group;
-      scene.add(activeMeshRoot);
-      fitCameraToObject(activeMeshRoot);
-      return { ok: true, stage: 'render', error: '', meshCount: 1, triangleCount: 12, parser: 'self-test-box' };
-    }
-
-    window.renderModelFromBase64 = renderModelFromBase64;
-    window.runStepSelfTest = runStepSelfTest;
-    window.resizeRenderer = resizeRenderer;
-    window.resetViewerState = resetViewerState;
-    window.disposeViewer = disposeViewer;
-
-    function animate() {
-      requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
-    }
-
-    resizeRenderer();
-    animate();
-    window.addEventListener('resize', resizeRenderer);
-
-    window.stepViewer = {
-      isReady: () => window.__stepViewerReady === true,
-      parseStepBase64: async (b64, fileName) => {
-        try {
-          const fileType = detectFileType(fileName);
-          const value = await renderModelFromBase64(b64, { fileName: fileName || '', fileType });
-          return {
-            ok: !!value?.ok,
-            meshes: value?.meshCount || 0,
-            triangles: value?.triangleCount || 0,
-            parser: value?.parser || '(none)',
-            stage: value?.stage || 'js-parse',
-            error: value?.error || '',
-            stack: value?.stack || ''
-          };
-        } catch (err) {
-          return {
-            ok: false,
-            meshes: 0,
-            triangles: 0,
-            parser: '(none)',
-            stage: 'js-parse',
-            error: String(err?.message || err || 'parse-failed'),
-            stack: String(err?.stack || '')
-          };
-        }
-      }
-    };
-
-    window.__stepViewerVersion = '1.0.0';
-    window.__stepViewerReady = true;
-  </script>
-</body>
-</html>
-""";
-    }
 }
