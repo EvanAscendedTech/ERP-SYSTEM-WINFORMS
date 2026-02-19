@@ -995,7 +995,7 @@ public class QuoteDraftForm : Form
         return $"category={report.FailureCategory}; schema={schema}; entities={report.EntityCount}; surfaces={report.SurfaceEntityCount}; solids={report.SolidEntityCount}; details={report.DiagnosticDetails}; top={topEntities}";
     }
 
-    private string BuildParseFailureMessage(string fileName, string filePath, string errorCode, string reason, string source)
+    private string BuildParseFailureMessage(string? fileName, string? filePath, string errorCode, string reason, string source)
     {
         var attempts = _stepParsingDiagnosticsLog.GetEntries().Count(entry =>
             !entry.IsSuccess
