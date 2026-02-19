@@ -1,5 +1,3 @@
-using ERPSystem.WinForms.Data;
-
 namespace ERPSystem.WinForms.Services;
 
 public interface IStepPreviewCache
@@ -10,22 +8,46 @@ public interface IStepPreviewCache
 
 public sealed class StepPreviewCache : IStepPreviewCache
 {
-    private readonly QuoteRepository _quoteRepository;
+    private readonly string _cacheDirectory;
 
-    public StepPreviewCache(QuoteRepository quoteRepository)
+    public StepPreviewCache(string? cacheDirectory = null)
     {
-        _quoteRepository = quoteRepository;
+        _cacheDirectory = string.IsNullOrWhiteSpace(cacheDirectory)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ERPSystem", "StepGlbCache")
+            : cacheDirectory;
+
+        Directory.CreateDirectory(_cacheDirectory);
     }
 
-    public Task<byte[]?> TryGetGlbAsync(string stepHash, CancellationToken cancellationToken)
+    public async Task<byte[]?> TryGetGlbAsync(string stepHash, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return _quoteRepository.TryGetGlbCacheByHashAsync(stepHash);
+        var path = BuildCachePath(stepHash);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        return await File.ReadAllBytesAsync(path, cancellationToken);
     }
 
-    public Task SaveGlbAsync(string stepHash, byte[] glbBytes, string sourceFileName, CancellationToken cancellationToken)
+    public async Task SaveGlbAsync(string stepHash, byte[] glbBytes, string sourceFileName, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return _quoteRepository.UpsertGlbCacheByHashAsync(stepHash, glbBytes, sourceFileName);
+        Directory.CreateDirectory(_cacheDirectory);
+
+        var path = BuildCachePath(stepHash);
+        await File.WriteAllBytesAsync(path, glbBytes, cancellationToken);
+    }
+
+    private string BuildCachePath(string stepHash)
+    {
+        var safeHash = string.Concat(stepHash.Where(char.IsLetterOrDigit));
+        if (safeHash.Length == 0)
+        {
+            safeHash = "step";
+        }
+
+        return Path.Combine(_cacheDirectory, $"{safeHash}.glb");
     }
 }

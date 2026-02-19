@@ -39,8 +39,6 @@ public class QuoteDraftForm : Form
     private readonly Quote? _editingQuote;
     private readonly UserAccount? _actorUser;
     private readonly List<LineItemCard> _lineItemCards = new();
-    private readonly StepFileParser _stepFileParser = new();
-    private readonly SolidModelFileTypeDetector _solidModelTypeDetector = new();
     private readonly StepParsingDiagnosticsLog _stepParsingDiagnosticsLog;
     private decimal _shopHourlyRate;
 
@@ -551,7 +549,7 @@ public class QuoteDraftForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52f));
 
         var viewerPanel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 8, 0) };
-        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, new StepPreviewService(_quoteRepository)) { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
+        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, new StepPreviewService()) { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
         var expandButton = BuildCompactIconButton("⛶ Expand", Color.FromArgb(71, 85, 105));
         expandButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         expandButton.Location = new Point(Math.Max(4, viewerPanel.Width - 96), 4);
@@ -698,7 +696,7 @@ public class QuoteDraftForm : Form
             StartPosition = FormStartPosition.CenterParent,
             WindowState = FormWindowState.Maximized
         };
-        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, new StepPreviewService(_quoteRepository)) { Dock = DockStyle.Fill };
+        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, new StepPreviewService()) { Dock = DockStyle.Fill };
         viewerForm.FormClosed += (_, _) => viewer.ClearPreview();
 
         stepAttachment.BlobData = stepData;
@@ -739,15 +737,16 @@ public class QuoteDraftForm : Form
         if (blobType == QuoteBlobType.ThreeDModel)
         {
             var extension = Path.GetExtension(fileName);
-            if (!SolidModelFileTypeDetector.IsKnownSolidExtension(extension))
+            if (!extension.Equals(".step", StringComparison.OrdinalIgnoreCase)
+                && !extension.Equals(".stp", StringComparison.OrdinalIgnoreCase))
             {
-                MessageBox.Show("3D model uploads must be a known solid format (.step, .stp, .sldprt, .iges, .igs, .brep, .stl, .obj, .x_t, .x_b).", "Invalid 3D Model", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("3D model uploads now require STEP input (.step or .stp).", "Invalid 3D Model", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             if (!await IsReadableModelFileAsync(filePath))
             {
-                MessageBox.Show("The selected 3D model appears to be corrupted, unreadable, or mismatched to its file type.", "Invalid 3D Model", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("The selected STEP file failed validation. See diagnostics for the step-validate stage.", "Invalid STEP Model", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
         }
@@ -846,71 +845,40 @@ public class QuoteDraftForm : Form
         {
             var fileInfo = new FileInfo(filePath);
             fileSizeBytes = fileInfo.Exists ? fileInfo.Length : 0;
-            if (fileInfo.Length <= 0)
+            if (fileSizeBytes <= 0)
             {
                 _stepParsingDiagnosticsLog.RecordAttempt(
                     fileName,
                     filePath,
                     fileSizeBytes,
                     isSuccess: false,
-                    errorCode: "missing-file-data",
-                    failureCategory: "file",
-                    message: "No readable payload bytes found for the selected STEP upload.",
+                    errorCode: "STEP_INVALID_BYTES",
+                    failureCategory: "step-validate",
+                    message: "[step-validate] STEP payload is empty.",
                     diagnosticDetails: $"fileSize={fileSizeBytes}",
                     stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
                     source: "quote-upload");
                 return false;
             }
 
-            const int readSize = 1024;
-            await using var stream = File.OpenRead(filePath);
-            var buffer = new byte[Math.Min(readSize, (int)Math.Min(fileInfo.Length, readSize))];
-            var bytesRead = await stream.ReadAsync(buffer);
-            if (bytesRead <= 0)
-            {
-                return false;
-            }
-
             var fileBytes = await File.ReadAllBytesAsync(filePath);
-            var detection = _solidModelTypeDetector.Detect(fileBytes, filePath);
-            if (!detection.IsKnownType)
-            {
-                _stepParsingDiagnosticsLog.RecordAttempt(
-                    fileName,
-                    filePath,
-                    fileSizeBytes,
-                    isSuccess: false,
-                    errorCode: "unsupported-format",
-                    failureCategory: "format",
-                    message: "The selected model extension/signature is not recognized as a supported solid format.",
-                    diagnosticDetails: $"detection={detection.FileType}, ext={detection.NormalizedExtension}, source={detection.DetectionSource}",
-                    stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
-                    source: "quote-upload");
-                return false;
-            }
+            var header = System.Text.Encoding.ASCII.GetString(fileBytes, 0, Math.Min(fileBytes.Length, 256)).ToUpperInvariant();
+            var isValid = header.Contains("ISO-10303-21", StringComparison.Ordinal);
+            _stepParsingDiagnosticsLog.RecordAttempt(
+                fileName,
+                filePath,
+                fileSizeBytes,
+                isSuccess: isValid,
+                errorCode: isValid ? string.Empty : "STEP_INVALID_HEADER",
+                failureCategory: "step-validate",
+                message: isValid
+                    ? "[step-validate] STEP header validated."
+                    : "[step-validate] STEP header marker missing.",
+                diagnosticDetails: isValid ? "iso-10303-21" : $"prefix={header.Replace("\n", " ")}",
+                stackTrace: isValid ? string.Empty : StepParsingDiagnosticsLog.BuildCallSiteTrace(),
+                source: "quote-upload");
 
-            if (detection.FileType != SolidModelFileType.Step)
-            {
-                return true;
-            }
-
-            var report = _stepFileParser.Parse(fileBytes);
-            if (!report.IsSuccess)
-            {
-                _stepParsingDiagnosticsLog.RecordAttempt(
-                    fileName,
-                    filePath,
-                    fileSizeBytes,
-                    isSuccess: false,
-                    errorCode: report.ErrorCode,
-                    failureCategory: report.FailureCategory,
-                    message: BuildParseFailureMessage(fileName, filePath, report.ErrorCode, report.Message, "quote-upload"),
-                    diagnosticDetails: BuildParseDiagnosticDetails(report),
-                    stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
-                    source: "quote-upload");
-            }
-
-            return report.IsSuccess;
+            return isValid;
         }
         catch (Exception ex)
         {
@@ -919,10 +887,10 @@ public class QuoteDraftForm : Form
                 filePath,
                 fileSizeBytes,
                 isSuccess: false,
-                errorCode: "step-parse-exception",
-                failureCategory: "exception",
-                message: ex.Message,
-                diagnosticDetails: ex.GetType().FullName,
+                errorCode: "STEP_VALIDATE_EXCEPTION",
+                failureCategory: "step-validate",
+                message: "[step-validate] STEP validation threw an exception.",
+                diagnosticDetails: ex.Message,
                 stackTrace: StepParsingDiagnosticsLog.BuildStackTrace(ex),
                 source: "quote-upload");
             return false;
@@ -940,57 +908,21 @@ public class QuoteDraftForm : Form
         }
 
         var storedData = await _quoteRepository.GetQuoteBlobContentAsync(attachment.Id);
-        if (storedData.Length == 0)
-        {
-            _stepParsingDiagnosticsLog.RecordAttempt(
-                attachment.FileName,
-                attachment.StorageRelativePath,
-                attachment.FileSizeBytes,
-                isSuccess: false,
-                errorCode: "missing-blob-data",
-                failureCategory: "blob",
-                message: BuildParseFailureMessage(attachment.FileName, attachment.StorageRelativePath, "missing-blob-data", "Uploaded STEP blob content could not be loaded from the database.", "blob-parse-validation"),
-                diagnosticDetails: $"attachmentId={attachment.Id}",
-                stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
-                source: "blob-parse-validation");
-            return;
-        }
-
-        var report = _stepFileParser.Parse(storedData);
-        if (!report.IsSuccess)
-        {
-            _stepParsingDiagnosticsLog.RecordAttempt(
-                attachment.FileName,
-                attachment.StorageRelativePath,
-                storedData.LongLength,
-                isSuccess: false,
-                errorCode: report.ErrorCode,
-                failureCategory: report.FailureCategory,
-                message: BuildParseFailureMessage(attachment.FileName, attachment.StorageRelativePath, report.ErrorCode, report.Message, "blob-parse-validation"),
-                diagnosticDetails: BuildParseDiagnosticDetails(report),
-                stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
-                source: "blob-parse-validation");
-            return;
-        }
-    }
-
-    private static string BuildParseDiagnosticDetails(StepParseReport report)
-    {
-        var schema = string.IsNullOrWhiteSpace(report.SchemaName) ? "unknown" : report.SchemaName;
-        var topEntities = report.DistinctEntityTypes.Count == 0
-            ? "none"
-            : string.Join(", ", report.DistinctEntityTypes.OrderByDescending(x => x.Value).Take(6).Select(x => $"{x.Key}:{x.Value}"));
-        return $"category={report.FailureCategory}; schema={schema}; entities={report.EntityCount}; surfaces={report.SurfaceEntityCount}; solids={report.SolidEntityCount}; details={report.DiagnosticDetails}; top={topEntities}";
-    }
-
-    private string BuildParseFailureMessage(string? fileName, string? filePath, string errorCode, string reason, string source)
-    {
-        var attempts = _stepParsingDiagnosticsLog.GetEntries().Count(entry =>
-            !entry.IsSuccess
-            && string.Equals(entry.FileName, fileName, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(entry.Source, source, StringComparison.OrdinalIgnoreCase)) + 1;
-        var contextPath = string.IsNullOrWhiteSpace(filePath) ? "in-memory-blob" : filePath;
-        return $"Parse failed: {reason} (error={errorCode}, attempts={attempts}, context=source:{source}; path:{contextPath})";
+        var header = System.Text.Encoding.ASCII.GetString(storedData, 0, Math.Min(storedData.Length, 256)).ToUpperInvariant();
+        var isValid = storedData.Length > 0 && header.Contains("ISO-10303-21", StringComparison.Ordinal);
+        _stepParsingDiagnosticsLog.RecordAttempt(
+            attachment.FileName,
+            attachment.StorageRelativePath,
+            attachment.FileSizeBytes,
+            isSuccess: isValid,
+            errorCode: isValid ? string.Empty : "STEP_INVALID_HEADER",
+            failureCategory: "step-validate",
+            message: isValid
+                ? "[step-validate] Stored STEP blob validated."
+                : "[step-validate] Stored STEP blob failed validation.",
+            diagnosticDetails: isValid ? "iso-10303-21" : $"bytes={storedData.Length};prefix={header.Replace("\n", " ")}",
+            stackTrace: isValid ? string.Empty : StepParsingDiagnosticsLog.BuildCallSiteTrace(),
+            source: "blob-step-validation");
     }
 
     private void RefreshAllBlobLists()

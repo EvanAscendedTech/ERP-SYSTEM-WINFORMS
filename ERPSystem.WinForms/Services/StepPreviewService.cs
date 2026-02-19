@@ -33,8 +33,8 @@ public sealed class StepPreviewService : IStepPreviewService
         _converter = converter;
     }
 
-    public StepPreviewService(Data.QuoteRepository quoteRepository)
-        : this(new StepPreviewCache(quoteRepository), new StepToGlbConverter())
+    public StepPreviewService()
+        : this(new StepPreviewCache(), new StepToGlbConverter())
     {
     }
 
