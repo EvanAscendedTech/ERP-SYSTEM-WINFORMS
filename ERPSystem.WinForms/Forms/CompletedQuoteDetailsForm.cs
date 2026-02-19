@@ -137,10 +137,11 @@ public class CompletedQuoteDetailsForm : Form
         var split = new SplitContainer
         {
             Dock = DockStyle.Fill,
-            SplitterDistance = 420,
             Panel1MinSize = 330,
             Panel2MinSize = 420
         };
+        split.SizeChanged += (_, _) => ApplySafeSplitterDistance(split);
+        split.HandleCreated += (_, _) => ApplySafeSplitterDistance(split);
 
         ConfigureLineItemsGrid();
         split.Panel1.Controls.Add(_lineItemsGrid);
@@ -153,6 +154,20 @@ public class CompletedQuoteDetailsForm : Form
         split.Panel2.Controls.Add(detailPanel);
 
         return split;
+    }
+
+    private static void ApplySafeSplitterDistance(SplitContainer split)
+    {
+        if (split.Width <= 0)
+        {
+            return;
+        }
+
+        var availableWidth = split.Width - split.SplitterWidth;
+        var minimumPanel1 = split.Panel1MinSize;
+        var maximumPanel1 = Math.Max(minimumPanel1, availableWidth - split.Panel2MinSize);
+        var preferredPanel1 = 420;
+        split.SplitterDistance = Math.Clamp(preferredPanel1, minimumPanel1, maximumPanel1);
     }
 
     private void ConfigureLineItemsGrid()
