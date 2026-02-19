@@ -812,10 +812,7 @@ END-ISO-10303-21;
                     BuildDiagnosticDetails("(none)", "viewer-ready", 0, 0, reason, _lastLoadedBytes.LongLength, _lastLoadedFileName, _lastLoadedSourcePath, $"processKind={args.ProcessFailedKind}; exitCode={exitCode}"));
             };
 
-            _webView.CoreWebView2.ConsoleMessageReceived += (_, args) =>
-            {
-                AppendConsoleLog($"[Console:{args.Level}] {args.Message}");
-            };
+            HookConsoleMessageLogging(_webView.CoreWebView2);
         }
 
         var viewerPath = ResolveViewerAssetPath();
@@ -860,6 +857,25 @@ END-ISO-10303-21;
         {
             return "n/a";
         }
+    }
+
+    private void HookConsoleMessageLogging(CoreWebView2 coreWebView2)
+    {
+        var consoleMessageEvent = coreWebView2.GetType().GetEvent("ConsoleMessageReceived");
+        if (consoleMessageEvent is null)
+        {
+            AppendConsoleLog("[Console] ConsoleMessageReceived is unavailable for this WebView2 runtime.");
+            return;
+        }
+
+        EventHandler? handler = (_, eventArgs) =>
+        {
+            var level = eventArgs?.GetType().GetProperty("Level")?.GetValue(eventArgs)?.ToString() ?? "Unknown";
+            var message = eventArgs?.GetType().GetProperty("Message")?.GetValue(eventArgs)?.ToString() ?? string.Empty;
+            AppendConsoleLog($"[Console:{level}] {message}");
+        };
+
+        consoleMessageEvent.AddEventHandler(coreWebView2, handler);
     }
 
     private async Task ResizeRendererAsync()
