@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using ERPSystem.WinForms.Controls;
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
+using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms.Forms;
 
@@ -36,18 +37,20 @@ public class QuoteDraftForm : Form
     private readonly Label _totalHoursValue = new() { AutoSize = true, Text = "0.00" };
     private readonly Label _masterTotalValue = new() { AutoSize = true, Text = "$0.00" };
     private readonly Quote? _editingQuote;
+    private readonly UserAccount? _actorUser;
     private readonly List<LineItemCard> _lineItemCards = new();
     private decimal _shopHourlyRate;
 
     public int CreatedQuoteId { get; private set; }
     public bool WasDeleted { get; private set; }
 
-    public QuoteDraftForm(QuoteRepository quoteRepository, bool canViewPricing, string uploadedBy, Quote? editingQuote = null)
+    public QuoteDraftForm(QuoteRepository quoteRepository, bool canViewPricing, string uploadedBy, Quote? editingQuote = null, UserAccount? actorUser = null)
     {
         _quoteRepository = quoteRepository;
         _canViewPricing = canViewPricing;
         _uploadedBy = uploadedBy;
         _editingQuote = editingQuote;
+        _actorUser = actorUser;
         _quoteLifecycleId.Text = string.IsNullOrWhiteSpace(editingQuote?.LifecycleQuoteId) ? GenerateLifecycleQuoteId() : editingQuote.LifecycleQuoteId;
 
         Text = _editingQuote is null ? $"New Quote Draft - {_quoteLifecycleId.Text}" : $"Edit In-Process Quote #{_editingQuote.Id} - {_quoteLifecycleId.Text}";
@@ -1162,7 +1165,9 @@ public class QuoteDraftForm : Form
 
         try
         {
-            CreatedQuoteId = await _quoteRepository.SaveQuoteAsync(quote);
+            CreatedQuoteId = _actorUser is null
+                ? await _quoteRepository.SaveQuoteAsync(quote)
+                : await _quoteRepository.SaveQuoteAsync(quote, _actorUser);
             DialogResult = DialogResult.OK;
             Close();
         }
@@ -1197,7 +1202,14 @@ public class QuoteDraftForm : Form
         var confirm = MessageBox.Show($"Delete quote #{_editingQuote.Id}? This cannot be undone.", "Delete Quote", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
         if (confirm != DialogResult.Yes) return;
 
-        await _quoteRepository.DeleteQuoteAsync(_editingQuote.Id);
+        if (_actorUser is null)
+        {
+            await _quoteRepository.DeleteQuoteAsync(_editingQuote.Id);
+        }
+        else
+        {
+            await _quoteRepository.DeleteQuoteAsync(_editingQuote.Id, _actorUser);
+        }
         WasDeleted = true;
         DialogResult = DialogResult.OK;
         Close();

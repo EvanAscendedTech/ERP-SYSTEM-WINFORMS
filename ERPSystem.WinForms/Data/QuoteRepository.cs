@@ -383,6 +383,13 @@ public class QuoteRepository
         return contacts;
     }
 
+
+    public async Task<int> SaveQuoteAsync(Quote quote, UserAccount actor)
+    {
+        EnsureAdminForCompletedQuoteMutation(actor, quote, "save");
+        return await SaveQuoteAsync(quote);
+    }
+
     public async Task<int> SaveQuoteAsync(Quote quote)
     {
         ValidateQuoteForPersistence(quote);
@@ -1497,6 +1504,19 @@ public class QuoteRepository
         return (true, $"Restored purchasing quote {archived.OriginalQuoteId}.");
     }
 
+
+    public async Task DeleteQuoteAsync(int quoteId, UserAccount actor)
+    {
+        var quote = await GetQuoteAsync(quoteId);
+        if (quote is null)
+        {
+            throw new InvalidOperationException($"Quote {quoteId} was not found.");
+        }
+
+        EnsureAdminForCompletedQuoteMutation(actor, quote, "delete");
+        await DeleteQuoteAsync(quoteId);
+    }
+
     public async Task DeleteQuoteAsync(int quoteId)
     {
         var quote = await GetQuoteAsync(quoteId);
@@ -1864,6 +1884,22 @@ public class QuoteRepository
             CREATE INDEX IF NOT EXISTS IX_ArchivedQuoteLineItems_ArchiveId ON ArchivedQuoteLineItems(ArchiveId);
             CREATE INDEX IF NOT EXISTS IX_ArchivedQuoteBlobFiles_ArchiveId ON ArchivedQuoteBlobFiles(ArchiveId);";
         await command.ExecuteNonQueryAsync();
+    }
+
+
+    private static void EnsureAdminForCompletedQuoteMutation(UserAccount actor, Quote quote, string operation)
+    {
+        if (quote.Status != QuoteStatus.Completed)
+        {
+            return;
+        }
+
+        if (AuthorizationService.HasRole(actor, RoleCatalog.Administrator))
+        {
+            return;
+        }
+
+        throw new UnauthorizedAccessException($"Only administrators can {operation} completed quotes.");
     }
 
     private static bool ShouldArchiveBeforeDelete(Quote quote)
