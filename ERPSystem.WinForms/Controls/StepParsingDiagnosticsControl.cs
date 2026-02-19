@@ -21,7 +21,7 @@ public sealed class StepParsingDiagnosticsControl : UserControl
     private readonly Label _summary = new() { Dock = DockStyle.Top, Height = 24, TextAlign = ContentAlignment.MiddleLeft };
 
     private readonly BindingSource _binding = new();
-    private readonly List<StepParsingDiagnosticEntry> _entries = new();
+    private readonly BindingList<StepParsingDiagnosticEntry> _entries = new();
 
     public StepParsingDiagnosticsControl(StepParsingDiagnosticsLog diagnosticsLog)
     {
@@ -51,6 +51,7 @@ public sealed class StepParsingDiagnosticsControl : UserControl
         _binding.DataSource = _entries;
         _logGrid.DataSource = _binding;
         _logGrid.SelectionChanged += (_, _) => RenderSelectedEntry();
+        _logGrid.DataError += (_, _) => { };
 
         foreach (var entry in _diagnosticsLog.GetEntries())
         {
@@ -94,12 +95,7 @@ public sealed class StepParsingDiagnosticsControl : UserControl
         }
 
         _entries.Insert(0, entry);
-        _binding.ResetBindings(false);
-        if (_entries.Count > 0)
-        {
-            _logGrid.ClearSelection();
-            _logGrid.Rows[0].Selected = true;
-        }
+        SelectFirstRow();
 
         UpdateSummary();
         RenderSelectedEntry();
@@ -113,8 +109,11 @@ public sealed class StepParsingDiagnosticsControl : UserControl
             return;
         }
 
+        _binding.SuspendBinding();
         _entries.Clear();
-        _binding.ResetBindings(false);
+        _binding.ResumeBinding();
+        _logGrid.ClearSelection();
+        _logGrid.CurrentCell = null;
         _messageText.Text = string.Empty;
         _stackTraceText.Text = string.Empty;
         UpdateSummary();
@@ -138,5 +137,17 @@ public sealed class StepParsingDiagnosticsControl : UserControl
 
         _messageText.Text = selected.Message;
         _stackTraceText.Text = selected.StackTrace;
+    }
+
+    private void SelectFirstRow()
+    {
+        if (_entries.Count == 0 || _logGrid.Rows.Count == 0)
+        {
+            return;
+        }
+
+        _logGrid.ClearSelection();
+        _logGrid.CurrentCell = _logGrid.Rows[0].Cells[0];
+        _logGrid.Rows[0].Selected = true;
     }
 }
