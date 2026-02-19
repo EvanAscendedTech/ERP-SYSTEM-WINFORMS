@@ -95,13 +95,16 @@ public sealed class StepModelPreviewControl : UserControl
         }
 
         var before = _diagnosticsLog.GetEntries().Count;
-        var goodStep = System.Text.Encoding.ASCII.GetBytes("ISO-10303-21;
-HEADER;
-FILE_DESCRIPTION(('probe'),'2;1');
-ENDSEC;
-DATA;
-ENDSEC;
-END-ISO-10303-21;");
+        var goodStep = System.Text.Encoding.ASCII.GetBytes(
+            """
+            ISO-10303-21;
+            HEADER;
+            FILE_DESCRIPTION(('probe'),'2;1');
+            ENDSEC;
+            DATA;
+            ENDSEC;
+            END-ISO-10303-21;
+            """);
         var badStep = System.Text.Encoding.ASCII.GetBytes("BAD_STEP_PAYLOAD");
 
         LoadStep(goodStep, "developer-good.step", "developer://probe/good.step");
