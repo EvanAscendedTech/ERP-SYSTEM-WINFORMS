@@ -17,7 +17,7 @@ public class QuoteDraftForm : Form
     private const int MaximumLineItemHeight = 460;
     private const int MinimumBlobAreaWidth = 170;
     private const int MinimumBlobAreaHeight = 70;
-    private const int FixedBlobAreaHeight = 150;
+    private const int FixedBlobAreaHeight = 178;
     private const int CollapsedViewerHeight = 220;
     private const int MinimumTextBoxHeight = 24;
     private const int StandardGap = 8;
@@ -353,11 +353,11 @@ public class QuoteDraftForm : Form
 
         var attachmentsTabs = BuildAttachmentsTabs(new[]
         {
-            (QuoteBlobType.Technical, "Drawings (PDF / STEP)"),
-            (QuoteBlobType.ThreeDModel, "3D Models"),
-            (QuoteBlobType.MaterialPricing, "Material"),
-            (QuoteBlobType.ToolingDocumentation, "Tooling"),
-            (QuoteBlobType.PostOpPricing, "Post-Operation")
+            (QuoteBlobType.Technical, "Drawings (PDF)"),
+            (QuoteBlobType.ThreeDModel, "3D Models (STEP)"),
+            (QuoteBlobType.MaterialPricing, "Materials (PDF)"),
+            (QuoteBlobType.ToolingDocumentation, "Tooling (PDF)"),
+            (QuoteBlobType.PostOpPricing, "Secondary Operations (PDF)")
         }, model);
 
         contentGrid.Controls.Add(BuildCompactSection("Details", detailsGrid), 0, 0);
@@ -423,8 +423,8 @@ public class QuoteDraftForm : Form
         };
 
         removeButton.Click += async (_, _) => await RemoveLineItemAsync(model, cardPanel);
-        doneButton.Click += (_, _) => SetLineItemDoneState(card, true);
-        editButton.Click += (_, _) => SetLineItemDoneState(card, false);
+        doneButton.Click += async (_, _) => await SetLineItemDoneStateAsync(card, true);
+        editButton.Click += async (_, _) => await SetLineItemDoneStateAsync(card, false);
         summaryView.ExpandButton.Click += (_, _) => ExpandModelViewer(card);
 
         RefreshBlobLists(card);
@@ -474,7 +474,18 @@ public class QuoteDraftForm : Form
             Height = FixedBlobAreaHeight
         };
         panel.SuspendLayout();
-        var list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = false, HeaderStyle = ColumnHeaderStyle.Nonclickable, HideSelection = false, MinimumSize = new Size(0, 36) };
+        var list = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            Activation = ItemActivation.Standard,
+            MultiSelect = false,
+            FullRowSelect = true,
+            GridLines = false,
+            HeaderStyle = ColumnHeaderStyle.Nonclickable,
+            HideSelection = false,
+            MinimumSize = new Size(0, 52)
+        };
         list.Columns.Add("File", 180);
         list.Columns.Add("Size", 90, HorizontalAlignment.Right);
 
@@ -588,7 +599,7 @@ public class QuoteDraftForm : Form
         details.Controls.Add(value, 1, rowIndex);
     }
 
-    private void SetLineItemDoneState(LineItemCard card, bool isDone)
+    private async Task SetLineItemDoneStateAsync(LineItemCard card, bool isDone)
     {
         card.IsDone = isDone;
         card.EditView.Visible = !isDone;
@@ -599,7 +610,7 @@ public class QuoteDraftForm : Form
         if (isDone)
         {
             card.DoneButton.Parent?.Controls.SetChildIndex(card.EditButton, 0);
-            UpdateDoneSummary(card);
+            await UpdateDoneSummaryAsync(card);
         }
         else
         {
@@ -611,7 +622,7 @@ public class QuoteDraftForm : Form
         ResizeCards();
     }
 
-    private void UpdateDoneSummary(LineItemCard card)
+    private async Task UpdateDoneSummaryAsync(LineItemCard card)
     {
         card.SummaryDrawingNumber.Text = string.IsNullOrWhiteSpace(card.Model.DrawingNumber) ? "-" : card.Model.DrawingNumber;
         card.SummaryDrawingName.Text = string.IsNullOrWhiteSpace(card.Model.DrawingName) ? "-" : card.Model.DrawingName;
@@ -621,9 +632,16 @@ public class QuoteDraftForm : Form
         card.SummaryPerPiece.Text = card.Model.UnitPrice.ToString("C2", CultureInfo.CurrentCulture);
 
         var stepAttachment = FindStepAttachment(card.Model);
-        if (stepAttachment?.BlobData?.Length > 0)
+        if (stepAttachment is not null)
         {
-            card.StepViewer.LoadStep(stepAttachment.BlobData);
+            var stepBytes = stepAttachment.BlobData;
+            if (stepBytes.Length == 0 && stepAttachment.Id > 0)
+            {
+                stepBytes = await _quoteRepository.GetQuoteBlobContentAsync(stepAttachment.Id);
+                stepAttachment.BlobData = stepBytes;
+            }
+
+            card.StepViewer.LoadStep(stepBytes);
         }
         else
         {
@@ -635,8 +653,7 @@ public class QuoteDraftForm : Form
     {
         return model.BlobAttachments.FirstOrDefault(blob =>
                    blob.BlobType == QuoteBlobType.ThreeDModel
-                   && IsStepFile(blob))
-               ?? model.BlobAttachments.FirstOrDefault(IsStepFile);
+                   && IsStepFile(blob));
     }
 
     private static bool IsStepFile(QuoteBlobAttachment blob)
@@ -648,11 +665,25 @@ public class QuoteDraftForm : Form
                || blob.FileName.EndsWith(".stp", StringComparison.OrdinalIgnoreCase);
     }
 
-    private void ExpandModelViewer(LineItemCard card)
+    private async void ExpandModelViewer(LineItemCard card)
     {
-        if (FindStepAttachment(card.Model)?.BlobData is not { Length: > 0 } stepData)
+        var stepAttachment = FindStepAttachment(card.Model);
+        if (stepAttachment is null)
         {
             MessageBox.Show("No STEP model found for this line item.", "3D Model", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var stepData = stepAttachment.BlobData;
+        if (stepData.Length == 0 && stepAttachment.Id > 0)
+        {
+            stepData = await _quoteRepository.GetQuoteBlobContentAsync(stepAttachment.Id);
+            stepAttachment.BlobData = stepData;
+        }
+
+        if (stepData.Length == 0)
+        {
+            MessageBox.Show("STEP model data is unavailable for this line item.", "3D Model", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
@@ -748,6 +779,17 @@ public class QuoteDraftForm : Form
     private async Task DeleteBlobAsync(QuoteLineItem model, QuoteBlobType blobType, QuoteBlobAttachment? selected)
     {
         if (selected is null || selected.BlobType != blobType) return;
+
+        var confirm = MessageBox.Show(
+            $"Delete '{selected.FileName}' from this section?",
+            "Delete Attachment",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes)
+        {
+            return;
+        }
+
         if (selected.Id > 0) await _quoteRepository.DeleteQuoteLineItemFileAsync(selected.Id);
         model.BlobAttachments.Remove(selected);
         RefreshAllBlobLists();
@@ -803,7 +845,7 @@ public class QuoteDraftForm : Form
 
         if (card.IsDone)
         {
-            UpdateDoneSummary(card);
+            _ = UpdateDoneSummaryAsync(card);
         }
     }
 
@@ -1015,7 +1057,7 @@ public class QuoteDraftForm : Form
 
             if (card.IsDone)
             {
-                UpdateDoneSummary(card);
+                _ = UpdateDoneSummaryAsync(card);
             }
 
             totalHours += card.Model.ProductionHours + card.Model.SetupHours;
