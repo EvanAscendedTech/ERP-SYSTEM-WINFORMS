@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
@@ -13,13 +14,13 @@ public sealed class StepModelPreviewControl : UserControl
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private readonly IStepPreviewService? _stepPreviewService;
     private readonly StepParsingDiagnosticsLog? _diagnosticsLog;
+    private readonly ConcurrentQueue<string> _lastWebMessages = new();
     private CancellationTokenSource? _loadCts;
     private int _renderVersion;
     private bool _initialized;
-    private TaskCompletionSource<string>? _viewerMessageTcs;
-    private const string ViewerAssetRelativePath = "Assets/step-viewer.html";
-    private const string ViewerAssetUri = "https://step-viewer.local/step-viewer.html";
-    private const int MaxRenderRetries = 2;
+    private TaskCompletionSource<GltfViewerResult>? _viewerMessageTcs;
+    private const string ViewerAssetRelativePath = "Assets/gltf-viewer.html";
+    private const string ViewerAssetUri = "https://step-viewer.local/gltf-viewer.html";
 
     public StepModelPreviewControl(StepParsingDiagnosticsLog? diagnosticsLog = null, IStepPreviewService? stepPreviewService = null)
     {
@@ -116,7 +117,13 @@ public sealed class StepModelPreviewControl : UserControl
         await _loadGate.WaitAsync(cancellationToken);
         try
         {
-            RecordDiagnostics(true, "", "step-validate", "STEP_PREVIEW", "Validation started.", stepBytes.LongLength, fileName, sourcePath, "begin");
+            var validation = ValidateStep(stepBytes);
+            RecordDiagnostics(validation.valid, validation.errorCode, "step-validate", "STEP_PREVIEW", validation.message, stepBytes.LongLength, fileName, sourcePath, validation.details);
+            if (!validation.valid)
+            {
+                ShowError(validation.message);
+                return;
+            }
 
             if (_stepPreviewService is null)
             {
@@ -130,33 +137,36 @@ public sealed class StepModelPreviewControl : UserControl
             var conversion = await _stepPreviewService.GetOrCreateGlbDetailedAsync(stepBytes, fileName, cancellationToken);
             RecordDiagnostics(conversion.Success, conversion.ErrorCode, "step-convert", "STEP_PREVIEW", conversion.Message, stepBytes.LongLength, fileName, sourcePath,
                 $"hash={conversion.StepHash};cacheHit={conversion.CacheHit};validation={conversion.ValidationDetails};exitCode={conversion.ExitCode};stdout={conversion.StdOut};stderr={conversion.StdErr}");
-
             if (!conversion.Success)
             {
                 ShowError("STEP conversion failed. See diagnostics for details.");
                 return;
             }
 
-            if (version != _renderVersion)
+            if (version != _renderVersion || IsDisposed)
             {
                 return;
             }
 
             await EnsureInitializedAsync(cancellationToken);
-            _statusLabel.Text = "Rendering GLB...";
+            if (version != _renderVersion || IsDisposed)
+            {
+                return;
+            }
 
+            _statusLabel.Text = "Rendering GLB...";
             var renderResult = await RenderGlbAsync(conversion.GlbBytes, cancellationToken);
             if (!renderResult.ok)
             {
                 ShowError("GLB render failed. See diagnostics for details.");
-                RecordDiagnostics(false, "STEP_RENDER_FAILED", "glb-render", "STEP_PREVIEW", renderResult.error ?? "GLB render failed.", conversion.GlbBytes.LongLength, fileName, sourcePath,
-                    $"hash={conversion.StepHash};meshes={renderResult.meshes};triangles={renderResult.triangles};stack={renderResult.stack}");
+                RecordDiagnostics(false, "GLB_RENDER_FAILED", "glb-render", "STEP_PREVIEW", renderResult.error ?? "GLB render failed.", conversion.GlbBytes.LongLength, fileName, sourcePath,
+                    $"hash={conversion.StepHash};meshes={renderResult.meshes};triangles={renderResult.triangles};stack={renderResult.stack};webMessages={string.Join(" | ", _lastWebMessages)}");
                 return;
             }
 
             _statusLabel.Visible = false;
             _webView.Visible = true;
-            RecordDiagnostics(true, "", "glb-render", "STEP_PREVIEW", "GLB rendered.", conversion.GlbBytes.LongLength, fileName, sourcePath,
+            RecordDiagnostics(true, string.Empty, "glb-render", "STEP_PREVIEW", "GLB rendered.", conversion.GlbBytes.LongLength, fileName, sourcePath,
                 $"hash={conversion.StepHash};meshes={renderResult.meshes};triangles={renderResult.triangles}");
         }
         catch (OperationCanceledException)
@@ -166,7 +176,8 @@ public sealed class StepModelPreviewControl : UserControl
         catch (Exception ex)
         {
             ShowError("WebView2 runtime unavailable for GLB preview.");
-            RecordDiagnostics(false, "STEP_RENDER_FAILED", "glb-render", "STEP_PREVIEW", ex.Message, stepBytes.LongLength, fileName, sourcePath, ex.ToString());
+            RecordDiagnostics(false, "GLB_RENDER_FAILED", "glb-render", "STEP_PREVIEW", ex.Message, stepBytes.LongLength, fileName, sourcePath,
+                $"{ex};webMessages={string.Join(" | ", _lastWebMessages)}");
         }
         finally
         {
@@ -183,9 +194,10 @@ public sealed class StepModelPreviewControl : UserControl
 
         await _webView.EnsureCoreWebView2Async();
         var viewerPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ViewerAssetRelativePath));
+        var viewerFolder = Path.GetDirectoryName(viewerPath) ?? throw new InvalidOperationException("Viewer folder unavailable.");
         _webView.CoreWebView2!.WebMessageReceived -= CoreWebView2OnWebMessageReceived;
         _webView.CoreWebView2.WebMessageReceived += CoreWebView2OnWebMessageReceived;
-        _webView.CoreWebView2.SetVirtualHostNameToFolderMapping("step-viewer.local", Path.GetDirectoryName(viewerPath)!, CoreWebView2HostResourceAccessKind.Allow);
+        _webView.CoreWebView2.SetVirtualHostNameToFolderMapping("step-viewer.local", viewerFolder, CoreWebView2HostResourceAccessKind.Allow);
         _webView.CoreWebView2.Navigate(ViewerAssetUri);
         _initialized = true;
 
@@ -205,61 +217,70 @@ public sealed class StepModelPreviewControl : UserControl
         throw new TimeoutException("GLB viewer failed to initialize.");
     }
 
-    private async Task<(bool ok, int meshes, int triangles, string? error, string? stack)> RenderGlbAsync(byte[] glbBytes, CancellationToken cancellationToken)
+    private async Task<GltfViewerResult> RenderGlbAsync(byte[] glbBytes, CancellationToken cancellationToken)
     {
-        Exception? lastException = null;
-        for (var attempt = 0; attempt <= MaxRenderRetries; attempt++)
-        {
-            try
-            {
-                _viewerMessageTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-                var b64 = Convert.ToBase64String(glbBytes);
-                var payload = JsonSerializer.Serialize(b64);
-                _ = await _webView.CoreWebView2!.ExecuteScriptAsync($"window.gltfViewer.loadGlbBase64({payload});");
+        _viewerMessageTcs = new TaskCompletionSource<GltfViewerResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        while (_lastWebMessages.TryDequeue(out _)) { }
 
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(8));
-                using var registration = timeoutCts.Token.Register(() => _viewerMessageTcs.TrySetCanceled(timeoutCts.Token));
-                var raw = await _viewerMessageTcs.Task;
-                var result = JsonSerializer.Deserialize<GltfViewerResult>(raw) ?? new GltfViewerResult();
-                if (result.ok)
-                {
-                    return (true, result.meshes, result.triangles, null, null);
-                }
+        var payload = JsonSerializer.Serialize(Convert.ToBase64String(glbBytes));
+        _ = await _webView.CoreWebView2!.ExecuteScriptAsync($"window.gltfViewer.setGlbBase64({payload});");
 
-                lastException = new InvalidOperationException(result.error ?? "Viewer returned failure.");
-            }
-            catch (Exception ex)
-            {
-                lastException = ex;
-            }
-        }
-
-        return (false, 0, 0, lastException?.Message, lastException?.ToString());
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+        using var registration = timeoutCts.Token.Register(() => _viewerMessageTcs.TrySetCanceled(timeoutCts.Token));
+        return await _viewerMessageTcs.Task;
     }
 
     private void CoreWebView2OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         try
         {
-            var text = e.TryGetWebMessageAsString();
-            if (string.IsNullOrWhiteSpace(text))
+            var raw = e.WebMessageAsJson;
+            if (string.IsNullOrWhiteSpace(raw))
             {
                 return;
             }
 
-            if (text.StartsWith("{", StringComparison.Ordinal))
+            var message = JsonSerializer.Deserialize<ViewerMessage>(raw);
+            if (message?.type is null)
             {
-                _viewerMessageTcs?.TrySetResult(text);
                 return;
             }
 
-            RecordDiagnostics(true, "", "glb-render", "STEP_PREVIEW", "Viewer message", 0, string.Empty, string.Empty, text);
+            var compact = $"{message.type}:{JsonSerializer.Serialize(message.payload)}";
+            _lastWebMessages.Enqueue(compact);
+            while (_lastWebMessages.Count > 12 && _lastWebMessages.TryDequeue(out _)) { }
+
+            if (message.type == "viewer-result" && message.payload is not null)
+            {
+                var result = message.payload.Deserialize<GltfViewerResult>() ?? new GltfViewerResult { ok = false, error = "Viewer returned invalid payload." };
+                _viewerMessageTcs?.TrySetResult(result);
+                return;
+            }
+
+            var isError = string.Equals(message.type, "viewer-error", StringComparison.OrdinalIgnoreCase);
+            RecordDiagnostics(!isError, isError ? "GLB_RENDER_FAILED" : string.Empty, "glb-render", "STEP_PREVIEW", "Viewer message", 0, string.Empty, string.Empty, compact);
         }
         catch
         {
-            // ignore
+            // ignored
         }
+    }
+
+    private static (bool valid, string errorCode, string message, string details) ValidateStep(byte[] bytes)
+    {
+        if (bytes.Length == 0)
+        {
+            return (false, "STEP_INVALID_BYTES", "STEP payload is empty.", "length=0");
+        }
+
+        var header = System.Text.Encoding.ASCII.GetString(bytes, 0, Math.Min(bytes.Length, 64)).ToUpperInvariant();
+        if (!header.Contains("ISO-10303-21"))
+        {
+            return (false, "STEP_INVALID_HEADER", "STEP header marker missing.", header);
+        }
+
+        return (true, string.Empty, "STEP validated.", "iso-10303-21");
     }
 
     private static bool IsScriptBooleanTrue(string? raw)
@@ -293,6 +314,12 @@ public sealed class StepModelPreviewControl : UserControl
             diagnosticDetails: details,
             stackTrace: isSuccess ? string.Empty : StepParsingDiagnosticsLog.BuildCallSiteTrace(),
             source: "step-preview");
+    }
+
+    private sealed class ViewerMessage
+    {
+        public string? type { get; set; }
+        public JsonElement? payload { get; set; }
     }
 
     private sealed class GltfViewerResult

@@ -1,83 +1,70 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
-using ERPSystem.WinForms.Data;
 
 namespace ERPSystem.WinForms.Services;
 
 public interface IStepToGlbConverter
 {
-    Task<StepToGlbConversionResult> ConvertAsync(byte[] stepBytes, StepToGlbRequest request, CancellationToken cancellationToken);
+    Task<(bool ok, byte[] glb, string stdout, string stderr, int exitCode)> ConvertAsync(byte[] stepBytes, string fileName, CancellationToken ct);
 }
-
-public sealed record StepToGlbRequest(int LineItemId, string FileName, string SourcePath);
-
-public sealed record StepToGlbConversionResult(bool Success, byte[] GlbBytes, string ErrorCode, string Message, string StdOut, string StdErr, int ExitCode, string StepHash, bool CacheHit);
 
 public sealed class StepToGlbConverter : IStepToGlbConverter
 {
-    private readonly QuoteRepository _quoteRepository;
+    private const int ConversionTimeoutSeconds = 60;
     private readonly string _converterExecutablePath;
-    private readonly ConcurrentDictionary<string, Lazy<Task<StepToGlbConversionResult>>> _inflight = new();
+    private readonly bool _keepTempOnFailure;
 
-    public StepToGlbConverter(QuoteRepository quoteRepository, string? converterExecutablePath = null)
+    public StepToGlbConverter(string? converterExecutablePath = null, bool keepTempOnFailure = false)
     {
-        _quoteRepository = quoteRepository;
         _converterExecutablePath = string.IsNullOrWhiteSpace(converterExecutablePath)
-            ? ResolveDefaultConverterPath()
+            ? ResolveConverterPath()
             : converterExecutablePath;
+        _keepTempOnFailure = keepTempOnFailure;
     }
 
-    public Task<StepToGlbConversionResult> ConvertAsync(byte[] stepBytes, StepToGlbRequest request, CancellationToken cancellationToken)
+    public static string ResolveConverterPath()
     {
-        var hash = ComputeStepHash(stepBytes);
-        var singleFlight = _inflight.GetOrAdd(hash, _ => new Lazy<Task<StepToGlbConversionResult>>(() => ConvertInternalAsync(stepBytes, hash, request, cancellationToken)));
-        return AwaitAndCleanupAsync(hash, singleFlight);
+        return Path.Combine(AppContext.BaseDirectory, "Tools", "step2glb", "step2glb.exe");
     }
 
-    private async Task<StepToGlbConversionResult> AwaitAndCleanupAsync(string hash, Lazy<Task<StepToGlbConversionResult>> singleFlight)
+    public static string ComputeStepHash(byte[] bytes)
     {
-        try
-        {
-            return await singleFlight.Value;
-        }
-        finally
-        {
-            _inflight.TryRemove(hash, out _);
-        }
+        return Convert.ToHexString(SHA256.HashData(bytes));
     }
 
-    private async Task<StepToGlbConversionResult> ConvertInternalAsync(byte[] stepBytes, string hash, StepToGlbRequest request, CancellationToken cancellationToken)
+    public async Task<(bool ok, byte[] glb, string stdout, string stderr, int exitCode)> ConvertAsync(byte[] stepBytes, string fileName, CancellationToken ct)
     {
-        if (stepBytes.Length < 32)
+        if (stepBytes is null || stepBytes.Length == 0)
         {
-            return new(false, Array.Empty<byte>(), "STEP_INVALID_BYTES", "STEP payload is empty or too small.", string.Empty, string.Empty, -1, hash, false);
-        }
-
-        var cached = await _quoteRepository.TryGetGlbCacheByStepHashAsync(hash, request.LineItemId);
-        if (cached is not null)
-        {
-            return new(true, cached, string.Empty, "GLB cache hit", string.Empty, string.Empty, 0, hash, true);
+            return (false, Array.Empty<byte>(), string.Empty, "STEP payload is empty.", -1);
         }
 
         if (!File.Exists(_converterExecutablePath))
         {
-            return new(false, Array.Empty<byte>(), "STEP_CONVERT_FAILED", $"Converter executable not found: {_converterExecutablePath}", string.Empty, string.Empty, -1, hash, false);
+            return (false, Array.Empty<byte>(), string.Empty, $"STEP_CONVERTER_MISSING: {_converterExecutablePath}", -1);
         }
 
-        var tempRoot = Path.Combine(Path.GetTempPath(), "erp-step-glb", Guid.NewGuid().ToString("N"));
+        var safeName = string.IsNullOrWhiteSpace(fileName) ? "input.step" : Path.GetFileName(fileName);
+        var ext = Path.GetExtension(safeName);
+        if (!ext.Equals(".step", StringComparison.OrdinalIgnoreCase) && !ext.Equals(".stp", StringComparison.OrdinalIgnoreCase))
+        {
+            safeName = Path.ChangeExtension(safeName, ".step");
+        }
+
+        var hash = ComputeStepHash(stepBytes);
+        var tempRoot = Path.Combine(Path.GetTempPath(), "erp_step_preview", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempRoot);
-        var stepPath = Path.Combine(tempRoot, "input.step");
-        var glbPath = Path.Combine(tempRoot, "output.glb");
+        var inputPath = Path.Combine(tempRoot, safeName);
+        var outputPath = Path.Combine(tempRoot, $"{hash}.glb");
 
         try
         {
-            await File.WriteAllBytesAsync(stepPath, stepBytes, cancellationToken);
+            await File.WriteAllBytesAsync(inputPath, stepBytes, ct);
 
             var psi = new ProcessStartInfo
             {
                 FileName = _converterExecutablePath,
-                Arguments = $"\"{stepPath}\" \"{glbPath}\"",
+                Arguments = $"\"{inputPath}\" \"{outputPath}\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -89,61 +76,96 @@ public sealed class StepToGlbConverter : IStepToGlbConverter
 
             var stdoutTask = process.StandardOutput.ReadToEndAsync();
             var stderrTask = process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync(cancellationToken);
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(ConversionTimeoutSeconds));
+
+            try
+            {
+                await process.WaitForExitAsync(timeoutCts.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                TryKill(process);
+                var partialStdout = await stdoutTask;
+                var partialStderr = await stderrTask;
+                return (false, Array.Empty<byte>(), partialStdout, $"STEP_CONVERT_FAILED: timeout after {ConversionTimeoutSeconds}s. {partialStderr}", -1);
+            }
 
             var stdout = await stdoutTask;
             var stderr = await stderrTask;
             var exitCode = process.ExitCode;
 
-            if (exitCode != 0 || !File.Exists(glbPath))
+            if (exitCode != 0 || !File.Exists(outputPath))
             {
-                return new(false, Array.Empty<byte>(), "STEP_CONVERT_FAILED", "STEP to GLB conversion failed.", stdout, stderr, exitCode, hash, false);
+                return (false, Array.Empty<byte>(), stdout, $"STEP_CONVERT_FAILED: {stderr}", exitCode);
             }
 
-            var glbBytes = await File.ReadAllBytesAsync(glbPath, cancellationToken);
+            var glbBytes = await File.ReadAllBytesAsync(outputPath, ct);
             if (glbBytes.Length == 0)
             {
-                return new(false, Array.Empty<byte>(), "STEP_CONVERT_FAILED", "Converter produced an empty GLB file.", stdout, stderr, exitCode, hash, false);
+                return (false, Array.Empty<byte>(), stdout, "STEP_CONVERT_FAILED: converter produced empty output.", exitCode);
             }
 
-            await _quoteRepository.UpsertGlbCacheAsync(request.LineItemId, hash, glbBytes, request.FileName, request.SourcePath);
-            return new(true, glbBytes, string.Empty, "Converted STEP to GLB.", stdout, stderr, exitCode, hash, false);
-        }
-        catch (OperationCanceledException)
-        {
-            return new(false, Array.Empty<byte>(), "STEP_LOAD_CANCELLED", "STEP conversion cancelled.", string.Empty, string.Empty, -1, hash, false);
-        }
-        catch (Exception ex)
-        {
-            return new(false, Array.Empty<byte>(), "STEP_CONVERT_FAILED", ex.Message, string.Empty, ex.ToString(), -1, hash, false);
+            return (true, glbBytes, stdout, stderr, exitCode);
         }
         finally
         {
-            try
+            if (!_keepTempOnFailure)
             {
-                Directory.Delete(tempRoot, true);
-            }
-            catch
-            {
-                // ignore cleanup failures
+                try
+                {
+                    Directory.Delete(tempRoot, true);
+                }
+                catch
+                {
+                    // ignored
+                }
             }
         }
     }
 
-    private static string ComputeStepHash(byte[] bytes)
+    public static async Task<int> RunConversionProbeAsync(string stepPath, CancellationToken ct)
     {
-        var hash = SHA256.HashData(bytes);
-        return Convert.ToHexString(hash);
-    }
-
-    private static string ResolveDefaultConverterPath()
-    {
-        var envPath = Environment.GetEnvironmentVariable("STEP_TO_GLB_CONVERTER_PATH");
-        if (!string.IsNullOrWhiteSpace(envPath))
+        var converter = new StepToGlbConverter();
+        var bytes = await File.ReadAllBytesAsync(stepPath, ct);
+        var (ok, glb, stdout, stderr, exitCode) = await converter.ConvertAsync(bytes, Path.GetFileName(stepPath), ct);
+        Console.WriteLine($"ok={ok}; exitCode={exitCode}; glbBytes={glb.Length}");
+        if (!string.IsNullOrWhiteSpace(stdout))
         {
-            return envPath;
+            Console.WriteLine($"stdout: {Truncate(stdout, 512)}");
         }
 
-        return Path.Combine(AppContext.BaseDirectory, "Tools", "step-to-glb-converter.exe");
+        if (!string.IsNullOrWhiteSpace(stderr))
+        {
+            Console.WriteLine($"stderr: {Truncate(stderr, 512)}");
+        }
+
+        return ok && glb.Length > 0 ? 0 : 1;
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(true);
+            }
+        }
+        catch
+        {
+            // ignored
+        }
+    }
+
+    private static string Truncate(string value, int maxChars)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length <= maxChars)
+        {
+            return value;
+        }
+
+        return value[..maxChars] + "...";
     }
 }
