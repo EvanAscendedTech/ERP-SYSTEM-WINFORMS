@@ -86,4 +86,28 @@ END-ISO-10303-21;
         Assert.False(result.IsSuccess);
         Assert.Equal("unsupported-step-entities", result.ErrorCode);
     }
+
+    [Fact]
+    public void Parse_MultipleAttempts_DoNotLeakStateAcrossCalls()
+    {
+        var invalid = "ISO-10303-21; HEADER; ENDSEC; DATA; ENDSEC; END-ISO-10303-21;";
+        var valid = """
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('Retry'),'2;1');
+ENDSEC;
+DATA;
+#30=ADVANCED_FACE('',(),#40,.T.);
+ENDSEC;
+END-ISO-10303-21;
+""";
+
+        var first = _parser.Parse(Encoding.UTF8.GetBytes(invalid));
+        var second = _parser.Parse(Encoding.UTF8.GetBytes(valid));
+
+        Assert.False(first.IsSuccess);
+        Assert.True(second.IsSuccess);
+        Assert.True(second.HasSurfaces);
+    }
+
 }

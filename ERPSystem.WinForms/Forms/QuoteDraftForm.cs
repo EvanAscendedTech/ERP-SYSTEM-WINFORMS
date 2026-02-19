@@ -656,19 +656,21 @@ public class QuoteDraftForm : Form
     private static QuoteBlobAttachment? FindLatestStepAttachment(QuoteLineItem model)
     {
         return model.BlobAttachments
-            .Where(blob => blob.BlobType == QuoteBlobType.ThreeDModel && IsStepFile(blob))
+            .Where(blob => blob.BlobType == QuoteBlobType.ThreeDModel && IsPreviewableCadFile(blob))
             .OrderByDescending(blob => blob.UploadedUtc)
             .ThenByDescending(blob => blob.Id)
             .FirstOrDefault();
     }
 
-    private static bool IsStepFile(QuoteBlobAttachment blob)
+    private static bool IsPreviewableCadFile(QuoteBlobAttachment blob)
     {
         var ext = blob.Extension ?? string.Empty;
         return ext.Equals(".step", StringComparison.OrdinalIgnoreCase)
                || ext.Equals(".stp", StringComparison.OrdinalIgnoreCase)
+               || ext.Equals(".sldprt", StringComparison.OrdinalIgnoreCase)
                || blob.FileName.EndsWith(".step", StringComparison.OrdinalIgnoreCase)
-               || blob.FileName.EndsWith(".stp", StringComparison.OrdinalIgnoreCase);
+               || blob.FileName.EndsWith(".stp", StringComparison.OrdinalIgnoreCase)
+               || blob.FileName.EndsWith(".sldprt", StringComparison.OrdinalIgnoreCase);
     }
 
     private async void ExpandModelViewer(LineItemCard card)
@@ -676,7 +678,7 @@ public class QuoteDraftForm : Form
         var stepAttachment = FindLatestStepAttachment(card.Model);
         if (stepAttachment is null)
         {
-            MessageBox.Show("No STEP model found for this line item.", "3D Model", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("No previewable CAD model found for this line item.", "3D Model", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
@@ -689,7 +691,7 @@ public class QuoteDraftForm : Form
 
         if (stepData.Length == 0)
         {
-            MessageBox.Show("STEP model data is unavailable for this line item.", "3D Model", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("CAD model data is unavailable for this line item.", "3D Model", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
@@ -702,6 +704,7 @@ public class QuoteDraftForm : Form
             WindowState = FormWindowState.Maximized
         };
         var viewer = new StepModelPreviewControl { Dock = DockStyle.Fill };
+        viewerForm.FormClosed += (_, _) => viewer.ClearPreview();
 
         viewer.LoadStep(stepData, stepAttachment.FileName, stepAttachment.StorageRelativePath);
         viewerForm.Controls.Add(viewer);

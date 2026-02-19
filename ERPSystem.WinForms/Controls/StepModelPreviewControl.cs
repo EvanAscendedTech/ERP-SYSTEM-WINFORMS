@@ -10,14 +10,14 @@ public sealed class StepModelPreviewControl : UserControl
 {
     private readonly WebView2 _webView;
     private readonly Label _statusLabel;
-    private byte[] _stepBytes = Array.Empty<byte>();
-    private string _sourceFileName = string.Empty;
-    private string _sourcePath = string.Empty;
     private bool _initialized;
     private int _renderVersion;
     private TaskCompletionSource<bool>? _navigationReady;
     private readonly StepFileParser _stepFileParser = new();
     private readonly SolidModelFileTypeDetector _fileTypeDetector = new();
+    private byte[] _lastLoadedBytes = Array.Empty<byte>();
+    private string _lastLoadedFileName = string.Empty;
+    private string _lastLoadedSourcePath = string.Empty;
     private static readonly string HtmlShell = BuildHtmlShell();
 
     public StepModelPreviewControl()
@@ -51,11 +51,20 @@ public sealed class StepModelPreviewControl : UserControl
 
     public void LoadStep(byte[]? stepBytes, string? fileName = null, string? sourcePath = null)
     {
-        _stepBytes = stepBytes ?? Array.Empty<byte>();
-        _sourceFileName = fileName ?? string.Empty;
-        _sourcePath = sourcePath ?? string.Empty;
+        var bytesSnapshot = stepBytes?.ToArray() ?? Array.Empty<byte>();
+        var nameSnapshot = fileName ?? string.Empty;
+        var pathSnapshot = sourcePath ?? string.Empty;
+        _lastLoadedBytes = bytesSnapshot;
+        _lastLoadedFileName = nameSnapshot;
+        _lastLoadedSourcePath = pathSnapshot;
         var version = Interlocked.Increment(ref _renderVersion);
-        _ = LoadStepInternalAsync(version);
+        _ = LoadStepInternalAsync(bytesSnapshot, nameSnapshot, pathSnapshot, version);
+    }
+
+    public void ClearPreview()
+    {
+        Interlocked.Increment(ref _renderVersion);
+        _ = ClearPreviewAsync();
     }
 
     public async Task LoadStepAttachmentAsync(QuoteBlobAttachment? attachment, Func<int, Task<byte[]>>? blobResolver = null)
@@ -75,20 +84,25 @@ public sealed class StepModelPreviewControl : UserControl
         LoadStep(data, attachment.FileName, attachment.StorageRelativePath);
     }
 
-    private async Task LoadStepInternalAsync(int version)
+    private async Task LoadStepInternalAsync(byte[] stepBytes, string sourceFileName, string sourcePath, int version)
     {
         await ResetViewerForNextParseAsync();
 
-        if (_stepBytes.Length == 0)
+        if (version != _renderVersion)
+        {
+            return;
+        }
+
+        if (stepBytes.Length == 0)
         {
             ShowError("STEP model unavailable (missing file data)");
             return;
         }
 
-        var candidateName = !string.IsNullOrWhiteSpace(_sourceFileName)
-            ? _sourceFileName
-            : _sourcePath;
-        var detection = _fileTypeDetector.Detect(_stepBytes, candidateName);
+        var candidateName = !string.IsNullOrWhiteSpace(sourceFileName)
+            ? sourceFileName
+            : sourcePath;
+        var detection = _fileTypeDetector.Detect(stepBytes, candidateName);
         if (!detection.IsKnownType)
         {
             ShowError("Unsupported 3D format. Supported: STEP/STP, STL, OBJ, IGES, BREP, SLDPRT");
@@ -103,13 +117,13 @@ public sealed class StepModelPreviewControl : UserControl
 
         _statusLabel.Text = $"Parsing {detection.FileType} geometry...";
         _statusLabel.Visible = true;
-        Trace.WriteLine($"[StepPreview] Begin parse file='{candidateName}', bytes={_stepBytes.Length}, type={detection.FileType}, source={detection.DetectionSource}");
+        Trace.WriteLine($"[StepPreview] Begin parse file='{candidateName}', bytes={stepBytes.Length}, type={detection.FileType}, source={detection.DetectionSource}");
 
         try
         {
             if (detection.FileType == SolidModelFileType.Step)
             {
-                var parseReport = _stepFileParser.Parse(_stepBytes);
+                var parseReport = _stepFileParser.Parse(stepBytes);
                 if (!parseReport.IsSuccess)
                 {
                     Trace.WriteLine($"[StepPreview] STEP pre-parse failed error={parseReport.ErrorCode}, message='{parseReport.Message}'");
@@ -126,11 +140,11 @@ public sealed class StepModelPreviewControl : UserControl
                 return;
             }
 
-            var payload = JsonSerializer.Serialize(Convert.ToBase64String(_stepBytes));
+            var payload = JsonSerializer.Serialize(Convert.ToBase64String(stepBytes));
             var metadata = JsonSerializer.Serialize(new
             {
-                fileName = _sourceFileName,
-                sourcePath = _sourcePath,
+                fileName = sourceFileName,
+                sourcePath = sourcePath,
                 extension = detection.NormalizedExtension,
                 fileType = detection.FileType.ToString().ToLowerInvariant()
             });
@@ -152,6 +166,30 @@ public sealed class StepModelPreviewControl : UserControl
         {
             Trace.WriteLine($"[StepPreview] Render pipeline exception error={ex}");
             ShowError("WebView2 runtime unavailable for STEP preview");
+        }
+    }
+
+    private async Task ClearPreviewAsync()
+    {
+        _lastLoadedBytes = Array.Empty<byte>();
+        _lastLoadedFileName = string.Empty;
+        _lastLoadedSourcePath = string.Empty;
+        _statusLabel.Text = "3D preview cleared";
+        _statusLabel.Visible = true;
+        _webView.Visible = false;
+
+        if (!_initialized || _webView.CoreWebView2 is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _webView.CoreWebView2.ExecuteScriptAsync("window.resetViewerState?.();");
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[StepPreview] Clear preview failed: {ex.Message}");
         }
     }
 
@@ -216,6 +254,7 @@ public sealed class StepModelPreviewControl : UserControl
             "invalid-step-body" => "The STEP file is missing required DATA section content",
             "module-load-failed" => "STEP parser could not be loaded. Verify internet access to OpenCASCADE runtime assets",
             "parser-not-available" => "The detected 3D format is recognized, but the runtime parser for this format is unavailable",
+            "sldprt-not-supported" => "SLDPRT parsing failed. Export the model as STEP (.step/.stp) for reliable rendering",
             "empty-geometry" => "STEP file parsed, but no renderable geometry was produced",
             "parse-binary-failed" => "Failed to parse STEP binary payload",
             "parse-text-failed" => "Failed to parse STEP text payload",
@@ -296,7 +335,7 @@ public sealed class StepModelPreviewControl : UserControl
 
     private void OpenEnlargedViewer()
     {
-        if (_stepBytes.Length == 0)
+        if (_lastLoadedBytes.Length == 0)
         {
             return;
         }
@@ -333,7 +372,7 @@ public sealed class StepModelPreviewControl : UserControl
             Dock = DockStyle.Fill,
             Margin = new Padding(8)
         };
-        enlargedViewer.LoadStep(_stepBytes, _sourceFileName, _sourcePath);
+        enlargedViewer.LoadStep(_lastLoadedBytes, _lastLoadedFileName, _lastLoadedSourcePath);
 
         enlargedWindow.Controls.Add(enlargedViewer);
         enlargedWindow.Controls.Add(topBar);
@@ -352,6 +391,9 @@ public sealed class StepModelPreviewControl : UserControl
     {
         if (disposing)
         {
+            _lastLoadedBytes = Array.Empty<byte>();
+            _lastLoadedFileName = string.Empty;
+            _lastLoadedSourcePath = string.Empty;
             try
             {
                 if (_initialized && _webView.CoreWebView2 is not null)
@@ -599,17 +641,36 @@ public sealed class StepModelPreviewControl : UserControl
       return { group, triangleCount, parser: 'three-obj' };
     }
 
-    function getOcctReader(occt, fileType) {
+    function getOcctReaders(occt, fileType) {
       if (fileType === 'step') {
-        return occt.ReadStepFile;
+        return [occt.ReadStepFile].filter(Boolean);
       }
 
-      if (fileType === 'iges' && typeof occt.ReadIgesFile === 'function') {
-        return occt.ReadIgesFile;
+      if (fileType === 'iges') {
+        return [occt.ReadIgesFile].filter(fn => typeof fn === 'function');
       }
 
-      if (fileType === 'brep' && typeof occt.ReadBrepFile === 'function') {
-        return occt.ReadBrepFile;
+      if (fileType === 'brep') {
+        return [occt.ReadBrepFile].filter(fn => typeof fn === 'function');
+      }
+
+      if (fileType === 'sldprt') {
+        return [occt.ReadStepFile, occt.ReadBrepFile, occt.ReadIgesFile].filter(fn => typeof fn === 'function');
+      }
+
+      return [];
+    }
+
+    function parseOcctWithReaders(bytes, readers) {
+      for (const reader of readers) {
+        try {
+          const parsed = reader(bytes, null);
+          if (parsed && parsed.meshes && parsed.meshes.length > 0) {
+            return parsed;
+          }
+        } catch {
+          // Try next parser strategy.
+        }
       }
 
       return null;
@@ -649,7 +710,7 @@ public sealed class StepModelPreviewControl : UserControl
           meshData = parseStl(bytes);
         } else if (fileType === 'obj') {
           meshData = parseObj(bytes);
-        } else if (fileType === 'iges' || fileType === 'brep') {
+        } else if (fileType === 'iges' || fileType === 'brep' || fileType === 'sldprt') {
           let occt;
           try {
             occt = await getOcctModule();
@@ -658,13 +719,18 @@ public sealed class StepModelPreviewControl : UserControl
             return result(false, 'load-parser', 'module-load-failed');
           }
 
-          const reader = getOcctReader(occt, fileType);
-          if (!reader) {
+          const readers = getOcctReaders(occt, fileType);
+          if (!readers || readers.length === 0) {
             clearScene();
             return result(false, 'select-parser', 'parser-not-available');
           }
 
-          const parsed = reader(bytes, null);
+          const parsed = parseOcctWithReaders(bytes, readers);
+          if (!parsed) {
+            clearScene();
+            return result(false, 'parse-cad', fileType === 'sldprt' ? 'sldprt-not-supported' : 'corrupted-or-invalid-step');
+          }
+
           const occtMeshData = buildMeshGroup(parsed || {});
           meshData = { group: occtMeshData.group, triangleCount: occtMeshData.triangleCount, parser: `occt-${fileType}` };
         } else {
