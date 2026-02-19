@@ -16,6 +16,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private readonly UserManagementRepository _userRepository;
     private readonly Action<string> _openSection;
     private readonly UserAccount _currentUser;
+    private readonly bool _isAdmin;
     private readonly FlowLayoutPanel _customerCardsPanel = new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(8, 4, 8, 8) };
     private readonly Label _customerHubLabel = new() { Dock = DockStyle.Top, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold), Padding = new Padding(8, 0, 0, 0) };
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
@@ -33,6 +34,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         _userRepository = userRepository;
         _openSection = openSection;
         _currentUser = currentUser;
+        _isAdmin = AuthorizationService.HasRole(currentUser, RoleCatalog.Administrator);
         Dock = DockStyle.Fill;
 
         ConfigureQuotesGrid(_quotesGrid, includeLifecycleColumn: true);
@@ -183,9 +185,9 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private void ConfigureQuotesGrid(DataGridView grid, bool includeLifecycleColumn)
     {
         grid.DefaultCellStyle.Font = new Font(grid.Font, FontStyle.Bold);
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuoteId", HeaderText = "Quote #", DataPropertyName = nameof(QuoteGridRow.QuoteIdDisplay), Width = 90, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuoteId", HeaderText = "Quote #", DataPropertyName = nameof(QuoteGridRow.QuoteIdDisplay), FillWeight = 12, ReadOnly = true });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Customer", HeaderText = "Customer", DataPropertyName = nameof(QuoteGridRow.CustomerDisplay), Width = 240, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Status", DataPropertyName = nameof(QuoteGridRow.StatusDisplay), Width = 110, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Status", DataPropertyName = nameof(QuoteGridRow.StatusDisplay), FillWeight = 12, ReadOnly = true });
         if (includeLifecycleColumn)
         {
             grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Lifecycle", HeaderText = "Lifecycle Stage", DataPropertyName = nameof(QuoteGridRow.LifecycleStageDisplay), Width = 190, ReadOnly = true });
@@ -217,22 +219,14 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private void ConfigureCompletedQuotesGrid(DataGridView grid)
     {
         grid.Columns.Clear();
+        grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         grid.DefaultCellStyle.Font = new Font(grid.Font, FontStyle.Bold);
-        grid.Columns.Add(new DataGridViewButtonColumn
-        {
-            Name = "Delete",
-            HeaderText = string.Empty,
-            Width = 70,
-            Text = "Delete",
-            UseColumnTextForButtonValue = true,
-            FlatStyle = FlatStyle.Flat
-        });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuoteId", HeaderText = "Quote #", DataPropertyName = nameof(QuoteGridRow.QuoteIdDisplay), Width = 90, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Customer", HeaderText = "Customer", DataPropertyName = nameof(QuoteGridRow.CustomerDisplay), Width = 220, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Status", DataPropertyName = nameof(QuoteGridRow.StatusDisplay), Width = 110, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Lifecycle", HeaderText = "Lifecycle Stage", DataPropertyName = nameof(QuoteGridRow.LifecycleStageDisplay), Width = 180, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuotedAt", HeaderText = "Quoted", DataPropertyName = nameof(QuoteGridRow.QuotedAtDisplay), Width = 160, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "TimeSinceQuoted", HeaderText = "Time Since Quoted", DataPropertyName = nameof(QuoteGridRow.TimeSinceQuotedDisplay), Width = 170, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuoteId", HeaderText = "Quote #", DataPropertyName = nameof(QuoteGridRow.QuoteIdDisplay), FillWeight = 12, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Customer", HeaderText = "Customer", DataPropertyName = nameof(QuoteGridRow.CustomerDisplay), FillWeight = 28, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Status", DataPropertyName = nameof(QuoteGridRow.StatusDisplay), FillWeight = 12, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Lifecycle", HeaderText = "Lifecycle Stage", DataPropertyName = nameof(QuoteGridRow.LifecycleStageDisplay), FillWeight = 22, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "QuotedAt", HeaderText = "Quoted", DataPropertyName = nameof(QuoteGridRow.QuotedAtDisplay), FillWeight = 14, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "TimeSinceQuoted", HeaderText = "Time Since Quoted", DataPropertyName = nameof(QuoteGridRow.TimeSinceQuotedDisplay), FillWeight = 20, ReadOnly = true });
 
         grid.RowPrePaint += (_, e) =>
         {
@@ -259,7 +253,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
     private async Task CreateNewQuoteAsync()
     {
-        var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing), _currentUser.Username);
+        var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing), _currentUser.Username, actorUser: _currentUser);
         if (draft.ShowDialog(this) == DialogResult.OK)
         {
             _feedback.Text = $"Created quote {draft.CreatedQuoteId}.";
@@ -309,7 +303,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         }
 
         await LogAuditAsync("Quotes", "Reviewed quote", $"Opened quote #{fullQuote.Id} for review/edit.");
-        using var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing), _currentUser.Username, fullQuote);
+        using var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing), _currentUser.Username, fullQuote, _currentUser);
         if (draft.ShowDialog(this) == DialogResult.OK)
         {
             _feedback.Text = draft.WasDeleted
@@ -723,22 +717,15 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         return card;
     }
 
-    private async Task HandleCompletedQuoteCellClickAsync(int rowIndex, int columnIndex)
+    private async Task HandleCompletedQuoteCellClickAsync(int rowIndex, int _)
     {
         if (rowIndex < 0 || rowIndex >= _completedQuotesGrid.Rows.Count)
         {
             return;
         }
 
-        if (_completedQuotesGrid.Rows[rowIndex].DataBoundItem is not QuoteGridRow selectedRow || selectedRow.QuoteId is not int quoteId)
+        if (_completedQuotesGrid.Rows[rowIndex].DataBoundItem is not QuoteGridRow { QuoteId: int })
         {
-            return;
-        }
-
-        var clickedColumnName = columnIndex >= 0 ? _completedQuotesGrid.Columns[columnIndex].Name : string.Empty;
-        if (string.Equals(clickedColumnName, "Delete", StringComparison.OrdinalIgnoreCase))
-        {
-            await DeleteCompletedQuoteAsync(quoteId);
             return;
         }
 
@@ -764,9 +751,33 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        using var detailsForm = new CompletedQuoteDetailsForm(quote, CreateLineItemsSocketView(quote));
+        using var detailsForm = new CompletedQuoteDetailsForm(quote, _isAdmin, CreateModelCell);
         detailsForm.ShowDialog(this);
-        FocusCompletedQuoteRow(quoteId);
+
+        switch (detailsForm.RequestedAction)
+        {
+            case CompletedQuoteAction.Edit:
+                if (!_isAdmin)
+                {
+                    _feedback.Text = "Only Administrators can edit completed quotes.";
+                    break;
+                }
+
+                await EditCompletedQuoteAsync(quoteId);
+                break;
+            case CompletedQuoteAction.Delete:
+                if (!_isAdmin)
+                {
+                    _feedback.Text = "Only Administrators can delete completed quotes.";
+                    break;
+                }
+
+                await DeleteCompletedQuoteAsync(quoteId);
+                break;
+            default:
+                FocusCompletedQuoteRow(quoteId);
+                break;
+        }
     }
 
     private void FocusCompletedQuoteRow(int quoteId)
@@ -790,6 +801,30 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             _completedQuotesGrid.Focus();
             return;
         }
+    }
+
+
+    private async Task EditCompletedQuoteAsync(int quoteId)
+    {
+        var quote = await _quoteRepository.GetQuoteAsync(quoteId);
+        if (quote is null || quote.Status != QuoteStatus.Completed)
+        {
+            _feedback.Text = $"Completed quote {quoteId} could not be loaded for edit.";
+            return;
+        }
+
+        using var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing), _currentUser.Username, quote, _currentUser);
+        if (draft.ShowDialog(this) == DialogResult.OK)
+        {
+            _feedback.Text = draft.WasDeleted
+                ? $"Quote {quoteId} deleted."
+                : $"Quote {quoteId} updated.";
+            await LogAuditAsync("Quotes", draft.WasDeleted ? "Deleted completed quote" : "Updated completed quote", $"Quote #{quoteId} {(draft.WasDeleted ? "deleted" : "updated")} from completed details modal.");
+            await LoadActiveQuotesAsync();
+            return;
+        }
+
+        FocusCompletedQuoteRow(quoteId);
     }
 
     private async Task DeleteCompletedQuoteAsync(int quoteId)
@@ -817,101 +852,11 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        await _quoteRepository.DeleteQuoteAsync(quote.Id);
+        await _quoteRepository.DeleteQuoteAsync(quote.Id, _currentUser);
         await LogAuditAsync("Quotes", "Deleted completed quote", $"Quote #{quote.Id} deleted from completed list.");
         _feedback.Text = $"Completed quote {quote.Id} deleted.";
         await LoadActiveQuotesAsync();
     }
-
-    private Control CreateLineItemsSocketView(Quote quote)
-    {
-        var scrollHost = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            AutoScroll = true,
-            WrapContents = false,
-            FlowDirection = FlowDirection.TopDown,
-            Padding = new Padding(4, 4, 24, 8)
-        };
-
-        if (quote.LineItems.Count == 0)
-        {
-            scrollHost.Controls.Add(new Label
-            {
-                Text = "No line items attached to this completed quote.",
-                Height = 40,
-                Width = 760,
-                TextAlign = ContentAlignment.MiddleLeft,
-                ForeColor = Color.DimGray
-            });
-
-            return scrollHost;
-        }
-
-        for (var index = 0; index < quote.LineItems.Count; index++)
-        {
-            var lineItem = quote.LineItems[index];
-            scrollHost.Controls.Add(CreateLineItemPreviewCard(quote, lineItem, index + 1));
-        }
-
-        return scrollHost;
-    }
-
-    private Control CreateLineItemPreviewCard(Quote quote, QuoteLineItem lineItem, int displayIndex)
-    {
-        var card = new TableLayoutPanel
-        {
-            Width = 900,
-            Height = 270,
-            Margin = new Padding(0, 0, 0, 12),
-            ColumnCount = 2,
-            RowCount = 1,
-            BackColor = Color.White,
-            CellBorderStyle = TableLayoutPanelCellBorderStyle.Single
-        };
-
-        card.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340));
-        card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-
-        var infoPanel = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 8,
-            Padding = new Padding(12, 10, 12, 10),
-            BackColor = Color.FromArgb(245, 248, 252)
-        };
-        for (var i = 0; i < infoPanel.RowCount; i++)
-        {
-            infoPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 12.5f));
-        }
-
-        infoPanel.Controls.Add(CreateMetadataLabel($"Line Item #{displayIndex}", bold: true), 0, 0);
-        infoPanel.Controls.Add(CreateMetadataLabel($"Drawing Name: {lineItem.Description}"), 0, 1);
-        infoPanel.Controls.Add(CreateMetadataLabel($"Drawing Number: {lineItem.DrawingNumber}"), 0, 2);
-        infoPanel.Controls.Add(CreateMetadataLabel($"Customer: {quote.CustomerName}"), 0, 3);
-        infoPanel.Controls.Add(CreateMetadataLabel($"Drawing Revision: {lineItem.Revision}"), 0, 4);
-        infoPanel.Controls.Add(CreateMetadataLabel($"Qty: {lineItem.Quantity:0.##}"), 0, 5);
-        infoPanel.Controls.Add(CreateMetadataLabel($"Line Total: {lineItem.LineItemTotal:C2}"), 0, 6);
-        infoPanel.Controls.Add(CreateMetadataLabel("3D Controls: rotate / pan / zoom", bold: true), 0, 7);
-
-        var viewerContainer = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8), BackColor = Color.FromArgb(250, 251, 253) };
-        viewerContainer.Controls.Add(CreateModelCell(lineItem));
-
-        card.Controls.Add(infoPanel, 0, 0);
-        card.Controls.Add(viewerContainer, 1, 0);
-        return card;
-    }
-
-    private static Label CreateMetadataLabel(string text, bool bold = false)
-        => new()
-        {
-            Text = text,
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft,
-            AutoEllipsis = true,
-            Font = bold ? new Font(SystemFonts.DefaultFont, FontStyle.Bold) : SystemFonts.DefaultFont
-        };
 
     private Control CreateModelCell(QuoteLineItem lineItem)
     {
