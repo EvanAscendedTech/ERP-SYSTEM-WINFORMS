@@ -1,4 +1,5 @@
 using ERPSystem.WinForms.Models;
+using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms.Forms;
 
@@ -126,7 +127,7 @@ public class QuotePacketForm : Form
     {
         using var dialog = new OpenFileDialog
         {
-            Filter = "Supported Files|*.pdf;*.txt;*.step;*.stp|PDF Files|*.pdf|Text Files|*.txt|STEP Files|*.step;*.stp",
+            Filter = "Supported Files|*.pdf;*.txt;*.step;*.stp;*.sldprt;*.iges;*.igs;*.brep;*.stl;*.obj;*.x_t;*.x_b|PDF Files|*.pdf|Text Files|*.txt|3D Model Files|*.step;*.stp;*.sldprt;*.iges;*.igs;*.brep;*.stl;*.obj;*.x_t;*.x_b",
             Multiselect = true,
             Title = "Select files for quote packet"
         };
@@ -165,6 +166,6 @@ public class QuotePacketForm : Form
     private static bool IsSupportedFile(string filePath)
     {
         var ext = Path.GetExtension(filePath).ToLowerInvariant();
-        return ext is ".pdf" or ".txt" or ".step" or ".stp";
+        return ext is ".pdf" or ".txt" || SolidModelFileTypeDetector.IsKnownSolidExtension(ext);
     }
 }

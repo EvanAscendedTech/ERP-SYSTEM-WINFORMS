@@ -17,6 +17,7 @@ public sealed class StepModelPreviewControl : UserControl
     private int _renderVersion;
     private TaskCompletionSource<bool>? _navigationReady;
     private readonly StepFileParser _stepFileParser = new();
+    private readonly SolidModelFileTypeDetector _fileTypeDetector = new();
     private static readonly string HtmlShell = BuildHtmlShell();
 
     public StepModelPreviewControl()
@@ -76,6 +77,8 @@ public sealed class StepModelPreviewControl : UserControl
 
     private async Task LoadStepInternalAsync(int version)
     {
+        await ResetViewerForNextParseAsync();
+
         if (_stepBytes.Length == 0)
         {
             ShowError("STEP model unavailable (missing file data)");
@@ -85,29 +88,37 @@ public sealed class StepModelPreviewControl : UserControl
         var candidateName = !string.IsNullOrWhiteSpace(_sourceFileName)
             ? _sourceFileName
             : _sourcePath;
-        var extension = Path.GetExtension(candidateName);
-        if (!extension.Equals(".step", StringComparison.OrdinalIgnoreCase)
-            && !extension.Equals(".stp", StringComparison.OrdinalIgnoreCase))
+        var detection = _fileTypeDetector.Detect(_stepBytes, candidateName);
+        if (!detection.IsKnownType)
         {
-            ShowError("Unsupported 3D format. Expected .step or .stp");
+            ShowError("Unsupported 3D format. Supported: STEP/STP, STL, OBJ, IGES, BREP, SLDPRT");
             return;
         }
 
-        _statusLabel.Text = "Parsing STEP geometry...";
+        if (!detection.IsSupportedForRendering)
+        {
+            ShowError($"Detected {detection.FileType} format ({detection.NormalizedExtension}), but no parser kernel is configured for rendering.");
+            return;
+        }
+
+        _statusLabel.Text = $"Parsing {detection.FileType} geometry...";
         _statusLabel.Visible = true;
-        Trace.WriteLine($"[StepPreview] Begin parse file='{candidateName}', bytes={_stepBytes.Length}");
+        Trace.WriteLine($"[StepPreview] Begin parse file='{candidateName}', bytes={_stepBytes.Length}, type={detection.FileType}, source={detection.DetectionSource}");
 
         try
         {
-            var parseReport = _stepFileParser.Parse(_stepBytes);
-            if (!parseReport.IsSuccess)
+            if (detection.FileType == SolidModelFileType.Step)
             {
-                Trace.WriteLine($"[StepPreview] STEP pre-parse failed error={parseReport.ErrorCode}, message='{parseReport.Message}'");
-                ShowError(BuildStatusMessage((false, parseReport.ErrorCode, "pre-parse", 0, 0, "step-precheck")));
-                return;
-            }
+                var parseReport = _stepFileParser.Parse(_stepBytes);
+                if (!parseReport.IsSuccess)
+                {
+                    Trace.WriteLine($"[StepPreview] STEP pre-parse failed error={parseReport.ErrorCode}, message='{parseReport.Message}'");
+                    ShowError(BuildStatusMessage((false, parseReport.ErrorCode, "pre-parse", 0, 0, "step-precheck")));
+                    return;
+                }
 
-            Trace.WriteLine($"[StepPreview] STEP pre-parse success entities={parseReport.EntityCount}, types={parseReport.DistinctEntityTypes.Count}, surfaces={parseReport.SurfaceEntityCount}, solids={parseReport.SolidEntityCount}");
+                Trace.WriteLine($"[StepPreview] STEP pre-parse success entities={parseReport.EntityCount}, types={parseReport.DistinctEntityTypes.Count}, surfaces={parseReport.SurfaceEntityCount}, solids={parseReport.SolidEntityCount}");
+            }
             await EnsureInitializedAsync();
 
             if (version != _renderVersion)
@@ -120,10 +131,11 @@ public sealed class StepModelPreviewControl : UserControl
             {
                 fileName = _sourceFileName,
                 sourcePath = _sourcePath,
-                extension
+                extension = detection.NormalizedExtension,
+                fileType = detection.FileType.ToString().ToLowerInvariant()
             });
 
-            var resultRaw = await _webView.CoreWebView2.ExecuteScriptAsync($"window.renderStepFromBase64({payload}, {metadata});");
+            var resultRaw = await _webView.CoreWebView2.ExecuteScriptAsync($"window.renderModelFromBase64({payload}, {metadata});");
             var result = ParseScriptResult(resultRaw);
             if (!result.Ok)
             {
@@ -140,6 +152,26 @@ public sealed class StepModelPreviewControl : UserControl
         {
             Trace.WriteLine($"[StepPreview] Render pipeline exception error={ex}");
             ShowError("WebView2 runtime unavailable for STEP preview");
+        }
+    }
+
+    private async Task ResetViewerForNextParseAsync()
+    {
+        _statusLabel.Visible = true;
+        _webView.Visible = false;
+
+        if (!_initialized || _webView.CoreWebView2 is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _webView.CoreWebView2.ExecuteScriptAsync("window.resetViewerState?.();");
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[StepPreview] Reset before parse failed: {ex.Message}");
         }
     }
 
@@ -183,6 +215,7 @@ public sealed class StepModelPreviewControl : UserControl
             "invalid-step-header" => "The file does not contain a valid STEP header (ISO-10303-21)",
             "invalid-step-body" => "The STEP file is missing required DATA section content",
             "module-load-failed" => "STEP parser could not be loaded. Verify internet access to OpenCASCADE runtime assets",
+            "parser-not-available" => "The detected 3D format is recognized, but the runtime parser for this format is unavailable",
             "empty-geometry" => "STEP file parsed, but no renderable geometry was produced",
             "parse-binary-failed" => "Failed to parse STEP binary payload",
             "parse-text-failed" => "Failed to parse STEP text payload",
@@ -315,6 +348,26 @@ public sealed class StepModelPreviewControl : UserControl
         enlargedWindow.ShowDialog(owner);
     }
 
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            try
+            {
+                if (_initialized && _webView.CoreWebView2 is not null)
+                {
+                    _webView.CoreWebView2.ExecuteScriptAsync("window.disposeViewer?.();").AsTask().Wait(1500);
+                }
+            }
+            catch
+            {
+                // Best-effort cleanup.
+            }
+        }
+
+        base.Dispose(disposing);
+    }
+
     private sealed record StepRenderResult(bool ok, string? error, string? stage, int meshCount = 0, int triangleCount = 0, string? parser = null);
 
     private static string BuildHtmlShell()
@@ -332,6 +385,8 @@ public sealed class StepModelPreviewControl : UserControl
   <div id="viewport"></div>
   <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/STLLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/OBJLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/occt-import-js.js"></script>
   <script>
     const viewport = document.getElementById('viewport');
@@ -508,36 +563,115 @@ public sealed class StepModelPreviewControl : UserControl
       throw new Error('parse-text-failed');
     }
 
-    async function renderStepFromBase64(base64, metadata) {
+    function parseStl(bytes) {
+      const loader = new THREE.STLLoader();
+      const geometry = loader.parse(bytes.buffer);
+      if (!geometry) {
+        throw new Error('parse-stl-failed');
+      }
+
+      const material = new THREE.MeshStandardMaterial({ color: new THREE.Color('#4a78bb'), roughness: 0.55, metalness: 0.08 });
+      const mesh = new THREE.Mesh(geometry, material);
+      const group = new THREE.Group();
+      group.add(mesh);
+      return { group, triangleCount: Math.max(0, Math.floor((geometry.index ? geometry.index.count : geometry.attributes.position.count) / 3)), parser: 'three-stl' };
+    }
+
+    function parseObj(bytes) {
+      const loader = new THREE.OBJLoader();
+      const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      const group = loader.parse(text);
+      let triangleCount = 0;
+
+      group.traverse(node => {
+        if (!node.isMesh || !node.geometry) {
+          return;
+        }
+
+        node.material = new THREE.MeshStandardMaterial({ color: new THREE.Color('#4a78bb'), roughness: 0.55, metalness: 0.08, side: THREE.DoubleSide });
+        if (node.geometry.index) {
+          triangleCount += Math.floor(node.geometry.index.count / 3);
+        } else if (node.geometry.attributes && node.geometry.attributes.position) {
+          triangleCount += Math.floor(node.geometry.attributes.position.count / 3);
+        }
+      });
+
+      return { group, triangleCount, parser: 'three-obj' };
+    }
+
+    function getOcctReader(occt, fileType) {
+      if (fileType === 'step') {
+        return occt.ReadStepFile;
+      }
+
+      if (fileType === 'iges' && typeof occt.ReadIgesFile === 'function') {
+        return occt.ReadIgesFile;
+      }
+
+      if (fileType === 'brep' && typeof occt.ReadBrepFile === 'function') {
+        return occt.ReadBrepFile;
+      }
+
+      return null;
+    }
+
+    async function renderModelFromBase64(base64, metadata) {
       if (!base64 || base64.length === 0) {
         clearScene();
         return result(false, 'load-bytes', 'missing-file-data');
       }
 
       try {
-        const ext = (metadata && metadata.extension ? metadata.extension : '').toLowerCase();
-        if (ext !== '.step' && ext !== '.stp') {
+        const fileType = (metadata && metadata.fileType ? metadata.fileType : '').toLowerCase();
+
+        const bytes = base64ToUint8Array(base64);
+        let meshData;
+
+        if (fileType === 'step') {
+          const validation = validateStepContent(bytes);
+          if (!validation.ok) {
+            clearScene();
+            return validation;
+          }
+
+          let occt;
+          try {
+            occt = await getOcctModule();
+          } catch {
+            clearScene();
+            return result(false, 'load-parser', 'module-load-failed');
+          }
+
+          const parsedResult = parseWithOcct(occt, bytes);
+          const occtMeshData = buildMeshGroup(parsedResult.parsed || {});
+          meshData = { group: occtMeshData.group, triangleCount: occtMeshData.triangleCount, parser: parsedResult.parser };
+        } else if (fileType === 'stl') {
+          meshData = parseStl(bytes);
+        } else if (fileType === 'obj') {
+          meshData = parseObj(bytes);
+        } else if (fileType === 'iges' || fileType === 'brep') {
+          let occt;
+          try {
+            occt = await getOcctModule();
+          } catch {
+            clearScene();
+            return result(false, 'load-parser', 'module-load-failed');
+          }
+
+          const reader = getOcctReader(occt, fileType);
+          if (!reader) {
+            clearScene();
+            return result(false, 'select-parser', 'parser-not-available');
+          }
+
+          const parsed = reader(bytes, null);
+          const occtMeshData = buildMeshGroup(parsed || {});
+          meshData = { group: occtMeshData.group, triangleCount: occtMeshData.triangleCount, parser: `occt-${fileType}` };
+        } else {
           clearScene();
           return result(false, 'validate-format', 'unsupported-format');
         }
 
-        const bytes = base64ToUint8Array(base64);
-        const validation = validateStepContent(bytes);
-        if (!validation.ok) {
-          clearScene();
-          return validation;
-        }
-
-        let occt;
-        try {
-          occt = await getOcctModule();
-        } catch {
-          clearScene();
-          return result(false, 'load-parser', 'module-load-failed');
-        }
-
-        const parsedResult = parseWithOcct(occt, bytes);
-        const meshData = buildMeshGroup(parsedResult.parsed || {});
         if (meshData.group.children.length === 0) {
           clearScene();
           return result(false, 'load-geometry', 'empty-geometry');
@@ -553,7 +687,7 @@ public sealed class StepModelPreviewControl : UserControl
           error: '',
           meshCount: meshData.group.children.length,
           triangleCount: meshData.triangleCount,
-          parser: parsedResult.parser
+          parser: meshData.parser
         };
       } catch (err) {
         clearScene();
@@ -570,8 +704,23 @@ public sealed class StepModelPreviewControl : UserControl
       camera.updateProjectionMatrix();
     }
 
-    window.renderStepFromBase64 = renderStepFromBase64;
+    function resetViewerState() {
+      clearScene();
+      renderer.renderLists.dispose();
+      controls.reset();
+    }
+
+    function disposeViewer() {
+      clearScene();
+      renderer.renderLists.dispose();
+      renderer.dispose();
+      controls.dispose();
+    }
+
+    window.renderModelFromBase64 = renderModelFromBase64;
     window.resizeRenderer = resizeRenderer;
+    window.resetViewerState = resetViewerState;
+    window.disposeViewer = disposeViewer;
 
     function animate() {
       requestAnimationFrame(animate);

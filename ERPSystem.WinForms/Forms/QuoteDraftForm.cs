@@ -39,6 +39,8 @@ public class QuoteDraftForm : Form
     private readonly Quote? _editingQuote;
     private readonly UserAccount? _actorUser;
     private readonly List<LineItemCard> _lineItemCards = new();
+    private readonly StepFileParser _stepFileParser = new();
+    private readonly SolidModelFileTypeDetector _solidModelTypeDetector = new();
     private decimal _shopHourlyRate;
 
     public int CreatedQuoteId { get; private set; }
@@ -738,16 +740,15 @@ public class QuoteDraftForm : Form
         if (blobType == QuoteBlobType.ThreeDModel)
         {
             var extension = Path.GetExtension(fileName);
-            if (!extension.Equals(".step", StringComparison.OrdinalIgnoreCase)
-                && !extension.Equals(".stp", StringComparison.OrdinalIgnoreCase))
+            if (!SolidModelFileTypeDetector.IsKnownSolidExtension(extension))
             {
-                MessageBox.Show("3D model uploads must be STEP files (.step or .stp).", "Invalid 3D Model", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("3D model uploads must be a known solid format (.step, .stp, .sldprt, .iges, .igs, .brep, .stl, .obj, .x_t, .x_b).", "Invalid 3D Model", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            if (!await IsReadableStepFileAsync(filePath))
+            if (!await IsReadableModelFileAsync(filePath))
             {
-                MessageBox.Show("The selected STEP file appears to be corrupted or unreadable.", "Invalid 3D Model", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("The selected 3D model appears to be corrupted, unreadable, or mismatched to its file type.", "Invalid 3D Model", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
         }
@@ -832,7 +833,7 @@ public class QuoteDraftForm : Form
         await File.WriteAllBytesAsync(saveDialog.FileName, data);
     }
 
-    private static async Task<bool> IsReadableStepFileAsync(string filePath)
+    private async Task<bool> IsReadableModelFileAsync(string filePath)
     {
         try
         {
@@ -851,12 +852,20 @@ public class QuoteDraftForm : Form
                 return false;
             }
 
-            var header = System.Text.Encoding.UTF8.GetString(buffer, 0, bytesRead);
-            var looksLikeStep = header.Contains("ISO-10303-21", StringComparison.OrdinalIgnoreCase)
-                || header.Contains("ISO10303-21", StringComparison.OrdinalIgnoreCase)
-                || header.Contains("HEADER;", StringComparison.OrdinalIgnoreCase);
+            var fileBytes = await File.ReadAllBytesAsync(filePath);
+            var detection = _solidModelTypeDetector.Detect(fileBytes, filePath);
+            if (!detection.IsKnownType)
+            {
+                return false;
+            }
 
-            return looksLikeStep && header.Contains("DATA;", StringComparison.OrdinalIgnoreCase);
+            if (detection.FileType != SolidModelFileType.Step)
+            {
+                return true;
+            }
+
+            var report = _stepFileParser.Parse(fileBytes);
+            return report.IsSuccess;
         }
         catch
         {
