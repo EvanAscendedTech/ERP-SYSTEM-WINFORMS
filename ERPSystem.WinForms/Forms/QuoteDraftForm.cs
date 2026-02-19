@@ -41,16 +41,24 @@ public class QuoteDraftForm : Form
     private readonly List<LineItemCard> _lineItemCards = new();
     private readonly StepFileParser _stepFileParser = new();
     private readonly SolidModelFileTypeDetector _solidModelTypeDetector = new();
+    private readonly StepParsingDiagnosticsLog _stepParsingDiagnosticsLog;
     private decimal _shopHourlyRate;
 
     public int CreatedQuoteId { get; private set; }
     public bool WasDeleted { get; private set; }
 
-    public QuoteDraftForm(QuoteRepository quoteRepository, bool canViewPricing, string uploadedBy, Quote? editingQuote = null, UserAccount? actorUser = null)
+    public QuoteDraftForm(
+        QuoteRepository quoteRepository,
+        bool canViewPricing,
+        string uploadedBy,
+        StepParsingDiagnosticsLog? stepParsingDiagnosticsLog = null,
+        Quote? editingQuote = null,
+        UserAccount? actorUser = null)
     {
         _quoteRepository = quoteRepository;
         _canViewPricing = canViewPricing;
         _uploadedBy = uploadedBy;
+        _stepParsingDiagnosticsLog = stepParsingDiagnosticsLog ?? new StepParsingDiagnosticsLog();
         _editingQuote = editingQuote;
         _actorUser = actorUser;
         _quoteLifecycleId.Text = string.IsNullOrWhiteSpace(editingQuote?.LifecycleQuoteId) ? GenerateLifecycleQuoteId() : editingQuote.LifecycleQuoteId;
@@ -838,11 +846,24 @@ public class QuoteDraftForm : Form
 
     private async Task<bool> IsReadableModelFileAsync(string filePath)
     {
+        var fileName = Path.GetFileName(filePath);
+        long fileSizeBytes = 0;
+
         try
         {
             var fileInfo = new FileInfo(filePath);
+            fileSizeBytes = fileInfo.Exists ? fileInfo.Length : 0;
             if (fileInfo.Length <= 0)
             {
+                _stepParsingDiagnosticsLog.RecordAttempt(
+                    fileName,
+                    filePath,
+                    fileSizeBytes,
+                    isSuccess: false,
+                    errorCode: "missing-file-data",
+                    message: "No readable payload bytes found for the selected STEP upload.",
+                    stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
+                    source: "quote-upload");
                 return false;
             }
 
@@ -859,6 +880,15 @@ public class QuoteDraftForm : Form
             var detection = _solidModelTypeDetector.Detect(fileBytes, filePath);
             if (!detection.IsKnownType)
             {
+                _stepParsingDiagnosticsLog.RecordAttempt(
+                    fileName,
+                    filePath,
+                    fileSizeBytes,
+                    isSuccess: false,
+                    errorCode: "unsupported-format",
+                    message: "The selected model extension/signature is not recognized as a supported solid format.",
+                    stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
+                    source: "quote-upload");
                 return false;
             }
 
@@ -868,10 +898,29 @@ public class QuoteDraftForm : Form
             }
 
             var report = _stepFileParser.Parse(fileBytes);
+            _stepParsingDiagnosticsLog.RecordAttempt(
+                fileName,
+                filePath,
+                fileSizeBytes,
+                isSuccess: report.IsSuccess,
+                errorCode: report.IsSuccess ? string.Empty : report.ErrorCode,
+                message: report.IsSuccess ? "STEP parse validation succeeded." : report.Message,
+                stackTrace: report.IsSuccess ? string.Empty : StepParsingDiagnosticsLog.BuildCallSiteTrace(),
+                source: "quote-upload");
+
             return report.IsSuccess;
         }
-        catch
+        catch (Exception ex)
         {
+            _stepParsingDiagnosticsLog.RecordAttempt(
+                fileName,
+                filePath,
+                fileSizeBytes,
+                isSuccess: false,
+                errorCode: "step-parse-exception",
+                message: ex.Message,
+                stackTrace: StepParsingDiagnosticsLog.BuildStackTrace(ex),
+                source: "quote-upload");
             return false;
         }
     }

@@ -29,6 +29,7 @@ public class SettingsControl : UserControl, IRealtimeDataControl
     private readonly TabControl _settingsTabs = new() { Dock = DockStyle.Fill };
     private readonly NumericUpDown _shopRateInput = new() { Minimum = 0, Maximum = 10000, DecimalPlaces = 2, Increment = 1, Width = 140 };
     private readonly Label _quoteSettingsFeedback = new() { AutoSize = true };
+    private readonly StepParsingDiagnosticsControl _stepParsingDiagnosticsControl;
 
     private AppSettings _settings = new();
     private AppTheme _currentTheme;
@@ -39,6 +40,7 @@ public class SettingsControl : UserControl, IRealtimeDataControl
         QuoteRepository quoteRepository,
         UserAccount currentUser,
         bool canManageSettings,
+        StepParsingDiagnosticsLog? stepParsingDiagnosticsLog = null,
         Action<AppSettings>? settingsChanged = null,
         AppTheme currentTheme = AppTheme.Dark,
         Action<AppTheme>? themeChanged = null,
@@ -59,21 +61,28 @@ public class SettingsControl : UserControl, IRealtimeDataControl
 
         _auditLogControl = new AuditLogControl(userRepository) { Dock = DockStyle.Fill };
         _usersControl = new UsersControl(userRepository, currentUser, () => { }, JumpToUserAuditLog) { Dock = DockStyle.Fill };
+        _stepParsingDiagnosticsControl = new StepParsingDiagnosticsControl(stepParsingDiagnosticsLog ?? new StepParsingDiagnosticsLog()) { Dock = DockStyle.Fill };
 
         var generalTab = new TabPage("General Settings");
         var accessTab = new TabPage("User Access");
         var quoteSettingsTab = new TabPage("Quote Settings");
         var auditLogTab = new TabPage("Audit Log");
+        var diagnosticsTab = new TabPage("Diagnostics");
 
         generalTab.Controls.Add(BuildGeneralSettingsPanel());
         accessTab.Controls.Add(_usersControl);
         quoteSettingsTab.Controls.Add(BuildQuoteSettingsPanel());
         auditLogTab.Controls.Add(_auditLogControl);
+        diagnosticsTab.Controls.Add(_stepParsingDiagnosticsControl);
 
         _settingsTabs.TabPages.Add(generalTab);
         _settingsTabs.TabPages.Add(accessTab);
         _settingsTabs.TabPages.Add(quoteSettingsTab);
         _settingsTabs.TabPages.Add(auditLogTab);
+        if (_canManageSettings)
+        {
+            _settingsTabs.TabPages.Add(diagnosticsTab);
+        }
 
         Controls.Add(_settingsTabs);
 

@@ -17,6 +17,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private readonly Action<string> _openSection;
     private readonly UserAccount _currentUser;
     private readonly bool _isAdmin;
+    private readonly StepParsingDiagnosticsLog _stepParsingDiagnosticsLog;
     private readonly FlowLayoutPanel _customerCardsPanel = new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(8, 4, 8, 8) };
     private readonly Label _customerHubLabel = new() { Dock = DockStyle.Top, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold), Padding = new Padding(8, 0, 0, 0) };
     private readonly DataGridView _quotesGrid = new() { Dock = DockStyle.Fill, AutoGenerateColumns = false, ReadOnly = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false };
@@ -27,7 +28,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
     private List<Quote> _activeQuotesCache = new();
     private string? _selectedCustomer;
 
-    public QuotesControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, UserManagementRepository userRepository, UserAccount currentUser, Action<string> openSection)
+    public QuotesControl(QuoteRepository quoteRepository, ProductionRepository productionRepository, UserManagementRepository userRepository, UserAccount currentUser, Action<string> openSection, StepParsingDiagnosticsLog? stepParsingDiagnosticsLog = null)
     {
         _quoteRepository = quoteRepository;
         _productionRepository = productionRepository;
@@ -35,6 +36,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         _openSection = openSection;
         _currentUser = currentUser;
         _isAdmin = AuthorizationService.HasRole(currentUser, RoleCatalog.Administrator);
+        _stepParsingDiagnosticsLog = stepParsingDiagnosticsLog ?? new StepParsingDiagnosticsLog();
         Dock = DockStyle.Fill;
 
         ConfigureQuotesGrid(_quotesGrid, includeLifecycleColumn: true);
@@ -253,7 +255,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
     private async Task CreateNewQuoteAsync()
     {
-        var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing), _currentUser.Username, actorUser: _currentUser);
+        var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing), _currentUser.Username, stepParsingDiagnosticsLog: _stepParsingDiagnosticsLog, actorUser: _currentUser);
         if (draft.ShowDialog(this) == DialogResult.OK)
         {
             _feedback.Text = $"Created quote {draft.CreatedQuoteId}.";
@@ -303,7 +305,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         }
 
         await LogAuditAsync("Quotes", "Reviewed quote", $"Opened quote #{fullQuote.Id} for review/edit.");
-        using var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing), _currentUser.Username, fullQuote, _currentUser);
+        using var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing), _currentUser.Username, stepParsingDiagnosticsLog: _stepParsingDiagnosticsLog, editingQuote: fullQuote, actorUser: _currentUser);
         if (draft.ShowDialog(this) == DialogResult.OK)
         {
             _feedback.Text = draft.WasDeleted
@@ -813,7 +815,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
             return;
         }
 
-        using var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing), _currentUser.Username, quote, _currentUser);
+        using var draft = new QuoteDraftForm(_quoteRepository, AuthorizationService.HasPermission(_currentUser, UserPermission.ViewPricing), _currentUser.Username, stepParsingDiagnosticsLog: _stepParsingDiagnosticsLog, editingQuote: quote, actorUser: _currentUser);
         if (draft.ShowDialog(this) == DialogResult.OK)
         {
             _feedback.Text = draft.WasDeleted
