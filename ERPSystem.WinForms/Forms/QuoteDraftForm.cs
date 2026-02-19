@@ -1,8 +1,7 @@
 using System.Globalization;
-using System.Numerics;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.RegularExpressions;
+using ERPSystem.WinForms.Controls;
 using ERPSystem.WinForms.Data;
 using ERPSystem.WinForms.Models;
 
@@ -539,7 +538,7 @@ public class QuoteDraftForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52f));
 
         var viewerPanel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 8, 0) };
-        var viewer = new StepModelViewerControl { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
+        var viewer = new StepModelPreviewControl { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
         var expandButton = BuildCompactIconButton("⛶ Expand", Color.FromArgb(71, 85, 105));
         expandButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         expandButton.Location = new Point(Math.Max(4, viewerPanel.Width - 96), 4);
@@ -641,7 +640,7 @@ public class QuoteDraftForm : Form
                 stepAttachment.BlobData = stepBytes;
             }
 
-            card.StepViewer.LoadStep(stepBytes);
+            card.StepViewer.LoadStep(stepBytes, stepAttachment.FileName, stepAttachment.StorageRelativePath);
         }
         else
         {
@@ -697,9 +696,9 @@ public class QuoteDraftForm : Form
             StartPosition = FormStartPosition.CenterParent,
             WindowState = FormWindowState.Maximized
         };
-        var viewer = new StepModelViewerControl { Dock = DockStyle.Fill };
+        var viewer = new StepModelPreviewControl { Dock = DockStyle.Fill };
 
-        viewer.LoadStep(stepData);
+        viewer.LoadStep(stepData, stepAttachment.FileName, stepAttachment.StorageRelativePath);
         viewerForm.Controls.Add(viewer);
         viewerForm.ShowDialog(this);
     }
@@ -733,6 +732,23 @@ public class QuoteDraftForm : Form
         if (!File.Exists(filePath)) return;
 
         var fileName = Path.GetFileName(filePath);
+        if (blobType == QuoteBlobType.ThreeDModel)
+        {
+            var extension = Path.GetExtension(fileName);
+            if (!extension.Equals(".step", StringComparison.OrdinalIgnoreCase)
+                && !extension.Equals(".stp", StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show("3D model uploads must be STEP files (.step or .stp).", "Invalid 3D Model", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!await IsReadableStepFileAsync(filePath))
+            {
+                MessageBox.Show("The selected STEP file appears to be corrupted or unreadable.", "Invalid 3D Model", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+        }
+
         var existing = model.BlobAttachments.FirstOrDefault(x => x.BlobType == blobType && string.Equals(x.FileName, fileName, StringComparison.OrdinalIgnoreCase));
         if (existing is not null)
         {
@@ -811,6 +827,36 @@ public class QuoteDraftForm : Form
         if (saveDialog.ShowDialog(this) != DialogResult.OK) return;
         var data = attachment.BlobData.Length > 0 ? attachment.BlobData : await _quoteRepository.GetQuoteBlobContentAsync(attachment.Id);
         await File.WriteAllBytesAsync(saveDialog.FileName, data);
+    }
+
+    private static async Task<bool> IsReadableStepFileAsync(string filePath)
+    {
+        try
+        {
+            var fileInfo = new FileInfo(filePath);
+            if (fileInfo.Length <= 0)
+            {
+                return false;
+            }
+
+            const int readSize = 1024;
+            await using var stream = File.OpenRead(filePath);
+            var buffer = new byte[Math.Min(readSize, (int)Math.Min(fileInfo.Length, readSize))];
+            var bytesRead = await stream.ReadAsync(buffer);
+            if (bytesRead <= 0)
+            {
+                return false;
+            }
+
+            var header = System.Text.Encoding.UTF8.GetString(buffer, 0, bytesRead);
+            return header.Contains("ISO-10303-21", StringComparison.OrdinalIgnoreCase)
+                || header.Contains("HEADER;", StringComparison.OrdinalIgnoreCase)
+                || header.Contains("DATA;", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void RefreshAllBlobLists()
@@ -1155,175 +1201,6 @@ public class QuoteDraftForm : Form
         Close();
     }
 
-    private sealed class StepModelViewerControl : Control
-    {
-        private readonly List<(Vector3 Start, Vector3 End)> _segments = new();
-        private float _yaw = -0.45f;
-        private float _pitch = 0.3f;
-        private float _zoom = 0.9f;
-        private Vector2 _pan = Vector2.Zero;
-        private Point _lastMouse;
-        private MouseButtons _activeButton;
-
-        public StepModelViewerControl()
-        {
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
-            BackColor = Color.FromArgb(248, 250, 252);
-        }
-
-        public void LoadStep(byte[] stepBytes)
-        {
-            _segments.Clear();
-            foreach (var segment in StepWireframeParser.Parse(stepBytes))
-            {
-                _segments.Add(segment);
-            }
-
-            Invalidate();
-        }
-
-        protected override void OnMouseDown(MouseEventArgs e)
-        {
-            base.OnMouseDown(e);
-            _activeButton = e.Button;
-            _lastMouse = e.Location;
-        }
-
-        protected override void OnMouseUp(MouseEventArgs e)
-        {
-            base.OnMouseUp(e);
-            _activeButton = MouseButtons.None;
-        }
-
-        protected override void OnMouseMove(MouseEventArgs e)
-        {
-            base.OnMouseMove(e);
-            if (_activeButton == MouseButtons.None)
-            {
-                return;
-            }
-
-            var dx = e.X - _lastMouse.X;
-            var dy = e.Y - _lastMouse.Y;
-            _lastMouse = e.Location;
-
-            if (_activeButton == MouseButtons.Left)
-            {
-                _yaw += dx * 0.01f;
-                _pitch = Math.Clamp(_pitch + dy * 0.01f, -1.4f, 1.4f);
-            }
-            else if (_activeButton == MouseButtons.Right)
-            {
-                _pan += new Vector2(dx * 0.01f, -dy * 0.01f);
-            }
-
-            Invalidate();
-        }
-
-        protected override void OnMouseWheel(MouseEventArgs e)
-        {
-            base.OnMouseWheel(e);
-            _zoom = Math.Clamp(_zoom + (e.Delta > 0 ? 0.08f : -0.08f), 0.2f, 3.0f);
-            Invalidate();
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            base.OnPaint(e);
-            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            e.Graphics.Clear(BackColor);
-
-            using var borderPen = new Pen(Color.FromArgb(180, 193, 205));
-            e.Graphics.DrawRectangle(borderPen, 0, 0, Width - 1, Height - 1);
-
-            if (_segments.Count == 0)
-            {
-                TextRenderer.DrawText(e.Graphics, "STEP model unavailable", Font, ClientRectangle, Color.DimGray, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-                return;
-            }
-
-            var view = Matrix4x4.CreateRotationX(_pitch) * Matrix4x4.CreateRotationY(_yaw);
-            var scale = Math.Min(Width, Height) * 0.42f * _zoom;
-            var centerX = (Width / 2f) + (_pan.X * scale);
-            var centerY = (Height / 2f) + (_pan.Y * scale);
-
-            using var linePen = new Pen(Color.FromArgb(45, 86, 145), 1.1f);
-            foreach (var (start, end) in _segments)
-            {
-                var s = Vector3.Transform(start, view);
-                var t = Vector3.Transform(end, view);
-                var sx = centerX + (s.X * scale);
-                var sy = centerY - (s.Y * scale);
-                var tx = centerX + (t.X * scale);
-                var ty = centerY - (t.Y * scale);
-                e.Graphics.DrawLine(linePen, sx, sy, tx, ty);
-            }
-        }
-    }
-
-    private static class StepWireframeParser
-    {
-        private static readonly Regex PointRegex = new(@"#(?<id>\d+)\s*=\s*CARTESIAN_POINT\s*\(\s*'[^']*'\s*,\s*\((?<coords>[^)]*)\)\s*\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        private static readonly Regex PolylineRegex = new(@"#\d+\s*=\s*POLYLINE\s*\(\s*'[^']*'\s*,\s*\((?<refs>[^)]*)\)\s*\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-        public static IEnumerable<(Vector3 Start, Vector3 End)> Parse(byte[] stepBytes)
-        {
-            if (stepBytes.Length == 0)
-            {
-                return Enumerable.Empty<(Vector3 Start, Vector3 End)>();
-            }
-
-            var content = Encoding.UTF8.GetString(stepBytes);
-            var points = new Dictionary<int, Vector3>();
-
-            foreach (Match match in PointRegex.Matches(content))
-            {
-                var pointId = int.Parse(match.Groups["id"].Value);
-                var coordParts = match.Groups["coords"].Value.Split(',');
-                if (coordParts.Length < 3)
-                {
-                    continue;
-                }
-
-                if (!float.TryParse(coordParts[0].Trim(), out var x)
-                    || !float.TryParse(coordParts[1].Trim(), out var y)
-                    || !float.TryParse(coordParts[2].Trim(), out var z))
-                {
-                    continue;
-                }
-
-                points[pointId] = new Vector3(x, y, z);
-            }
-
-            if (points.Count == 0)
-            {
-                return Enumerable.Empty<(Vector3 Start, Vector3 End)>();
-            }
-
-            var segments = new List<(Vector3 Start, Vector3 End)>();
-            foreach (Match match in PolylineRegex.Matches(content))
-            {
-                var references = match.Groups["refs"].Value
-                    .Split(',')
-                    .Select(value => value.Trim())
-                    .Where(value => value.StartsWith("#", StringComparison.Ordinal))
-                    .Select(value => int.TryParse(value.AsSpan(1), out var id) ? id : -1)
-                    .Where(id => id > 0)
-                    .ToList();
-
-                for (var i = 0; i < references.Count - 1; i++)
-                {
-                    if (points.TryGetValue(references[i], out var start) && points.TryGetValue(references[i + 1], out var end))
-                    {
-                        segments.Add((start, end));
-                    }
-                }
-            }
-
-            return segments;
-        }
-    }
-
     private sealed class BlobArea
     {
         public required Panel SectionPanel { get; init; }
@@ -1334,7 +1211,7 @@ public class QuoteDraftForm : Form
     private sealed class DoneSummaryView
     {
         public required Panel Container { get; init; }
-        public required StepModelViewerControl Viewer { get; init; }
+        public required StepModelPreviewControl Viewer { get; init; }
         public required Button ExpandButton { get; init; }
         public required Label DrawingNumber { get; init; }
         public required Label DrawingName { get; init; }
@@ -1370,7 +1247,7 @@ public class QuoteDraftForm : Form
         public required Button EditButton { get; init; }
         public required Control EditView { get; init; }
         public required Control DoneView { get; init; }
-        public required StepModelViewerControl StepViewer { get; init; }
+        public required StepModelPreviewControl StepViewer { get; init; }
         public required Label SummaryDrawingNumber { get; init; }
         public required Label SummaryDrawingName { get; init; }
         public required Label SummaryRevision { get; init; }
