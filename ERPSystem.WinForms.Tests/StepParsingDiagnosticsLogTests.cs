@@ -17,7 +17,7 @@ public class StepParsingDiagnosticsLogTests
             fileSizeBytes: 128,
             isSuccess: false,
             errorCode: "invalid-step-header",
-            failureCategory: "header",
+            failureCategory: "STEP_PREVIEW",
             message: "Header marker was not found.",
             diagnosticDetails: "schema=unknown",
             stackTrace: "trace",
@@ -38,10 +38,32 @@ public class StepParsingDiagnosticsLogTests
         var raised = false;
         log.Cleared += (_, _) => raised = true;
 
-        log.RecordAttempt("part.step", "path", 64, false, "invalid-step-body", "body", "message", "detail", "trace", "quote-upload");
+        log.RecordAttempt("part.step", "path", 64, false, "invalid-step-body", "STEP_PREVIEW", "message", "detail", "trace", "quote-upload");
         log.Clear();
 
         Assert.Empty(log.GetEntries());
         Assert.True(raised);
+    }
+
+    [Fact]
+    public void RecordAttempt_PersistsToSqliteAndReloads()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"erp-step-diag-{Guid.NewGuid():N}.db");
+        try
+        {
+            var writer = new StepParsingDiagnosticsLog(dbPath);
+            writer.RecordAttempt("saved.step", "dev://saved.step", 120, false, "STEP_PARSE_FAILED", "STEP_PREVIEW", "failed", "details", "trace", "step-preview");
+
+            var reader = new StepParsingDiagnosticsLog(dbPath);
+            var rows = reader.GetEntries();
+            Assert.Contains(rows, x => x.FileName == "saved.step" && x.ErrorCode == "STEP_PARSE_FAILED");
+        }
+        finally
+        {
+            if (File.Exists(dbPath))
+            {
+                File.Delete(dbPath);
+            }
+        }
     }
 }
