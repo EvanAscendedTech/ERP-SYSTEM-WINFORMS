@@ -28,7 +28,7 @@ public partial class ERPMainForm : Form
     private readonly Stack<string> _backHistory = new();
     private readonly Stack<string> _forwardHistory = new();
     private readonly System.Windows.Forms.Timer _syncClockTimer = new();
-    private readonly StepParsingDiagnosticsLog _stepParsingDiagnosticsLog = new();
+    private readonly StepParsingDiagnosticsLog _stepParsingDiagnosticsLog;
     private DateTime _nextFailSafeAt;
     private DateTime _lastAutosaveAt;
     private DateTime _lastRefreshAt;
@@ -53,6 +53,7 @@ public partial class ERPMainForm : Form
         _realtimeData = realtimeData;
         _currentUser = currentUser;
         _activeUser = currentUser;
+        _stepParsingDiagnosticsLog = new StepParsingDiagnosticsLog(_quoteRepo.DatabasePath);
 
         InitializeComponent();
         DoubleBuffered = true;

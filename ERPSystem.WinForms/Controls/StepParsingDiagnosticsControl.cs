@@ -86,7 +86,8 @@ public sealed class StepParsingDiagnosticsControl : UserControl
         _logGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(StepParsingDiagnosticEntry.FileName), HeaderText = "File", Width = 180 });
         _logGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(StepParsingDiagnosticEntry.FileSizeBytes), HeaderText = "Size", Width = 75 });
         _logGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(StepParsingDiagnosticEntry.ErrorCode), HeaderText = "Error Code", Width = 140 });
-        _logGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(StepParsingDiagnosticEntry.FailureCategory), HeaderText = "Category", Width = 105 });
+        _logGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(StepParsingDiagnosticEntry.FailureCategory), HeaderText = "Category", Width = 120 });
+        _logGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(StepParsingDiagnosticEntry.Message), HeaderText = "Message", Width = 260 });
         _logGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(StepParsingDiagnosticEntry.Source), HeaderText = "Source", Width = 120 });
         _logGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(StepParsingDiagnosticEntry.FilePath), HeaderText = "Path", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
     }

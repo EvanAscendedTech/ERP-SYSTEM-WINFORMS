@@ -10,9 +10,11 @@ public class QuoteRepository
 {
     private readonly string _connectionString;
     private readonly RealtimeDataService? _realtimeDataService;
+    public string DatabasePath { get; }
 
     public QuoteRepository(string databasePath, RealtimeDataService? realtimeDataService = null)
     {
+        DatabasePath = databasePath;
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
