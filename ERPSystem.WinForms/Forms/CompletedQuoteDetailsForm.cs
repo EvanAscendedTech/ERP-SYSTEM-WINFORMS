@@ -4,6 +4,10 @@ namespace ERPSystem.WinForms.Forms;
 
 public class CompletedQuoteDetailsForm : Form
 {
+    private const int PreferredPanel1Width = 420;
+    private const int DesiredPanel1MinSize = 330;
+    private const int DesiredPanel2MinSize = 420;
+
     private readonly Quote _quote;
     private readonly Func<QuoteLineItem, Control> _modelPreviewFactory;
     private readonly DataGridView _lineItemsGrid = new();
@@ -136,12 +140,10 @@ public class CompletedQuoteDetailsForm : Form
     {
         var split = new SplitContainer
         {
-            Dock = DockStyle.Fill,
-            Panel1MinSize = 330,
-            Panel2MinSize = 420
+            Dock = DockStyle.Fill
         };
-        split.SizeChanged += (_, _) => ApplySafeSplitterDistance(split);
-        split.HandleCreated += (_, _) => ApplySafeSplitterDistance(split);
+        split.SizeChanged += (_, _) => ApplySafeSplitLayout(split);
+        split.HandleCreated += (_, _) => ApplySafeSplitLayout(split);
 
         ConfigureLineItemsGrid();
         split.Panel1.Controls.Add(_lineItemsGrid);
@@ -156,18 +158,39 @@ public class CompletedQuoteDetailsForm : Form
         return split;
     }
 
-    private static void ApplySafeSplitterDistance(SplitContainer split)
+    private static void ApplySafeSplitLayout(SplitContainer split)
     {
-        if (split.Width <= 0)
+        if (split.Width <= split.SplitterWidth)
         {
             return;
         }
 
         var availableWidth = split.Width - split.SplitterWidth;
-        var minimumPanel1 = split.Panel1MinSize;
-        var maximumPanel1 = Math.Max(minimumPanel1, availableWidth - split.Panel2MinSize);
-        var preferredPanel1 = 420;
-        split.SplitterDistance = Math.Clamp(preferredPanel1, minimumPanel1, maximumPanel1);
+
+        var totalDesiredMinSize = DesiredPanel1MinSize + DesiredPanel2MinSize;
+        var scale = totalDesiredMinSize > 0 && availableWidth < totalDesiredMinSize
+            ? availableWidth / (double)totalDesiredMinSize
+            : 1d;
+
+        var minimumPanel1 = Math.Clamp((int)Math.Floor(DesiredPanel1MinSize * scale), 0, Math.Max(availableWidth - 1, 0));
+        var minimumPanel2 = Math.Clamp((int)Math.Floor(DesiredPanel2MinSize * scale), 0, Math.Max(availableWidth - minimumPanel1, 0));
+
+        if (split.Panel1MinSize != minimumPanel1)
+        {
+            split.Panel1MinSize = minimumPanel1;
+        }
+
+        if (split.Panel2MinSize != minimumPanel2)
+        {
+            split.Panel2MinSize = minimumPanel2;
+        }
+
+        var maximumPanel1 = Math.Max(minimumPanel1, availableWidth - minimumPanel2);
+        var safeDistance = Math.Clamp(PreferredPanel1Width, minimumPanel1, maximumPanel1);
+        if (split.SplitterDistance != safeDistance)
+        {
+            split.SplitterDistance = safeDistance;
+        }
     }
 
     private void ConfigureLineItemsGrid()
