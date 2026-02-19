@@ -11,6 +11,13 @@ public interface IStepToGlbConverter
 public sealed class StepToGlbConverter : IStepToGlbConverter
 {
     private const int ConversionTimeoutSeconds = 60;
+    private static readonly string[] ConverterRelativePaths =
+    [
+        Path.Combine("Tools", "step2glb", "step2glb.exe"),
+        Path.Combine("Tools", "x64", "step-to-glb-converter.exe"),
+        Path.Combine("Tools", "x64", "step2glb.exe")
+    ];
+
     private readonly string _converterExecutablePath;
     private readonly bool _keepTempOnFailure;
 
@@ -38,8 +45,8 @@ public sealed class StepToGlbConverter : IStepToGlbConverter
             }
         }
 
-        // Return the default output location so callers get a stable, actionable error message.
-        return Path.Combine(AppContext.BaseDirectory, "Tools", "step2glb", "step2glb.exe");
+        // Return the first expected location so callers get a stable, actionable error message.
+        return Path.Combine(AppContext.BaseDirectory, ConverterRelativePaths[0]);
     }
 
     internal static IReadOnlyList<string> GetConverterPathCandidates(string baseDirectory)
@@ -53,17 +60,25 @@ public sealed class StepToGlbConverter : IStepToGlbConverter
             }
         }
 
-        Add(Path.Combine(baseDirectory, "Tools", "step2glb", "step2glb.exe"));
+        AddRelativeCandidates(baseDirectory, Add);
 
         var current = new DirectoryInfo(baseDirectory);
         for (var i = 0; i < 6 && current is not null; i++)
         {
-            Add(Path.Combine(current.FullName, "Tools", "step2glb", "step2glb.exe"));
-            Add(Path.Combine(current.FullName, "ERPSystem.WinForms", "Tools", "step2glb", "step2glb.exe"));
+            AddRelativeCandidates(current.FullName, Add);
+            AddRelativeCandidates(Path.Combine(current.FullName, "ERPSystem.WinForms"), Add);
             current = current.Parent;
         }
 
         return paths;
+    }
+
+    private static void AddRelativeCandidates(string rootPath, Action<string> add)
+    {
+        foreach (var relativePath in ConverterRelativePaths)
+        {
+            add(Path.Combine(rootPath, relativePath));
+        }
     }
 
     public static string ComputeStepHash(byte[] bytes)

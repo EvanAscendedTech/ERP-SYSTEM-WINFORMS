@@ -29,5 +29,6 @@ public class StepToGlbConverterTests
         var candidates = StepToGlbConverter.GetConverterPathCandidates(baseDir);
 
         Assert.Contains(Path.Combine("C:", "ERP", "ERP-SYSTEM-WINFORMS", "ERPSystem.WinForms", "Tools", "step2glb", "step2glb.exe"), candidates, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(Path.Combine("C:", "ERP", "ERP-SYSTEM-WINFORMS", "ERPSystem.WinForms", "Tools", "x64", "step-to-glb-converter.exe"), candidates, StringComparer.OrdinalIgnoreCase);
     }
 }
