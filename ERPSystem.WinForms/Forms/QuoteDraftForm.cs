@@ -551,7 +551,7 @@ public class QuoteDraftForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52f));
 
         var viewerPanel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 8, 0) };
-        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog) { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
+        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, new StepToGlbConverter(_quoteRepository)) { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
         var expandButton = BuildCompactIconButton("⛶ Expand", Color.FromArgb(71, 85, 105));
         expandButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         expandButton.Location = new Point(Math.Max(4, viewerPanel.Width - 96), 4);
@@ -646,14 +646,7 @@ public class QuoteDraftForm : Form
         var stepAttachment = FindLatestStepAttachment(card.Model);
         if (stepAttachment is not null)
         {
-            var stepBytes = stepAttachment.BlobData;
-            if (stepBytes.Length == 0 && stepAttachment.Id > 0)
-            {
-                stepBytes = await _quoteRepository.GetQuoteBlobContentAsync(stepAttachment.Id);
-                stepAttachment.BlobData = stepBytes;
-            }
-
-            card.StepViewer.LoadStep(stepBytes, stepAttachment.FileName, stepAttachment.StorageRelativePath);
+            await card.StepViewer.LoadStepAttachmentAsync(stepAttachment, _quoteRepository.GetQuoteBlobContentAsync);
         }
         else
         {
@@ -690,13 +683,7 @@ public class QuoteDraftForm : Form
             return;
         }
 
-        var stepData = stepAttachment.BlobData;
-        if (stepData.Length == 0 && stepAttachment.Id > 0)
-        {
-            stepData = await _quoteRepository.GetQuoteBlobContentAsync(stepAttachment.Id);
-            stepAttachment.BlobData = stepData;
-        }
-
+        var stepData = stepAttachment.BlobData.Length > 0 ? stepAttachment.BlobData : await _quoteRepository.GetQuoteBlobContentAsync(stepAttachment.Id);
         if (stepData.Length == 0)
         {
             MessageBox.Show("CAD model data is unavailable for this line item.", "3D Model", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -711,10 +698,11 @@ public class QuoteDraftForm : Form
             StartPosition = FormStartPosition.CenterParent,
             WindowState = FormWindowState.Maximized
         };
-        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog) { Dock = DockStyle.Fill };
+        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, new StepToGlbConverter(_quoteRepository)) { Dock = DockStyle.Fill };
         viewerForm.FormClosed += (_, _) => viewer.ClearPreview();
 
-        viewer.LoadStep(stepData, stepAttachment.FileName, stepAttachment.StorageRelativePath);
+        stepAttachment.BlobData = stepData;
+        await viewer.LoadStepAttachmentAsync(stepAttachment, _quoteRepository.GetQuoteBlobContentAsync);
         viewerForm.Controls.Add(viewer);
         viewerForm.ShowDialog(this);
     }
