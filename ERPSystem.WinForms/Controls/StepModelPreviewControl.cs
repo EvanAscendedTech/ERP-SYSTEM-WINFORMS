@@ -1,6 +1,8 @@
 using Microsoft.Web.WebView2.WinForms;
 using System.Text.Json;
 using ERPSystem.WinForms.Models;
+using ERPSystem.WinForms.Services;
+using System.Diagnostics;
 
 namespace ERPSystem.WinForms.Controls;
 
@@ -14,6 +16,7 @@ public sealed class StepModelPreviewControl : UserControl
     private bool _initialized;
     private int _renderVersion;
     private TaskCompletionSource<bool>? _navigationReady;
+    private readonly StepFileParser _stepFileParser = new();
     private static readonly string HtmlShell = BuildHtmlShell();
 
     public StepModelPreviewControl()
@@ -92,9 +95,19 @@ public sealed class StepModelPreviewControl : UserControl
 
         _statusLabel.Text = "Parsing STEP geometry...";
         _statusLabel.Visible = true;
+        Trace.WriteLine($"[StepPreview] Begin parse file='{candidateName}', bytes={_stepBytes.Length}");
 
         try
         {
+            var parseReport = _stepFileParser.Parse(_stepBytes);
+            if (!parseReport.IsSuccess)
+            {
+                Trace.WriteLine($"[StepPreview] STEP pre-parse failed error={parseReport.ErrorCode}, message='{parseReport.Message}'");
+                ShowError(BuildStatusMessage((false, parseReport.ErrorCode, "pre-parse", 0, 0, "step-precheck")));
+                return;
+            }
+
+            Trace.WriteLine($"[StepPreview] STEP pre-parse success entities={parseReport.EntityCount}, types={parseReport.DistinctEntityTypes.Count}, surfaces={parseReport.SurfaceEntityCount}, solids={parseReport.SolidEntityCount}");
             await EnsureInitializedAsync();
 
             if (version != _renderVersion)
@@ -114,46 +127,49 @@ public sealed class StepModelPreviewControl : UserControl
             var result = ParseScriptResult(resultRaw);
             if (!result.Ok)
             {
+                Trace.WriteLine($"[StepPreview] Renderer parse failed stage={result.Stage}, error={result.Error}");
                 ShowError(BuildStatusMessage(result));
                 return;
             }
 
+            Trace.WriteLine($"[StepPreview] Render success stage={result.Stage}, parser={result.Parser}, meshes={result.MeshCount}, triangles={result.TriangleCount}");
             _webView.Visible = true;
             _statusLabel.Visible = false;
         }
-        catch
+        catch (Exception ex)
         {
+            Trace.WriteLine($"[StepPreview] Render pipeline exception error={ex}");
             ShowError("WebView2 runtime unavailable for STEP preview");
         }
     }
 
-    private (bool Ok, string Error) ParseScriptResult(string resultRaw)
+    private (bool Ok, string Error, string Stage, int MeshCount, int TriangleCount, string Parser) ParseScriptResult(string resultRaw)
     {
         try
         {
             var parsed = DeserializeStepRenderResult(resultRaw);
             if (parsed is null)
             {
-                return (false, "empty-result");
+                return (false, "empty-result", "deserialize-result", 0, 0, string.Empty);
             }
 
             return parsed.ok
-                ? (true, string.Empty)
-                : (false, string.IsNullOrWhiteSpace(parsed.error) ? "parse-failed" : parsed.error);
+                ? (true, string.Empty, parsed.stage ?? string.Empty, parsed.meshCount, parsed.triangleCount, parsed.parser ?? string.Empty)
+                : (false, string.IsNullOrWhiteSpace(parsed.error) ? "parse-failed" : parsed.error, parsed.stage ?? string.Empty, parsed.meshCount, parsed.triangleCount, parsed.parser ?? string.Empty);
         }
         catch
         {
             var normalized = resultRaw.Trim('"').Trim();
             if (string.Equals(normalized, "true", StringComparison.OrdinalIgnoreCase))
             {
-                return (true, string.Empty);
+                return (true, string.Empty, "legacy-result", 0, 0, string.Empty);
             }
 
-            return (false, string.IsNullOrWhiteSpace(normalized) ? "parse-failed" : normalized);
+            return (false, string.IsNullOrWhiteSpace(normalized) ? "parse-failed" : normalized, "legacy-result", 0, 0, string.Empty);
         }
     }
 
-    private static string BuildStatusMessage((bool Ok, string Error) result)
+    private static string BuildStatusMessage((bool Ok, string Error, string Stage, int MeshCount, int TriangleCount, string Parser) result)
     {
         if (result.Ok)
         {
@@ -171,6 +187,7 @@ public sealed class StepModelPreviewControl : UserControl
             "parse-binary-failed" => "Failed to parse STEP binary payload",
             "parse-text-failed" => "Failed to parse STEP text payload",
             "corrupted-or-invalid-step" => "STEP parser rejected the file as corrupted or invalid",
+            "unsupported-step-entities" => "STEP file does not include supported surface or solid entities",
             _ => $"Unable to render STEP geometry ({result.Error})"
         };
     }
