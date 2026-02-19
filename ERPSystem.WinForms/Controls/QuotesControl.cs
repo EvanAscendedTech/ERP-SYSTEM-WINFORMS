@@ -873,7 +873,7 @@ public class QuotesControl : UserControl, IRealtimeDataControl
         _completedQuoteDetailsHost.Visible = true;
     }
 
-    private static Control CreateLineItemsSocketView(Quote quote)
+    private Control CreateLineItemsSocketView(Quote quote)
     {
         var scrollHost = new FlowLayoutPanel
         {
