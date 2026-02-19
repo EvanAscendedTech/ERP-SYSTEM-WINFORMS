@@ -253,7 +253,8 @@ public sealed class StepModelPreviewControl : UserControl
 
             if (message.type == "viewer-result" && message.payload is not null)
             {
-                var result = message.payload.Deserialize<GltfViewerResult>() ?? new GltfViewerResult { ok = false, error = "Viewer returned invalid payload." };
+                var result = JsonSerializer.Deserialize<GltfViewerResult>(message.payload.Value.GetRawText())
+                             ?? new GltfViewerResult { ok = false, error = "Viewer returned invalid payload." };
                 _viewerMessageTcs?.TrySetResult(result);
                 return;
             }
