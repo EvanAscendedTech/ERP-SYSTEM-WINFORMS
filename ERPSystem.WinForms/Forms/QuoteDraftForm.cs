@@ -804,6 +804,11 @@ public class QuoteDraftForm : Form
                 _uploadedBy,
                 attachment.UploadedUtc,
                 bytes);
+
+            if (blobType == QuoteBlobType.ThreeDModel)
+            {
+                await ValidateStoredStepBlobAsync(attachment);
+            }
         }
 
         model.BlobAttachments.Add(attachment);
@@ -898,15 +903,18 @@ public class QuoteDraftForm : Form
             }
 
             var report = _stepFileParser.Parse(fileBytes);
-            _stepParsingDiagnosticsLog.RecordAttempt(
-                fileName,
-                filePath,
-                fileSizeBytes,
-                isSuccess: report.IsSuccess,
-                errorCode: report.IsSuccess ? string.Empty : report.ErrorCode,
-                message: report.IsSuccess ? "STEP parse validation succeeded." : report.Message,
-                stackTrace: report.IsSuccess ? string.Empty : StepParsingDiagnosticsLog.BuildCallSiteTrace(),
-                source: "quote-upload");
+            if (!report.IsSuccess)
+            {
+                _stepParsingDiagnosticsLog.RecordAttempt(
+                    fileName,
+                    filePath,
+                    fileSizeBytes,
+                    isSuccess: false,
+                    errorCode: report.ErrorCode,
+                    message: BuildParseFailureMessage(fileName, filePath, report.ErrorCode, report.Message, "quote-upload"),
+                    stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
+                    source: "quote-upload");
+            }
 
             return report.IsSuccess;
         }
@@ -923,6 +931,57 @@ public class QuoteDraftForm : Form
                 source: "quote-upload");
             return false;
         }
+    }
+
+
+    private async Task ValidateStoredStepBlobAsync(QuoteBlobAttachment attachment)
+    {
+        var extension = attachment.Extension ?? Path.GetExtension(attachment.FileName ?? string.Empty);
+        if (!extension.Equals(".step", StringComparison.OrdinalIgnoreCase)
+            && !extension.Equals(".stp", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var storedData = await _quoteRepository.GetQuoteBlobContentAsync(attachment.Id);
+        if (storedData.Length == 0)
+        {
+            _stepParsingDiagnosticsLog.RecordAttempt(
+                attachment.FileName,
+                attachment.StorageRelativePath,
+                attachment.FileSizeBytes,
+                isSuccess: false,
+                errorCode: "missing-blob-data",
+                message: BuildParseFailureMessage(attachment.FileName, attachment.StorageRelativePath, "missing-blob-data", "Uploaded STEP blob content could not be loaded from the database.", "blob-parse-validation"),
+                stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
+                source: "blob-parse-validation");
+            return;
+        }
+
+        var report = _stepFileParser.Parse(storedData);
+        if (!report.IsSuccess)
+        {
+            _stepParsingDiagnosticsLog.RecordAttempt(
+                attachment.FileName,
+                attachment.StorageRelativePath,
+                storedData.LongLength,
+                isSuccess: false,
+                errorCode: report.ErrorCode,
+                message: BuildParseFailureMessage(attachment.FileName, attachment.StorageRelativePath, report.ErrorCode, report.Message, "blob-parse-validation"),
+                stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
+                source: "blob-parse-validation");
+            return;
+        }
+    }
+
+    private string BuildParseFailureMessage(string fileName, string filePath, string errorCode, string reason, string source)
+    {
+        var attempts = _stepParsingDiagnosticsLog.GetEntries().Count(entry =>
+            !entry.IsSuccess
+            && string.Equals(entry.FileName, fileName, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(entry.Source, source, StringComparison.OrdinalIgnoreCase)) + 1;
+        var contextPath = string.IsNullOrWhiteSpace(filePath) ? "in-memory-blob" : filePath;
+        return $"Parse failed: {reason} (error={errorCode}, attempts={attempts}, context=source:{source}; path:{contextPath})";
     }
 
     private void RefreshAllBlobLists()
