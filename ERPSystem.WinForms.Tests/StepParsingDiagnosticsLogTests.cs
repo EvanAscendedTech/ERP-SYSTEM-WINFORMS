@@ -17,7 +17,9 @@ public class StepParsingDiagnosticsLogTests
             fileSizeBytes: 128,
             isSuccess: false,
             errorCode: "invalid-step-header",
+            failureCategory: "header",
             message: "Header marker was not found.",
+            diagnosticDetails: "schema=unknown",
             stackTrace: "trace",
             source: "quote-upload");
 
@@ -36,7 +38,7 @@ public class StepParsingDiagnosticsLogTests
         var raised = false;
         log.Cleared += (_, _) => raised = true;
 
-        log.RecordAttempt("part.step", "path", 64, false, "invalid-step-body", "message", "trace", "quote-upload");
+        log.RecordAttempt("part.step", "path", 64, false, "invalid-step-body", "body", "message", "detail", "trace", "quote-upload");
         log.Clear();
 
         Assert.Empty(log.GetEntries());

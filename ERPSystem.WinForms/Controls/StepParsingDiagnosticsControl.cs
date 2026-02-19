@@ -20,6 +20,7 @@ public sealed class StepParsingDiagnosticsControl : UserControl
 
     private readonly TextBox _messageText = new() { Multiline = true, Dock = DockStyle.Fill, ReadOnly = true, ScrollBars = ScrollBars.Vertical };
     private readonly TextBox _stackTraceText = new() { Multiline = true, Dock = DockStyle.Fill, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false };
+    private readonly TextBox _detailsText = new() { Multiline = true, Dock = DockStyle.Fill, ReadOnly = true, ScrollBars = ScrollBars.Vertical };
     private readonly Label _summary = new() { Dock = DockStyle.Top, Height = 24, TextAlign = ContentAlignment.MiddleLeft };
 
     private readonly BindingSource _binding = new();
@@ -40,6 +41,7 @@ public sealed class StepParsingDiagnosticsControl : UserControl
 
         var detailTabs = new TabControl { Dock = DockStyle.Fill };
         detailTabs.TabPages.Add(new TabPage("Error Message") { Controls = { _messageText } });
+        detailTabs.TabPages.Add(new TabPage("Diagnostic Details") { Controls = { _detailsText } });
         detailTabs.TabPages.Add(new TabPage("Stack Trace") { Controls = { _stackTraceText } });
 
         var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 220 };
@@ -84,6 +86,7 @@ public sealed class StepParsingDiagnosticsControl : UserControl
         _logGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(StepParsingDiagnosticEntry.FileName), HeaderText = "File", Width = 180 });
         _logGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(StepParsingDiagnosticEntry.FileSizeBytes), HeaderText = "Size", Width = 75 });
         _logGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(StepParsingDiagnosticEntry.ErrorCode), HeaderText = "Error Code", Width = 140 });
+        _logGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(StepParsingDiagnosticEntry.FailureCategory), HeaderText = "Category", Width = 105 });
         _logGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(StepParsingDiagnosticEntry.Source), HeaderText = "Source", Width = 120 });
         _logGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(StepParsingDiagnosticEntry.FilePath), HeaderText = "Path", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
     }
@@ -118,6 +121,7 @@ public sealed class StepParsingDiagnosticsControl : UserControl
         _logGrid.CurrentCell = null;
         _messageText.Text = string.Empty;
         _stackTraceText.Text = string.Empty;
+        _detailsText.Text = string.Empty;
         UpdateSummary();
     }
 
@@ -134,10 +138,12 @@ public sealed class StepParsingDiagnosticsControl : UserControl
         {
             _messageText.Text = string.Empty;
             _stackTraceText.Text = string.Empty;
+            _detailsText.Text = string.Empty;
             return;
         }
 
         _messageText.Text = selected.Message;
+        _detailsText.Text = selected.DiagnosticDetails;
         _stackTraceText.Text = selected.StackTrace;
     }
 

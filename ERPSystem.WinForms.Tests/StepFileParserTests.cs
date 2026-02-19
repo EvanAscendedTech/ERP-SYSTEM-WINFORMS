@@ -110,4 +110,25 @@ END-ISO-10303-21;
         Assert.True(second.HasSurfaces);
     }
 
+    [Fact]
+    public void Parse_UnsupportedSchema_FailsWithVersionError()
+    {
+        var unsupportedSchema = """
+ISO-10303-21;
+HEADER;
+FILE_SCHEMA(('AP999_TEST_SCHEMA'));
+ENDSEC;
+DATA;
+#10=MANIFOLD_SOLID_BREP('SOLID',#40);
+ENDSEC;
+END-ISO-10303-21;
+""";
+
+        var result = _parser.Parse(Encoding.UTF8.GetBytes(unsupportedSchema));
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("unsupported-step-version", result.ErrorCode);
+        Assert.Equal("version", result.FailureCategory);
+    }
+
 }
