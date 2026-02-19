@@ -9,7 +9,6 @@ namespace ERPSystem.WinForms.Data;
 public class QuoteRepository
 {
     private readonly string _connectionString;
-    private readonly string _blobStorageRoot;
     private readonly RealtimeDataService? _realtimeDataService;
 
     public QuoteRepository(string databasePath, RealtimeDataService? realtimeDataService = null)
@@ -20,10 +19,6 @@ public class QuoteRepository
             ForeignKeys = true
         }.ToString();
         _realtimeDataService = realtimeDataService;
-        var dbPath = new SqliteConnectionStringBuilder(_connectionString).DataSource;
-        var dbDirectory = Path.GetDirectoryName(Path.GetFullPath(dbPath)) ?? AppContext.BaseDirectory;
-        _blobStorageRoot = Path.Combine(dbDirectory, "ServerBlobStorage", "QuoteBlobs");
-        Directory.CreateDirectory(_blobStorageRoot);
     }
 
     public async Task InitializeDatabaseAsync()
@@ -631,11 +626,7 @@ public class QuoteRepository
                     insertBlob.Parameters.AddWithValue("$contentType", blob.ContentType);
                     insertBlob.Parameters.AddWithValue("$fileSizeBytes", blob.FileSizeBytes);
                     insertBlob.Parameters.AddWithValue("$sha256", blob.Sha256);
-                    var shouldStoreBlobFile = string.IsNullOrWhiteSpace(blob.StorageRelativePath)
-                        || !File.Exists(Path.Combine(_blobStorageRoot, blob.StorageRelativePath));
-                    var storageRelativePath = shouldStoreBlobFile
-                        ? SaveBlobToStorage(quote.Id, lineItem.Id, blob.BlobType, blob.FileName, blob.BlobData)
-                        : blob.StorageRelativePath;
+                    var storageRelativePath = string.Empty;
                     insertBlob.Parameters.AddWithValue("$uploadedBy", blob.UploadedBy);
                     insertBlob.Parameters.AddWithValue("$storageRelativePath", storageRelativePath);
                     insertBlob.Parameters.AddWithValue("$blobData", blob.BlobData);
@@ -1279,7 +1270,7 @@ public class QuoteRepository
         command.Parameters.AddWithValue("$contentType", extension);
         command.Parameters.AddWithValue("$fileSizeBytes", fileSizeBytes);
         command.Parameters.AddWithValue("$sha256", sha256);
-        var storageRelativePath = SaveBlobToStorage(quoteId, lineItemId, blobType, fileName, blobData);
+        var storageRelativePath = string.Empty;
         command.Parameters.AddWithValue("$uploadedBy", uploadedBy);
         command.Parameters.AddWithValue("$storageRelativePath", storageRelativePath);
         command.Parameters.AddWithValue("$blobData", blobData);
@@ -1745,16 +1736,6 @@ public class QuoteRepository
             return Array.Empty<byte>();
         }
 
-        var relativePath = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
-        if (!string.IsNullOrWhiteSpace(relativePath))
-        {
-            var fullPath = Path.Combine(_blobStorageRoot, relativePath);
-            if (File.Exists(fullPath))
-            {
-                return await File.ReadAllBytesAsync(fullPath);
-            }
-        }
-
         return reader.IsDBNull(1) ? Array.Empty<byte>() : (byte[])reader[1];
     }
 
@@ -1813,28 +1794,10 @@ public class QuoteRepository
         }
     }
 
-    private string SaveBlobToStorage(int quoteId, int lineItemId, QuoteBlobType blobType, string fileName, byte[] blobData)
-    {
-        var safeName = Path.GetFileName(fileName);
-        var quoteFolder = Path.Combine(_blobStorageRoot, $"Q{quoteId}", $"LI{lineItemId}", blobType.ToString());
-        Directory.CreateDirectory(quoteFolder);
-        var fullPath = Path.Combine(quoteFolder, safeName);
-        File.WriteAllBytes(fullPath, blobData);
-        return Path.GetRelativePath(_blobStorageRoot, fullPath);
-    }
-
     private void DeletePhysicalBlob(string? storageRelativePath)
     {
-        if (string.IsNullOrWhiteSpace(storageRelativePath))
-        {
-            return;
-        }
-
-        var fullPath = Path.Combine(_blobStorageRoot, storageRelativePath);
-        if (File.Exists(fullPath))
-        {
-            File.Delete(fullPath);
-        }
+        // Blob payloads are now persisted in-database only. StorageRelativePath is
+        // retained for backward compatibility with previously file-backed records.
     }
 
     private static async Task EnsureColumnExistsAsync(SqliteConnection connection, string tableName, string columnName, string definition)

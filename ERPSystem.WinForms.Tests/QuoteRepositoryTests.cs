@@ -56,7 +56,7 @@ public class QuoteRepositoryTests
     }
 
     [Fact]
-    public async Task SaveQuoteAsync_Update_RehydratesMissingBlobStorageFile()
+    public async Task SaveQuoteAsync_Update_PersistsBlobDataInDatabaseOnly()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"erp-quote-blob-update-{Guid.NewGuid():N}.db");
         var repository = new QuoteRepository(dbPath);
@@ -118,13 +118,12 @@ public class QuoteRepositoryTests
         var storageRelativePath = reader.GetString(0);
         var blobData = (byte[])reader[1];
 
-        Assert.NotEmpty(storageRelativePath);
+        Assert.Equal(string.Empty, storageRelativePath);
         Assert.Equal(originalBlobBytes, blobData);
 
-        var storageRoot = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dbPath))!, "ServerBlobStorage", "QuoteBlobs");
-        var storedFile = Path.Combine(storageRoot, storageRelativePath);
-        Assert.True(File.Exists(storedFile));
-        Assert.Equal(originalBlobBytes, await File.ReadAllBytesAsync(storedFile));
+        var blobId = loaded.LineItems[0].BlobAttachments[0].Id;
+        var fetchedBlobData = await repository.GetQuoteBlobContentAsync(blobId);
+        Assert.Equal(originalBlobBytes, fetchedBlobData);
 
         File.Delete(dbPath);
     }
