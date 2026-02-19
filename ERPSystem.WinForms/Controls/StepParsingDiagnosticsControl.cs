@@ -1,3 +1,5 @@
+using System.ComponentModel;
+
 using ERPSystem.WinForms.Services;
 
 namespace ERPSystem.WinForms.Controls;
