@@ -18,22 +18,6 @@
     <CopyRetryDelayMilliseconds>250</CopyRetryDelayMilliseconds>
   </PropertyGroup>
 
-  <PropertyGroup>
-    <Step2GlbConverterExe>$(MSBuildProjectDirectory)\Tools\step2glb\step2glb.exe</Step2GlbConverterExe>
-    <Step2GlbConverterProject>$(MSBuildProjectDirectory)\Tools\step2glb\src\step2glb.csproj</Step2GlbConverterProject>
-    <RequireStep2GlbConverter>false</RequireStep2GlbConverter>
-  </PropertyGroup>
-
-  <Target Name="BuildStep2GlbConverter" BeforeTargets="BeforeBuild" Condition="!Exists('$(Step2GlbConverterExe)') and Exists('$(Step2GlbConverterProject)')">
-    <Message Text="Building STEP converter from $(Step2GlbConverterProject)" Importance="High" />
-    <Exec Command="dotnet publish &quot;$(Step2GlbConverterProject)&quot; -c $(Configuration) -o &quot;$(MSBuildProjectDirectory)\Tools\step2glb&quot;" />
-  </Target>
-
-  <Target Name="ValidateStep2GlbConverter" BeforeTargets="PrepareForBuild">
-    <Error Condition="'$(RequireStep2GlbConverter)' == 'true' and !Exists('$(Step2GlbConverterExe)')" Text="Missing STEP converter executable at $(Step2GlbConverterExe). Add converter binaries to Tools\step2glb or provide source at Tools\step2glb\src\step2glb.csproj so it can be built." />
-    <Warning Condition="'$(RequireStep2GlbConverter)' != 'true' and !Exists('$(Step2GlbConverterExe)')" Text="STEP converter executable not found at $(Step2GlbConverterExe). STEP preview features will be unavailable until converter binaries are restored." />
-  </Target>
-
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.7" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" />
@@ -43,12 +27,9 @@
     <Content Include="Assets\**\*.*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="Tools\step2glb\**\*">
+    <Content Include="Tools\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </Content>
-    <Content Include="Tools\**\README.txt">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
 </Project>

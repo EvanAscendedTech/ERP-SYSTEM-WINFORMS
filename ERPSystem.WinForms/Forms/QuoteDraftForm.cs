@@ -41,7 +41,7 @@ public class QuoteDraftForm : Form
     private readonly List<LineItemCard> _lineItemCards = new();
     private readonly StepParsingDiagnosticsLog _stepParsingDiagnosticsLog;
     private LineItemCard? _selectedLineItemCard;
-    private readonly StepPreviewService _stepPreviewService = new();
+    private readonly ModelPreviewService _modelPreviewService = new();
     private decimal _shopHourlyRate;
 
     public int CreatedQuoteId { get; private set; }
@@ -370,7 +370,7 @@ public class QuoteDraftForm : Form
         var attachmentsTabs = BuildAttachmentsTabs(new[]
         {
             (QuoteBlobType.Technical, "Drawings (PDF)"),
-            (QuoteBlobType.ThreeDModel, "3D Models (STEP)"),
+            (QuoteBlobType.ThreeDModel, "3D Models"),
             (QuoteBlobType.MaterialPricing, "Materials (PDF)"),
             (QuoteBlobType.ToolingDocumentation, "Tooling (PDF)"),
             (QuoteBlobType.PostOpPricing, "Secondary Operations (PDF)")
@@ -429,7 +429,7 @@ public class QuoteDraftForm : Form
             EditButton = editButton,
             EditView = contentScroller,
             DoneView = summaryView.Container,
-            StepViewer = summaryView.Viewer,
+            ModelViewer = summaryView.Viewer,
             SummaryDrawingNumber = summaryView.DrawingNumber,
             SummaryDrawingName = summaryView.DrawingName,
             SummaryRevision = summaryView.Revision,
@@ -558,7 +558,7 @@ public class QuoteDraftForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52f));
 
         var viewerPanel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 8, 0) };
-        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, _stepPreviewService) { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
+        var viewer = new ModelPreviewControl(_stepParsingDiagnosticsLog, _modelPreviewService) { Dock = DockStyle.Fill, Height = CollapsedViewerHeight };
         var expandButton = BuildCompactIconButton("⛶ Expand", Color.FromArgb(71, 85, 105));
         expandButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         expandButton.Location = new Point(Math.Max(4, viewerPanel.Width - 96), 4);
@@ -675,19 +675,19 @@ public class QuoteDraftForm : Form
                     return;
                 }
 
-                if (!force && (!card.IsDone || !card.StepViewer.Visible || !card.Container.Visible || !ReferenceEquals(_selectedLineItemCard, card)))
+                if (!force && (!card.IsDone || !card.ModelViewer.Visible || !card.Container.Visible || !ReferenceEquals(_selectedLineItemCard, card)))
                 {
                     return;
                 }
 
-                var stepAttachment = FindLatestStepAttachment(card.Model);
+                var stepAttachment = FindLatestModelAttachment(card.Model);
                 if (stepAttachment is null)
                 {
-                    BeginInvoke(new Action(() => card.StepViewer.LoadStep([])));
+                    BeginInvoke(new Action(() => card.ModelViewer.ClearPreview()));
                     return;
                 }
 
-                BeginInvoke(new Action(() => _ = card.StepViewer.LoadStepAttachmentAsync(stepAttachment, _quoteRepository.GetQuoteBlobContentAsync)));
+                BeginInvoke(new Action(() => _ = card.ModelViewer.LoadAttachmentAsync(stepAttachment, _quoteRepository.GetQuoteBlobContentAsync)));
             }
             catch (OperationCanceledException)
             {
@@ -705,9 +705,9 @@ public class QuoteDraftForm : Form
             lineItemCard.Container.BorderStyle = ReferenceEquals(lineItemCard, card) ? BorderStyle.Fixed3D : BorderStyle.FixedSingle;
         }
 
-        SchedulePreviewLoad(card);
+        
     }
-    private static QuoteBlobAttachment? FindLatestStepAttachment(QuoteLineItem model)
+    private static QuoteBlobAttachment? FindLatestModelAttachment(QuoteLineItem model)
     {
         return model.BlobAttachments
             .Where(blob => blob.BlobType == QuoteBlobType.ThreeDModel && IsPreviewableCadFile(blob))
@@ -718,18 +718,19 @@ public class QuoteDraftForm : Form
 
     private static bool IsPreviewableCadFile(QuoteBlobAttachment blob)
     {
-        var ext = blob.Extension ?? string.Empty;
-        return ext.Equals(".step", StringComparison.OrdinalIgnoreCase)
-               || ext.Equals(".stp", StringComparison.OrdinalIgnoreCase)
-               || ext.Equals(".sldprt", StringComparison.OrdinalIgnoreCase)
-               || blob.FileName.EndsWith(".step", StringComparison.OrdinalIgnoreCase)
-               || blob.FileName.EndsWith(".stp", StringComparison.OrdinalIgnoreCase)
-               || blob.FileName.EndsWith(".sldprt", StringComparison.OrdinalIgnoreCase);
+        var extension = blob.Extension ?? Path.GetExtension(blob.FileName ?? string.Empty);
+        if (SolidModelFileTypeDetector.IsKnownSolidExtension(extension))
+        {
+            return true;
+        }
+
+        var detector = new SolidModelFileTypeDetector();
+        return detector.Detect(blob.BlobData, blob.FileName).IsSupportedForRendering;
     }
 
     private async void ExpandModelViewer(LineItemCard card)
     {
-        var stepAttachment = FindLatestStepAttachment(card.Model);
+        var stepAttachment = FindLatestModelAttachment(card.Model);
         if (stepAttachment is null)
         {
             MessageBox.Show("No previewable CAD model found for this line item.", "3D Model", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -751,11 +752,11 @@ public class QuoteDraftForm : Form
             StartPosition = FormStartPosition.CenterParent,
             WindowState = FormWindowState.Maximized
         };
-        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, _stepPreviewService) { Dock = DockStyle.Fill };
+        var viewer = new ModelPreviewControl(_stepParsingDiagnosticsLog, _modelPreviewService) { Dock = DockStyle.Fill };
         viewerForm.FormClosed += (_, _) => viewer.ClearPreview();
 
         stepAttachment.BlobData = stepData;
-        await viewer.LoadStepAttachmentAsync(stepAttachment, _quoteRepository.GetQuoteBlobContentAsync);
+        await viewer.LoadAttachmentAsync(stepAttachment, _quoteRepository.GetQuoteBlobContentAsync);
         viewerForm.Controls.Add(viewer);
         viewerForm.ShowDialog(this);
     }
@@ -792,16 +793,9 @@ public class QuoteDraftForm : Form
         if (blobType == QuoteBlobType.ThreeDModel)
         {
             var extension = Path.GetExtension(fileName);
-            if (!extension.Equals(".step", StringComparison.OrdinalIgnoreCase)
-                && !extension.Equals(".stp", StringComparison.OrdinalIgnoreCase))
-            {
-                MessageBox.Show("3D model uploads now require STEP input (.step or .stp).", "Invalid 3D Model", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
             if (!await IsReadableModelFileAsync(filePath))
             {
-                MessageBox.Show("The selected STEP file failed validation. See diagnostics for the step-validate stage.", "Invalid STEP Model", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("The selected model file is not a supported CAD format.", "Invalid 3D Model", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
         }
@@ -849,7 +843,7 @@ public class QuoteDraftForm : Form
 
             if (blobType == QuoteBlobType.ThreeDModel)
             {
-                await ValidateStoredStepBlobAsync(attachment);
+                await ValidateStoredModelBlobAsync(attachment);
             }
         }
 
@@ -860,7 +854,7 @@ public class QuoteDraftForm : Form
             var card = _lineItemCards.FirstOrDefault(x => ReferenceEquals(x.Model, model));
             if (card is not null)
             {
-                SchedulePreviewLoad(card);
+                card.ModelViewer.ClearPreview();
             }
         }
     }
@@ -887,7 +881,7 @@ public class QuoteDraftForm : Form
             var card = _lineItemCards.FirstOrDefault(x => ReferenceEquals(x.Model, model));
             if (card is not null)
             {
-                SchedulePreviewLoad(card);
+                card.ModelViewer.ClearPreview();
             }
         }
     }
@@ -918,82 +912,54 @@ public class QuoteDraftForm : Form
             fileSizeBytes = fileInfo.Exists ? fileInfo.Length : 0;
             if (fileSizeBytes <= 0)
             {
-                _stepParsingDiagnosticsLog.RecordAttempt(
-                    fileName,
-                    filePath,
-                    fileSizeBytes,
-                    isSuccess: false,
-                    errorCode: "STEP_INVALID_BYTES",
-                    failureCategory: "step-validate",
-                    message: "[step-validate] STEP payload is empty.",
-                    diagnosticDetails: $"fileSize={fileSizeBytes}",
-                    stackTrace: StepParsingDiagnosticsLog.BuildCallSiteTrace(),
-                    source: "quote-upload");
+                _stepParsingDiagnosticsLog.RecordAttempt(fileName, filePath, fileSizeBytes, false, "MODEL_INVALID_BYTES", "model-validate", "[model-validate] model payload is empty.", $"fileSize={fileSizeBytes}", StepParsingDiagnosticsLog.BuildCallSiteTrace(), "quote-upload");
                 return false;
             }
 
             var fileBytes = await File.ReadAllBytesAsync(filePath);
-            var header = System.Text.Encoding.ASCII.GetString(fileBytes, 0, Math.Min(fileBytes.Length, 256)).ToUpperInvariant();
-            var isValid = header.Contains("ISO-10303-21", StringComparison.Ordinal);
+            var detector = new SolidModelFileTypeDetector();
+            var detection = detector.Detect(fileBytes, filePath);
             _stepParsingDiagnosticsLog.RecordAttempt(
                 fileName,
                 filePath,
                 fileSizeBytes,
-                isSuccess: isValid,
-                errorCode: isValid ? string.Empty : "STEP_INVALID_HEADER",
-                failureCategory: "step-validate",
-                message: isValid
-                    ? "[step-validate] STEP header validated."
-                    : "[step-validate] STEP header marker missing.",
-                diagnosticDetails: isValid ? "iso-10303-21" : $"prefix={header.Replace("\n", " ")}",
-                stackTrace: isValid ? string.Empty : StepParsingDiagnosticsLog.BuildCallSiteTrace(),
+                isSuccess: detection.IsSupportedForRendering,
+                errorCode: detection.IsSupportedForRendering ? string.Empty : "MODEL_UNSUPPORTED",
+                failureCategory: "model-validate",
+                message: detection.IsSupportedForRendering
+                    ? $"[model-validate] Supported model type detected: {detection.FileType}."
+                    : "[model-validate] Unsupported model format.",
+                diagnosticDetails: $"type={detection.FileType};source={detection.DetectionSource};extension={detection.NormalizedExtension}",
+                stackTrace: detection.IsSupportedForRendering ? string.Empty : StepParsingDiagnosticsLog.BuildCallSiteTrace(),
                 source: "quote-upload");
 
-            return isValid;
+            return detection.IsSupportedForRendering;
         }
         catch (Exception ex)
         {
-            _stepParsingDiagnosticsLog.RecordAttempt(
-                fileName,
-                filePath,
-                fileSizeBytes,
-                isSuccess: false,
-                errorCode: "STEP_VALIDATE_EXCEPTION",
-                failureCategory: "step-validate",
-                message: "[step-validate] STEP validation threw an exception.",
-                diagnosticDetails: ex.Message,
-                stackTrace: StepParsingDiagnosticsLog.BuildStackTrace(ex),
-                source: "quote-upload");
+            _stepParsingDiagnosticsLog.RecordAttempt(fileName, filePath, fileSizeBytes, false, "MODEL_VALIDATE_EXCEPTION", "model-validate", "[model-validate] model validation threw an exception.", ex.Message, StepParsingDiagnosticsLog.BuildStackTrace(ex), "quote-upload");
             return false;
         }
     }
 
-
-    private async Task ValidateStoredStepBlobAsync(QuoteBlobAttachment attachment)
+    private async Task ValidateStoredModelBlobAsync(QuoteBlobAttachment attachment)
     {
-        var extension = attachment.Extension ?? Path.GetExtension(attachment.FileName ?? string.Empty);
-        if (!extension.Equals(".step", StringComparison.OrdinalIgnoreCase)
-            && !extension.Equals(".stp", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
         var storedData = await _quoteRepository.GetQuoteBlobContentAsync(attachment.Id);
-        var header = System.Text.Encoding.ASCII.GetString(storedData, 0, Math.Min(storedData.Length, 256)).ToUpperInvariant();
-        var isValid = storedData.Length > 0 && header.Contains("ISO-10303-21", StringComparison.Ordinal);
+        var detector = new SolidModelFileTypeDetector();
+        var detection = detector.Detect(storedData, attachment.FileName);
         _stepParsingDiagnosticsLog.RecordAttempt(
             attachment.FileName,
             attachment.StorageRelativePath,
             attachment.FileSizeBytes,
-            isSuccess: isValid,
-            errorCode: isValid ? string.Empty : "STEP_INVALID_HEADER",
-            failureCategory: "step-validate",
-            message: isValid
-                ? "[step-validate] Stored STEP blob validated."
-                : "[step-validate] Stored STEP blob failed validation.",
-            diagnosticDetails: isValid ? "iso-10303-21" : $"bytes={storedData.Length};prefix={header.Replace("\n", " ")}",
-            stackTrace: isValid ? string.Empty : StepParsingDiagnosticsLog.BuildCallSiteTrace(),
-            source: "blob-step-validation");
+            isSuccess: detection.IsSupportedForRendering,
+            errorCode: detection.IsSupportedForRendering ? string.Empty : "MODEL_UNSUPPORTED",
+            failureCategory: "model-validate",
+            message: detection.IsSupportedForRendering
+                ? "[model-validate] Stored model blob validated."
+                : "[model-validate] Stored model blob failed validation.",
+            diagnosticDetails: $"bytes={storedData.Length};type={detection.FileType};source={detection.DetectionSource};extension={detection.NormalizedExtension}",
+            stackTrace: detection.IsSupportedForRendering ? string.Empty : StepParsingDiagnosticsLog.BuildCallSiteTrace(),
+            source: "blob-model-validation");
     }
 
     private void RefreshAllBlobLists()
@@ -1367,7 +1333,7 @@ public class QuoteDraftForm : Form
     private sealed class DoneSummaryView
     {
         public required Panel Container { get; init; }
-        public required StepModelPreviewControl Viewer { get; init; }
+        public required ModelPreviewControl Viewer { get; init; }
         public required Button ExpandButton { get; init; }
         public required Button PreviewButton { get; init; }
         public required Label DrawingNumber { get; init; }
@@ -1404,7 +1370,7 @@ public class QuoteDraftForm : Form
         public required Button EditButton { get; init; }
         public required Control EditView { get; init; }
         public required Control DoneView { get; init; }
-        public required StepModelPreviewControl StepViewer { get; init; }
+        public required ModelPreviewControl ModelViewer { get; init; }
         public required Label SummaryDrawingNumber { get; init; }
         public required Label SummaryDrawingName { get; init; }
         public required Label SummaryRevision { get; init; }

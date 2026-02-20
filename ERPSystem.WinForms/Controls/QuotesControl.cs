@@ -862,38 +862,36 @@ public class QuotesControl : UserControl, IRealtimeDataControl
 
     private Control CreateModelCell(QuoteLineItem lineItem)
     {
-        var stepAttachment = FindLatestStepAttachment(lineItem);
+        var modelAttachment = FindLatestModelAttachment(lineItem);
 
-        if (stepAttachment is null)
+        if (modelAttachment is null)
         {
             return new Label
             {
-                Text = "No STEP file",
+                Text = "No 3D model",
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleCenter,
                 ForeColor = Color.DimGray
             };
         }
 
-        var viewer = new StepModelPreviewControl(_stepParsingDiagnosticsLog, new StepPreviewService())
+        var viewer = new ModelPreviewControl(_stepParsingDiagnosticsLog, new ModelPreviewService())
         {
             Dock = DockStyle.Fill,
             Margin = new Padding(4)
         };
-        _ = viewer.LoadStepAttachmentAsync(stepAttachment, _quoteRepository.GetQuoteBlobContentAsync);
+        _ = viewer.LoadAttachmentAsync(modelAttachment, _quoteRepository.GetQuoteBlobContentAsync);
         return viewer;
     }
 
-    private static QuoteBlobAttachment? FindLatestStepAttachment(QuoteLineItem lineItem)
+    private static QuoteBlobAttachment? FindLatestModelAttachment(QuoteLineItem lineItem)
     {
         return lineItem.BlobAttachments
             .Where(blob => blob.BlobType == QuoteBlobType.ThreeDModel
                 && blob.LineItemId == lineItem.Id
                 && (lineItem.QuoteId <= 0 || blob.QuoteId == lineItem.QuoteId)
-                && (blob.Extension.Equals(".step", StringComparison.OrdinalIgnoreCase)
-                    || blob.Extension.Equals(".stp", StringComparison.OrdinalIgnoreCase)
-                    || blob.FileName.EndsWith(".step", StringComparison.OrdinalIgnoreCase)
-                    || blob.FileName.EndsWith(".stp", StringComparison.OrdinalIgnoreCase)))
+                && (SolidModelFileTypeDetector.IsKnownSolidExtension(blob.Extension)
+                    || new SolidModelFileTypeDetector().Detect(blob.BlobData, blob.FileName).IsSupportedForRendering))
             .OrderByDescending(blob => blob.UploadedUtc)
             .ThenByDescending(blob => blob.Id)
             .FirstOrDefault();
