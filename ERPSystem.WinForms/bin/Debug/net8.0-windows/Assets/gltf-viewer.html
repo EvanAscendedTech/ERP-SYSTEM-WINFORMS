@@ -1,0 +1,158 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body, canvas { margin:0; padding:0; width:100%; height:100%; background:#f8fafc; overflow:hidden; }
+  </style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('gl');
+  const gl = canvas.getContext('webgl', { antialias: true });
+  let program, posBuffer, indexBuffer;
+
+  function post(type, payload) {
+    if (window.chrome && window.chrome.webview) {
+      window.chrome.webview.postMessage({ type, payload });
+    }
+  }
+
+  function resize() {
+    const w = Math.max(1, canvas.clientWidth);
+    const h = Math.max(1, canvas.clientHeight);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    gl.viewport(0, 0, w, h);
+  }
+
+  function compile(type, src) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, src);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      throw new Error(gl.getShaderInfoLog(shader));
+    }
+    return shader;
+  }
+
+  function ensurePipeline() {
+    if (program) return;
+    const vs = compile(gl.VERTEX_SHADER, `attribute vec3 aPos; uniform mat4 uMvp; void main(){ gl_Position=uMvp*vec4(aPos,1.0);} `);
+    const fs = compile(gl.FRAGMENT_SHADER, `precision mediump float; void main(){ gl_FragColor=vec4(0.18,0.35,0.67,1.0);} `);
+    program = gl.createProgram();
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      throw new Error(gl.getProgramInfoLog(program));
+    }
+    posBuffer = gl.createBuffer();
+    indexBuffer = gl.createBuffer();
+  }
+
+  function parseGlb(base64) {
+    const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+    const dv = new DataView(bytes.buffer);
+    if (dv.getUint32(0, true) !== 0x46546C67) throw new Error('Invalid GLB magic');
+
+    const jsonLength = dv.getUint32(12, true);
+    const jsonType = dv.getUint32(16, true);
+    if (jsonType !== 0x4E4F534A) throw new Error('GLB missing JSON chunk');
+
+    const jsonText = new TextDecoder().decode(bytes.slice(20, 20 + jsonLength));
+    const gltf = JSON.parse(jsonText);
+    const binStart = 20 + jsonLength;
+    const binLength = dv.getUint32(binStart, true);
+    const binType = dv.getUint32(binStart + 4, true);
+    if (binType !== 0x004E4942) throw new Error('GLB missing BIN chunk');
+
+    const bin = bytes.slice(binStart + 8, binStart + 8 + binLength).buffer;
+    const primitive = gltf.meshes?.[0]?.primitives?.[0];
+    if (!primitive) throw new Error('No mesh primitive found');
+
+    const posAccessor = gltf.accessors[primitive.attributes.POSITION];
+    const posView = gltf.bufferViews[posAccessor.bufferView];
+    const posOffset = (posView.byteOffset || 0) + (posAccessor.byteOffset || 0);
+    const positions = new Float32Array(bin, posOffset, posAccessor.count * 3);
+
+    let indices = null;
+    if (primitive.indices !== undefined) {
+      const idxAccessor = gltf.accessors[primitive.indices];
+      const idxView = gltf.bufferViews[idxAccessor.bufferView];
+      const idxOffset = (idxView.byteOffset || 0) + (idxAccessor.byteOffset || 0);
+      if (idxAccessor.componentType === 5123) indices = new Uint16Array(bin, idxOffset, idxAccessor.count);
+      else if (idxAccessor.componentType === 5125) {
+        const idx32 = new Uint32Array(bin, idxOffset, idxAccessor.count);
+        indices = new Uint16Array(idx32);
+      } else throw new Error('Unsupported index component type');
+    }
+
+    return {
+      positions,
+      indices,
+      meshes: (gltf.meshes || []).length,
+      triangles: indices ? Math.floor(indices.length / 3) : Math.floor(posAccessor.count / 3)
+    };
+  }
+
+  function draw(parsed) {
+    ensurePipeline();
+    resize();
+
+    gl.clearColor(0.97, 0.98, 0.99, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.useProgram(program);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, parsed.positions, gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(program, 'aPos');
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 12, 0);
+
+    const mvp = new Float32Array([
+      1,0,0,0,
+      0,1,0,0,
+      0,0,1,0,
+      0,0,0,1
+    ]);
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'uMvp'), false, mvp);
+
+    if (parsed.indices) {
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, parsed.indices, gl.STATIC_DRAW);
+      gl.drawElements(gl.TRIANGLES, parsed.indices.length, gl.UNSIGNED_SHORT, 0);
+    } else {
+      gl.drawArrays(gl.TRIANGLES, 0, parsed.positions.length / 3);
+    }
+  }
+
+  window.gltfViewer = {
+    setGlbBase64: async (b64) => {
+      try {
+        const parsed = parseGlb(b64);
+        draw(parsed);
+        const result = { ok: true, meshes: parsed.meshes, triangles: parsed.triangles };
+        post('viewer-log', { message: 'render-success', meshes: parsed.meshes, triangles: parsed.triangles });
+        post('viewer-result', result);
+        return result;
+      } catch (error) {
+        const result = { ok: false, error: String(error?.message || error), stack: String(error?.stack || '') };
+        post('viewer-error', result);
+        post('viewer-result', result);
+        return result;
+      }
+    }
+  };
+
+  window.addEventListener('resize', resize);
+  post('viewer-log', { message: 'viewer-ready' });
+})();
+</script>
+</body>
+</html>
