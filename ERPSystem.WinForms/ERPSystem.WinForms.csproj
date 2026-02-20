@@ -21,6 +21,7 @@
   <PropertyGroup>
     <Step2GlbConverterExe>$(MSBuildProjectDirectory)\Tools\step2glb\step2glb.exe</Step2GlbConverterExe>
     <Step2GlbConverterProject>$(MSBuildProjectDirectory)\Tools\step2glb\src\step2glb.csproj</Step2GlbConverterProject>
+    <RequireStep2GlbConverter>false</RequireStep2GlbConverter>
   </PropertyGroup>
 
   <Target Name="BuildStep2GlbConverter" BeforeTargets="BeforeBuild" Condition="!Exists('$(Step2GlbConverterExe)') and Exists('$(Step2GlbConverterProject)')">
@@ -29,7 +30,8 @@
   </Target>
 
   <Target Name="ValidateStep2GlbConverter" BeforeTargets="PrepareForBuild">
-    <Error Condition="!Exists('$(Step2GlbConverterExe)')" Text="Missing STEP converter executable at $(Step2GlbConverterExe). Add converter binaries to Tools\step2glb or provide source at Tools\step2glb\src\step2glb.csproj so it can be built." />
+    <Error Condition="'$(RequireStep2GlbConverter)' == 'true' and !Exists('$(Step2GlbConverterExe)')" Text="Missing STEP converter executable at $(Step2GlbConverterExe). Add converter binaries to Tools\step2glb or provide source at Tools\step2glb\src\step2glb.csproj so it can be built." />
+    <Warning Condition="'$(RequireStep2GlbConverter)' != 'true' and !Exists('$(Step2GlbConverterExe)')" Text="STEP converter executable not found at $(Step2GlbConverterExe). STEP preview features will be unavailable until converter binaries are restored." />
   </Target>
 
   <ItemGroup>
