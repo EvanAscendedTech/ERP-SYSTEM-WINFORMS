@@ -1,0 +1,10 @@
+{
+  "name": "erp-3d-pipeline",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ERP 3D model pipeline dependencies",
+  "dependencies": {
+    "three": "^0.160.0",
+    "gltf-viewer": "^1.0.0"
+  }
+}

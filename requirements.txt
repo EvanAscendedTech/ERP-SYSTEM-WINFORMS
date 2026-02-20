@@ -1,0 +1,4 @@
+numpy
+pygltflib
+trimesh
+Pillow

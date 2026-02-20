@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\ERP\\ERP-SYSTEM-WINFORMS\\ERPSystem.WinForms\\ERPSystem.WinForms.csproj": {}
+    "C:\\ERP-SYSTEM-WINFORMS\\ERPSystem.WinForms\\ERPSystem.WinForms.csproj": {}
   },
   "projects": {
-    "C:\\ERP\\ERP-SYSTEM-WINFORMS\\ERPSystem.WinForms\\ERPSystem.WinForms.csproj": {
+    "C:\\ERP-SYSTEM-WINFORMS\\ERPSystem.WinForms\\ERPSystem.WinForms.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\ERP\\ERP-SYSTEM-WINFORMS\\ERPSystem.WinForms\\ERPSystem.WinForms.csproj",
+        "projectUniqueName": "C:\\ERP-SYSTEM-WINFORMS\\ERPSystem.WinForms\\ERPSystem.WinForms.csproj",
         "projectName": "ERPSystem.WinForms",
-        "projectPath": "C:\\ERP\\ERP-SYSTEM-WINFORMS\\ERPSystem.WinForms\\ERPSystem.WinForms.csproj",
+        "projectPath": "C:\\ERP-SYSTEM-WINFORMS\\ERPSystem.WinForms\\ERPSystem.WinForms.csproj",
         "packagesPath": "C:\\Users\\ejpre\\.nuget\\packages\\",
-        "outputPath": "C:\\ERP\\ERP-SYSTEM-WINFORMS\\ERPSystem.WinForms\\obj\\",
+        "outputPath": "C:\\ERP-SYSTEM-WINFORMS\\ERPSystem.WinForms\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
@@ -50,6 +50,10 @@
         "net8.0-windows7.0": {
           "targetAlias": "net8.0-windows",
           "dependencies": {
+            "HelixToolkit.Wpf": {
+              "target": "Package",
+              "version": "[3.1.2, )"
+            },
             "Microsoft.Data.Sqlite": {
               "target": "Package",
               "version": "[8.0.7, )"

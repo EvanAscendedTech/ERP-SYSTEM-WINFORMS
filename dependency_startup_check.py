@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 PACKAGE_JSON = ROOT / "package.json"
 REQUIREMENTS_TXT = ROOT / "requirements.txt"
+
+# 🔥 Hard-coded npm path (Windows fix)
+NPM_PATH = Path(r"C:\Program Files\nodejs\npm.cmd")
 
 
 class DependencyCheckError(RuntimeError):
@@ -51,9 +53,6 @@ def parse_requirements(requirements_file: Path) -> list[str]:
         if not line:
             continue
 
-        if line.startswith(("-r", "--requirement", "-e", "--editable", "git+", "http://", "https://")):
-            continue
-
         match = re.match(r"^([A-Za-z0-9_.-]+)", line)
         if match:
             packages.append(match.group(1))
@@ -67,8 +66,8 @@ def check_npm_dependencies() -> bool:
         print("[npm] package.json not found. Skipping npm dependency check.")
         return True
 
-    if shutil.which("npm") is None:
-        raise DependencyCheckError("[npm] npm is not installed or not available in PATH.")
+    if not NPM_PATH.exists():
+        raise DependencyCheckError("[npm] npm.cmd not found at expected location.")
 
     try:
         package_data = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
@@ -83,7 +82,11 @@ def check_npm_dependencies() -> bool:
         return True
 
     print("[npm] Checking installed Node dependencies...")
-    ls_result = run_command(["npm", "ls", "--depth=0", "--json"], "npm ls")
+
+    ls_result = run_command(
+        [str(NPM_PATH), "ls", "--depth=0", "--json"],
+        "npm ls"
+    )
 
     installed: set[str] = set()
     if ls_result.stdout:
@@ -94,14 +97,21 @@ def check_npm_dependencies() -> bool:
             installed = set()
 
     missing = sorted(required - installed)
+
     if missing:
         print(f"[npm] Missing dependencies detected: {', '.join(missing)}")
         print("[npm] Running npm install...")
-        install_result = run_command(["npm", "install"], "npm install")
+
+        install_result = run_command(
+            [str(NPM_PATH), "install"],
+            "npm install"
+        )
+
         if install_result.returncode != 0:
             print(install_result.stdout)
             print(install_result.stderr, file=sys.stderr)
             raise DependencyCheckError("[npm] npm install failed.")
+
         print("[npm] npm dependencies installed successfully.")
     else:
         print("[npm] All npm dependencies are present.")
@@ -117,8 +127,6 @@ def check_pip_dependencies() -> bool:
 
     pip_version = run_command([sys.executable, "-m", "pip", "--version"], "python -m pip --version")
     if pip_version.returncode != 0:
-        print(pip_version.stdout)
-        print(pip_version.stderr, file=sys.stderr)
         raise DependencyCheckError("[pip] pip is not available for this Python interpreter.")
 
     required = parse_requirements(REQUIREMENTS_TXT)
@@ -127,6 +135,7 @@ def check_pip_dependencies() -> bool:
         return True
 
     print("[pip] Checking installed Python dependencies...")
+
     missing: list[str] = []
 
     for package in required:
@@ -137,14 +146,15 @@ def check_pip_dependencies() -> bool:
     if missing:
         print(f"[pip] Missing dependencies detected: {', '.join(sorted(set(missing)))}")
         print("[pip] Running pip install -r requirements.txt...")
+
         install_result = run_command(
             [sys.executable, "-m", "pip", "install", "-r", str(REQUIREMENTS_TXT)],
             "pip install -r requirements.txt",
         )
+
         if install_result.returncode != 0:
-            print(install_result.stdout)
-            print(install_result.stderr, file=sys.stderr)
             raise DependencyCheckError("[pip] pip install -r requirements.txt failed.")
+
         print("[pip] Python dependencies installed successfully.")
     else:
         print("[pip] All Python dependencies are present.")
@@ -153,7 +163,6 @@ def check_pip_dependencies() -> bool:
 
 
 def main() -> int:
-    """Run dependency checks and installs for npm and pip."""
     try:
         check_npm_dependencies()
         check_pip_dependencies()
