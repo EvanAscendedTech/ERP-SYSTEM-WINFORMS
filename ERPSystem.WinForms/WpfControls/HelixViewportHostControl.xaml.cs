@@ -70,12 +70,6 @@ public partial class HelixViewportHostControl : System.Windows.Controls.UserCont
         }
     }
 
-
-    public void ZoomToFit()
-    {
-        Viewport.ZoomExtents();
-    }
-
     private static void EnsureFrontAndBackMaterials(Model3D model)
     {
         if (model is Model3DGroup group)
