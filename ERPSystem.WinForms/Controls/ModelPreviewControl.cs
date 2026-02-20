@@ -1,35 +1,30 @@
-using System.Text.Json;
 using ERPSystem.WinForms.Models;
 using ERPSystem.WinForms.Services;
-using Microsoft.Web.WebView2.Core;
-using Microsoft.Web.WebView2.WinForms;
+using ERPSystem.WinForms.WpfControls;
+using System.Windows.Forms.Integration;
 
 namespace ERPSystem.WinForms.Controls;
 
 public sealed class ModelPreviewControl : UserControl
 {
-    private readonly WebView2 _webView;
+    private readonly ElementHost _viewportHost;
+    private readonly HelixViewportHostControl _viewportControl;
     private readonly Label _statusLabel;
-    private readonly Button _retryButton;
     private readonly SemaphoreSlim _loadGate = new(1, 1);
-    private readonly IModelPreviewService? _modelPreviewService;
     private readonly StepParsingDiagnosticsLog? _diagnosticsLog;
     private CancellationTokenSource? _loadCts;
-    private bool _initialized;
-    private const string ViewerAssetRelativePath = "Assets/Viewer/model-viewer.html";
-    private const string ViewerAssetUri = "https://model-viewer.local/model-viewer.html";
 
     public ModelPreviewControl(StepParsingDiagnosticsLog? diagnosticsLog = null, IModelPreviewService? modelPreviewService = null)
     {
         _diagnosticsLog = diagnosticsLog;
-        _modelPreviewService = modelPreviewService;
         BackColor = Color.FromArgb(248, 250, 252);
 
-        _webView = new WebView2
+        _viewportControl = new HelixViewportHostControl();
+        _viewportHost = new ElementHost
         {
             Dock = DockStyle.Fill,
             Visible = false,
-            DefaultBackgroundColor = Color.FromArgb(248, 250, 252)
+            Child = _viewportControl
         };
 
         _statusLabel = new Label
@@ -40,25 +35,8 @@ public sealed class ModelPreviewControl : UserControl
             Text = "Ready for 3D preview"
         };
 
-        _retryButton = new Button
-        {
-            Text = "Retry conversion",
-            AutoSize = true,
-            Visible = false,
-            Anchor = AnchorStyles.Bottom | AnchorStyles.Right
-        };
-        _retryButton.Click += (_, _) =>
-        {
-            _modelPreviewService?.ResetConverterAvailability();
-            _retryButton.Visible = false;
-            _statusLabel.Text = "Converter reset. Click Preview 3D.";
-        };
-
-        Controls.Add(_webView);
+        Controls.Add(_viewportHost);
         Controls.Add(_statusLabel);
-        Controls.Add(_retryButton);
-        Resize += (_, _) => PositionRetryButton();
-        PositionRetryButton();
     }
 
     public async Task LoadAttachmentAsync(QuoteBlobAttachment? attachment, Func<int, Task<byte[]>>? blobResolver = null)
@@ -95,30 +73,40 @@ public sealed class ModelPreviewControl : UserControl
                 return;
             }
 
-            if (_modelPreviewService is null)
+            var effectiveName = string.IsNullOrWhiteSpace(fileName)
+                ? Path.GetFileName(sourcePath ?? string.Empty)
+                : fileName;
+
+            var extension = Path.GetExtension(effectiveName ?? string.Empty).ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(extension))
             {
-                ShowError("3D preview service unavailable.");
+                ShowError("Unsupported file type. Only STL or OBJ can be previewed.");
+                RecordDiagnostics(false, "MODEL_UNSUPPORTED_EXTENSION", "Missing file extension.", bytes.LongLength, effectiveName ?? string.Empty, sourcePath ?? string.Empty, "");
                 return;
             }
 
-            _statusLabel.Text = "Converting model to GLB...";
-            var conversion = await _modelPreviewService.GetOrCreateGlbAsync(bytes, fileName ?? string.Empty, cts.Token);
-            RecordDiagnostics(conversion.Success, conversion.ErrorCode, conversion.Message, bytes.LongLength, fileName ?? string.Empty, sourcePath ?? string.Empty,
-                $"hash={conversion.ModelHash};cacheHit={conversion.CacheHit};exitCode={conversion.ExitCode};stdout={conversion.StdOut};stderr={conversion.StdErr}");
-
-            if (!conversion.Success)
+            if (extension is ".step" or ".stp")
             {
-                ShowError("3D conversion failed. See diagnostics.");
-                _retryButton.Visible = _modelPreviewService.IsConverterUnavailable;
+                ShowError("STEP preview is not supported yet. Please upload STL or OBJ.");
+                RecordDiagnostics(false, "STEP_NOT_SUPPORTED", "STEP preview is not supported yet.", bytes.LongLength, effectiveName ?? string.Empty, sourcePath ?? string.Empty, string.Empty);
                 return;
             }
 
-            await EnsureInitializedAsync();
-            var payload = JsonSerializer.Serialize(Convert.ToBase64String(conversion.GlbBytes));
-            await _webView.CoreWebView2!.ExecuteScriptAsync($"window.gltfViewer.setGlbBase64({payload});");
+            if (extension is not ".stl" and not ".obj")
+            {
+                ShowError("Unsupported file type. Only STL or OBJ can be previewed.");
+                RecordDiagnostics(false, "MODEL_UNSUPPORTED_EXTENSION", $"Extension '{extension}' is not supported.", bytes.LongLength, effectiveName ?? string.Empty, sourcePath ?? string.Empty, string.Empty);
+                return;
+            }
+
+            _statusLabel.Text = "Loading 3D model...";
+            cts.Token.ThrowIfCancellationRequested();
+            _viewportControl.LoadModelFromBytes(bytes, effectiveName ?? string.Empty);
+            _viewportControl.ZoomToFit();
 
             _statusLabel.Visible = false;
-            _webView.Visible = true;
+            _viewportHost.Visible = true;
+            RecordDiagnostics(true, string.Empty, "Model loaded successfully.", bytes.LongLength, effectiveName ?? string.Empty, sourcePath ?? string.Empty, $"extension={extension}");
         }
         catch (OperationCanceledException)
         {
@@ -140,38 +128,16 @@ public sealed class ModelPreviewControl : UserControl
         var old = Interlocked.Exchange(ref _loadCts, null);
         old?.Cancel();
         old?.Dispose();
-        _webView.Visible = false;
+        _viewportHost.Visible = false;
         _statusLabel.Visible = true;
         _statusLabel.Text = "3D preview cleared";
-        _retryButton.Visible = false;
-    }
-
-    private void PositionRetryButton()
-    {
-        _retryButton.Location = new Point(Math.Max(8, ClientSize.Width - _retryButton.Width - 8), Math.Max(8, ClientSize.Height - _retryButton.Height - 8));
-        _retryButton.BringToFront();
-    }
-
-    private async Task EnsureInitializedAsync()
-    {
-        if (_initialized && _webView.CoreWebView2 is not null)
-        {
-            return;
-        }
-
-        await _webView.EnsureCoreWebView2Async();
-        var viewerPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ViewerAssetRelativePath));
-        var viewerFolder = Path.GetDirectoryName(viewerPath) ?? throw new InvalidOperationException("Viewer folder unavailable.");
-        _webView.CoreWebView2!.SetVirtualHostNameToFolderMapping("model-viewer.local", viewerFolder, CoreWebView2HostResourceAccessKind.Allow);
-        _webView.CoreWebView2.Navigate(ViewerAssetUri);
-        _initialized = true;
     }
 
     private void ShowError(string message)
     {
         _statusLabel.Text = message;
         _statusLabel.Visible = true;
-        _webView.Visible = false;
+        _viewportHost.Visible = false;
     }
 
     private void RecordDiagnostics(bool isSuccess, string errorCode, string message, long fileSizeBytes, string fileName, string sourcePath, string details)
